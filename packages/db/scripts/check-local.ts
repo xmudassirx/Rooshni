@@ -164,6 +164,17 @@ async function main() {
   );
   const h2 = fixture2.rows[0]!;
 
+  // Spec 3 fixture grants: the test agent is Light-shaped — enquiries execute
+  // (Level 2 work) plus comms.email execute (draft + submit, never approve),
+  // business scope, standing, granted by the owner via chat.
+  const grantSql = `insert into public.grants
+    (business_id, created_by, grantee_actor_id, tool, access, scope, duration, expires_at, granted_by_actor_id, via)
+    values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10) returning id`;
+  const bizScope = JSON.stringify({ level: "business", ref: f.business_id });
+
+  await db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "enquiries", "execute", bizScope, "standing", null, f.human_id, "chat"]);
+  await db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "comms.email", "execute", bizScope, "standing", null, f.human_id, "chat"]);
+
   console.log("\nStructural rules:");
 
   // UUIDv7 ids are time-ordered
@@ -240,9 +251,12 @@ async function main() {
         [f.business_id, f.agent_id, thread.rows[0]!.id]
       )
   );
+  // Two structural layers refuse this: the grants engine (agents cannot hold
+  // approvals.*, so the stamp check fails first) and the Session 1 human-actor
+  // trigger behind it. Either refusal proves the rule.
   await expectError(
     "outbound comm cannot be approved BY AN AGENT (the AI cannot hold the stamp)",
-    /HUMAN actor/,
+    /HUMAN actor|approvals\.comms/,
     () =>
       db.query(
         `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, approved_by_actor_id)
@@ -271,11 +285,6 @@ async function main() {
   // Spec 3 — the grants engine: levels as data, meta-rules on grants.
   // ---------------------------------------------------------------------
   console.log("\nSpec 3 — grants engine:");
-
-  const grantSql = `insert into public.grants
-    (business_id, created_by, grantee_actor_id, tool, access, scope, duration, expires_at, granted_by_actor_id, via)
-    values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10) returning id`;
-  const bizScope = JSON.stringify({ level: "business", ref: f.business_id });
 
   await expectOk("permission levels 0–4 exist as data", async () => {
     const r = await db.query<{ n: number; mx: number }>(
@@ -363,6 +372,147 @@ async function main() {
     )
   );
 
+  // ---------------------------------------------------------------------
+  // Spec 3 — enforcement wiring: the grant checks on every existing path.
+  // ---------------------------------------------------------------------
+  console.log("\nSpec 3 — enforcement wiring:");
+
+  await expectError(
+    "an ungranted actor is refused at Level 2 (create a task)",
+    /enquiries \(execute\)/,
+    () =>
+      db.query(
+        `insert into public.tasks (business_id, created_by, title, assignee_actor_id)
+         values ($1, $2, 'Rogue task', $2)`,
+        [f.business_id, h2.agent2_id]
+      )
+  );
+
+  await expectOk("a granted agent performs Level 2 (create a task)", () =>
+    db.query(
+      `insert into public.tasks (business_id, created_by, engagement_id, title, assignee_actor_id)
+       values ($1, $2, $3, 'Chase documents', $4)`,
+      [f.business_id, f.agent_id, engagement.rows[0]!.id, f.human_id]
+    )
+  );
+
+  await expectOk("authorised use stamps the grant (use_count)", async () => {
+    const r = await db.query<{ n: number }>(
+      `select use_count::int as n from public.grants
+       where grantee_actor_id = $1 and tool = 'enquiries'`,
+      [f.agent_id]
+    );
+    if (r.rows[0]!.n < 1) throw new Error(`use_count is ${r.rows[0]!.n}`);
+  });
+
+  await expectOk("a granted agent drafts an outbound email (the Light path)", () =>
+    db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'Draft for approval', $2)`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    )
+  );
+
+  await expectError("an ungranted actor cannot even draft outbound email", /comms\.email/, () =>
+    db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'nope')`,
+      [f.business_id, h2.agent2_id, thread.rows[0]!.id]
+    )
+  );
+
+  let smsDraftId = "";
+  await expectOk("draft access drafts, at draft status only", async () => {
+    await db.query(grantSql, [f.business_id, f.human_id, h2.agent2_id, "comms.sms", "draft", bizScope, "standing", null, f.human_id, "chat"]);
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'sms', 'outbound', 'draft', 'sms draft') returning id`,
+      [f.business_id, h2.agent2_id, thread.rows[0]!.id]
+    );
+    smsDraftId = r.rows[0]!.id;
+  });
+
+  await expectError(
+    "draft access cannot submit into the approval queue",
+    /comms\.sms \(execute\)/,
+    () => db.query(`update public.communications set status = 'pending_approval' where id = $1`, [smsDraftId])
+  );
+
+  await expectError("an expired grant is dead at use time", /comms\.whatsapp/, async () => {
+    await db.query(grantSql, [
+      f.business_id, f.human_id, h2.agent2_id, "comms.whatsapp", "execute", bizScope,
+      "until", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), f.human_id, "chat",
+    ]);
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'whatsapp', 'outbound', 'draft', 'too late')`,
+      [f.business_id, h2.agent2_id, thread.rows[0]!.id]
+    );
+  });
+
+  await expectError(
+    "a human approver without approvals.comms is refused (approving is itself a tool)",
+    /approvals\.comms/,
+    () =>
+      db.query(
+        `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, approved_by_actor_id)
+         values ($1, $2, $3, 'email', 'outbound', 'approved', 'hello', $4)`,
+        [f.business_id, f.agent_id, thread.rows[0]!.id, h2.human2_id]
+      )
+  );
+
+  await expectOk("with approvals.comms granted, the same human's stamp lands", async () => {
+    await db.query(grantSql, [f.business_id, f.human_id, h2.human2_id, "approvals.comms", "execute", bizScope, "standing", null, f.human_id, "dashboard"]);
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, approved_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'approved', 'hello again', $4)`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id, h2.human2_id]
+    );
+  });
+
+  await expectError("a channel with no registered tool cannot carry outbound", /No tool/, () =>
+    db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'internal_note', 'outbound', 'draft', 'odd')`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    )
+  );
+
+  await expectError(
+    "a non-owner human cannot publish without approvals.content",
+    /approvals\.content/,
+    () =>
+      db.query(
+        `insert into public.content_items (business_id, created_by, content_type, title, slug, state, published_by_actor_id)
+         values ($1, $2, 'page', 'Gated page', 'gated-page', 'published', $3)`,
+        [f.business_id, f.human_id, h2.human2_id]
+      )
+  );
+
+  await expectOk("the owner publishes (implicit full grant set)", () =>
+    db.query(
+      `insert into public.content_items (business_id, created_by, content_type, title, slug, state, published_by_actor_id)
+       values ($1, $2, 'page', 'Owner page', 'owner-page', 'published', $2)`,
+      [f.business_id, f.human_id]
+    )
+  );
+
+  await expectOk("revoking comms.email shuts the door immediately", () =>
+    db.query(
+      `update public.grants set revoked_at = now(), revoked_by_actor_id = $1
+       where grantee_actor_id = $2 and tool = 'comms.email'`,
+      [f.human_id, f.agent_id]
+    )
+  );
+
+  await expectError("the revoked agent can no longer draft email", /comms\.email/, () =>
+    db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'after revocation')`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    )
+  );
+
   // RLS: tenancy walls
   console.log("\nRow-Level Security:");
   await db.exec(`set role authenticated`);
@@ -380,7 +530,7 @@ async function main() {
 
   await db.exec(`set request.jwt.claim.sub = '${ids.stranger}'`);
   await expectOk("a stranger sees nothing", async () => {
-    for (const table of ["contacts", "engagements", "events", "businesses", "tasks"]) {
+    for (const table of ["contacts", "engagements", "events", "businesses", "tasks", "grants"]) {
       const r = await db.query<{ n: number }>(`select count(*)::int as n from public.${table}`);
       if (r.rows[0]!.n !== 0) throw new Error(`${table}: expected 0 rows, saw ${r.rows[0]!.n}`);
     }
