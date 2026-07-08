@@ -147,3 +147,14 @@ is enforced in the database; the app being well-behaved is not a control.
     `approval_event_id` end to end. Dev-only demonstration data, listed on
     GO-LIVE.md for the go-live purge (Spec 4 §6 measures acceptance from the
     ledger).
+
+## Session 4 (8 July 2026) — first UI slice, approved
+
+23. **The web app acts server-side as the owner's actor, with no sign-in
+    surface** — the UI resolves the business owner's human actor at runtime
+    and calls the approval pipeline through the service client; the database
+    still enforces every structural rule (human stamp, grants, readiness
+    pre-flight). **Condition (Mudassir):** valid ONLY while (a) Mudassir is
+    the sole user AND (b) Vercel Deployment Protection remains ON for the
+    project. Either condition failing voids this decision — sign-in is built
+    first, before anything else ships. The go-live trigger is on GO-LIVE.md.
