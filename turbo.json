@@ -2,12 +2,12 @@
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": [
     "SUPABASE_URL",
-    "SUPABASE_ANON_KEY",
-    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_SECRET_KEY",
     "DATABASE_URL",
     "TIME_SCALE",
     "NEXT_PUBLIC_SUPABASE_URL",
-    "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"
   ],
   "tasks": {
     "build": {
