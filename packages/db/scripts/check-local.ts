@@ -236,6 +236,13 @@ async function main() {
      values ($1, $2, 'person', 'Test Person') returning id`,
     [f.business_id, f.agent_id]
   );
+  // Consent lives per channel (Spec 1 §4.1) and readiness pre-flight demands
+  // it before any outbound message may reach approved/sent (Spec 3 §6).
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'test.person@example.test', true, '{"transactional": true, "marketing": true}'::jsonb)`,
+    [f.business_id, f.agent_id, contact.rows[0]!.id]
+  );
   const thread = await db.query<{ id: string }>(
     `insert into public.comm_threads (business_id, created_by, contact_id, channel)
      values ($1, $2, $3, 'email') returning id`,
@@ -607,13 +614,237 @@ async function main() {
     db.query(`select public.move_engagement_stage($1, $2, $3)`, [engagementId, f.stage_id, f.agent_id])
   );
 
+  // ---------------------------------------------------------------------
+  // Session 3 — the Approval Inbox: a view over pending states, readiness
+  // pre-flight, and the closed approve/reject pipeline. The Approve control
+  // must be earned (Spec 3 §6, decision 11).
+  // ---------------------------------------------------------------------
+  console.log("\nSpec 3/4 — the approval inbox:");
+
+  // The agent's comms.email grant was revoked above — issue a fresh one for
+  // the inbox tests (a change of terms is revoke + new grant, after all).
+  await db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "comms.email", "execute", bizScope, "standing", null, f.human_id, "chat"]);
+
+  // A human holding no grants at all: the unauthorised would-be rejecter.
+  const human3 = await db.query<{ id: string }>(
+    `insert into public.actors (account_id, actor_type, display_name)
+     values ($1, 'human', 'Ungranted Human') returning id`,
+    [f.account_id]
+  );
+  const human3Id = human3.rows[0]!.id;
+
+  let pendingCommId = "";
+  await expectOk("a fresh Light-style draft is NOT in the inbox (only stamp-awaiting items live there)", async () => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, engagement_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, 'email', 'outbound', 'draft', 'Thank you for your enquiry. Mudassir will call you shortly to talk through your options.', $2) returning id`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id, engagementId]
+    );
+    pendingCommId = r.rows[0]!.id;
+    const v = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.approval_inbox where item_id = $1`,
+      [pendingCommId]
+    );
+    if (v.rows[0]!.n !== 0) throw new Error("an unsubmitted draft appeared in the inbox");
+  });
+
+  await expectOk("submit_communication moves the draft into the inbox, pre-flight green", async () => {
+    await db.query(`select public.submit_communication($1, $2)`, [pendingCommId, f.agent_id]);
+    const v = await db.query<{ item_type: string; drafted_by: string; drafted_by_type: string; pass: boolean }>(
+      `select item_type, drafted_by, drafted_by_type, preflight_pass as pass
+       from public.approval_inbox where item_id = $1`,
+      [pendingCommId]
+    );
+    if (v.rows.length !== 1) throw new Error("submitted draft is not in the inbox");
+    if (v.rows[0]!.drafted_by !== "Test Agent") throw new Error(`drafted_by: ${v.rows[0]!.drafted_by}`);
+    if (v.rows[0]!.drafted_by_type !== "agent") throw new Error(`drafted_by_type: ${v.rows[0]!.drafted_by_type}`);
+    if (!v.rows[0]!.pass) throw new Error("pre-flight is not green");
+  });
+
+  await expectError("approve refuses an item that is not stamp-awaiting", /stamp-awaiting/, async () => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'Second draft, unsubmitted.', $2) returning id`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    );
+    await db.query(`select public.approve_communication($1, $2)`, [r.rows[0]!.id, f.human_id]);
+  });
+
+  // The approval door is closed like the stage door: status and the approval
+  // identity move only through the pipeline. (Run under API roles — the
+  // superuser bypasses column privileges.)
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+  await expectError("a signed-in member cannot update status directly", /permission denied/, () =>
+    db.query(`update public.communications set status = 'approved' where id = $1`, [pendingCommId])
+  );
+  await expectError("approved_by_actor_id is closed to direct update", /permission denied/, () =>
+    db.query(`update public.communications set approved_by_actor_id = $1 where id = $2`, [f.human_id, pendingCommId])
+  );
+  await expectError("the rejection record is closed to direct update", /permission denied/, () =>
+    db.query(`update public.communications set rejection_reason = 'sneaky' where id = $1`, [pendingCommId])
+  );
+  await expectOk("the body stays editable (Refine is an edit, not a stamp)", () =>
+    db.query(`update public.communications set body = body || ' We look forward to speaking with you.' where id = $1`, [pendingCommId])
+  );
+  await expectOk("approve_communication stamps the owner's approval and the item leaves the inbox", async () => {
+    await db.query(`select public.approve_communication($1, $2)`, [pendingCommId, f.human_id]);
+    const r = await db.query<{ status: string; approved_by_actor_id: string }>(
+      `select status, approved_by_actor_id from public.communications where id = $1`,
+      [pendingCommId]
+    );
+    if (r.rows[0]!.status !== "approved") throw new Error(`status is ${r.rows[0]!.status}`);
+    if (r.rows[0]!.approved_by_actor_id !== f.human_id) throw new Error("approved_by_actor_id is not the approver");
+    const v = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.approval_inbox where item_id = $1`,
+      [pendingCommId]
+    );
+    if (v.rows[0]!.n !== 0) throw new Error("an approved item is still in the inbox");
+  });
+  await db.exec(`reset role`);
+
+  await db.exec(`set role service_role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await expectError("service_role cannot update status directly either", /permission denied/, () =>
+    db.query(`update public.communications set status = 'approved' where id = $1`, [pendingCommId])
+  );
+  await db.exec(`reset role`);
+
+  // A second pending draft for the refusal and rejection cases.
+  const pending2 = await db.query<{ id: string }>(
+    `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+     values ($1, $2, $3, 'email', 'outbound', 'draft', 'A first draft that will need another pass.', $2) returning id`,
+    [f.business_id, f.agent_id, thread.rows[0]!.id]
+  );
+  const pending2Id = pending2.rows[0]!.id;
+  await db.query(`select public.submit_communication($1, $2)`, [pending2Id, f.agent_id]);
+
+  await expectError(
+    "an agent cannot hold the stamp through the pipeline either",
+    /approvals\.comms|HUMAN actor/,
+    () => db.query(`select public.approve_communication($1, $2)`, [pending2Id, f.agent_id])
+  );
+  await expectError(
+    "a human without approvals.comms cannot reject — refusing the stamp is stamp authority",
+    /approvals\.comms/,
+    () => db.query(`select public.reject_communication($1, $2, $3)`, [pending2Id, human3Id, "Not good enough."])
+  );
+  await expectError("rejection requires a reason", /reason/, () =>
+    db.query(`select public.reject_communication($1, $2, $3)`, [pending2Id, f.human_id, "   "])
+  );
+  await expectOk("reject_communication returns the item to the drafter's queue, reason recorded", async () => {
+    await db.query(`select public.reject_communication($1, $2, $3)`, [
+      pending2Id,
+      f.human_id,
+      "Tone is off — too formal for a first touch.",
+    ]);
+    const r = await db.query<{ status: string; rejected_by_actor_id: string; rejection_reason: string }>(
+      `select status, rejected_by_actor_id, rejection_reason from public.communications where id = $1`,
+      [pending2Id]
+    );
+    if (r.rows[0]!.status !== "draft") throw new Error(`status is ${r.rows[0]!.status}, not back in the queue`);
+    if (r.rows[0]!.rejected_by_actor_id !== f.human_id) throw new Error("rejected_by_actor_id missing");
+    if (!/too formal/.test(r.rows[0]!.rejection_reason)) throw new Error("rejection_reason not recorded");
+    const v = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.approval_inbox where item_id = $1`,
+      [pending2Id]
+    );
+    if (v.rows[0]!.n !== 0) throw new Error("a rejected item is still in the inbox");
+  });
+
+  // Readiness pre-flight: each deterministic failure blocks the stamp, and
+  // its fix action earns it back.
+  const noConsent = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'No Consent Contact') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const ncThread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+     values ($1, $2, $3, 'email') returning id`,
+    [f.business_id, f.agent_id, noConsent.rows[0]!.id]
+  );
+  const ncComm = await db.query<{ id: string }>(
+    `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+     values ($1, $2, $3, 'email', 'outbound', 'draft', 'A message to someone who never consented.', $2) returning id`,
+    [f.business_id, f.agent_id, ncThread.rows[0]!.id]
+  );
+  await db.query(`select public.submit_communication($1, $2)`, [ncComm.rows[0]!.id, f.agent_id]);
+
+  await expectError("pre-flight blocks approval without channel consent", /consent/i, () =>
+    db.query(`select public.approve_communication($1, $2)`, [ncComm.rows[0]!.id, f.human_id])
+  );
+  await expectOk("the fix action earns the stamp: consent recorded, approval lands", async () => {
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'email', 'no.consent@example.test', true, '{"transactional": true}'::jsonb)`,
+      [f.business_id, f.agent_id, noConsent.rows[0]!.id]
+    );
+    await db.query(`select public.approve_communication($1, $2)`, [ncComm.rows[0]!.id, f.human_id]);
+  });
+
+  const attComm = await db.query<{ id: string }>(
+    `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+     values ($1, $2, $3, 'email', 'outbound', 'draft', 'Please find attached our letter of engagement for your application.', $2) returning id`,
+    [f.business_id, f.agent_id, thread.rows[0]!.id]
+  );
+  await db.query(`select public.submit_communication($1, $2)`, [attComm.rows[0]!.id, f.agent_id]);
+
+  await expectError("pre-flight blocks a referenced attachment that is not attached", /attach/, () =>
+    db.query(`select public.approve_communication($1, $2)`, [attComm.rows[0]!.id, f.human_id])
+  );
+  await expectOk("attaching the file earns the stamp", async () => {
+    const file = await db.query<{ id: string }>(
+      `insert into public.files (business_id, storage_key, filename, mime_type, size_bytes, sha256, uploaded_by)
+       values ($1, 'test/letter_of_engagement.pdf', 'letter_of_engagement.pdf', 'application/pdf', 1024, repeat('a', 64), $2) returning id`,
+      [f.business_id, f.agent_id]
+    );
+    await db.query(
+      `insert into public.file_links (business_id, file_id, entity_type, entity_id, role)
+       values ($1, $2, 'communication', $3, 'attachment')`,
+      [f.business_id, file.rows[0]!.id, attComm.rows[0]!.id]
+    );
+    await db.query(`select public.approve_communication($1, $2)`, [attComm.rows[0]!.id, f.human_id]);
+  });
+
+  await expectError("pre-flight blocks unresolved template variables", /template variable/, async () => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'Dear {{first_name}}, thank you for your enquiry.', $2) returning id`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    );
+    await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, f.agent_id]);
+    await db.query(`select public.approve_communication($1, $2)`, [r.rows[0]!.id, f.human_id]);
+  });
+
+  await expectOk("pending content and awaiting-approval tasks surface in the same inbox", async () => {
+    await db.query(
+      `insert into public.content_items (business_id, created_by, content_type, title, slug, state)
+       values ($1, $2, 'email_template', 'Intro email v2', 'intro-email-v2', 'pending_approval')`,
+      [f.business_id, f.human_id]
+    );
+    await db.query(
+      `insert into public.tasks (business_id, created_by, engagement_id, title, status, assignee_actor_id)
+       values ($1, $2, $3, 'Confirm consultation slot', 'awaiting_approval', $4)`,
+      [f.business_id, f.agent_id, engagementId, f.human_id]
+    );
+    const v = await db.query<{ item_type: string }>(
+      `select distinct item_type from public.approval_inbox where business_id = $1`,
+      [f.business_id]
+    );
+    const types = v.rows.map((r) => r.item_type);
+    if (!types.includes("content")) throw new Error(`no content item in the inbox (saw: ${types.join(", ")})`);
+    if (!types.includes("task")) throw new Error(`no task item in the inbox (saw: ${types.join(", ")})`);
+  });
+
   // RLS: tenancy walls
   console.log("\nRow-Level Security:");
   await db.exec(`set role authenticated`);
   await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
   await expectOk("member sees their business's contacts", async () => {
+    // Two fixtures by now: Test Person and the pre-flight No Consent Contact.
     const r = await db.query<{ n: number }>(`select count(*)::int as n from public.contacts`);
-    if (r.rows[0]!.n !== 1) throw new Error(`expected 1 contact, saw ${r.rows[0]!.n}`);
+    if (r.rows[0]!.n !== 2) throw new Error(`expected 2 contacts, saw ${r.rows[0]!.n}`);
   });
   await expectError("member cannot hard-delete (no DELETE policy)", /no result|violates|denied|permission/i, async () => {
     const r = await db.query<{ n: number }>(
@@ -624,7 +855,7 @@ async function main() {
 
   await db.exec(`set request.jwt.claim.sub = '${ids.stranger}'`);
   await expectOk("a stranger sees nothing", async () => {
-    for (const table of ["contacts", "engagements", "events", "businesses", "tasks", "grants"]) {
+    for (const table of ["contacts", "engagements", "events", "businesses", "tasks", "grants", "approval_inbox"]) {
       const r = await db.query<{ n: number }>(`select count(*)::int as n from public.${table}`);
       if (r.rows[0]!.n !== 0) throw new Error(`${table}: expected 0 rows, saw ${r.rows[0]!.n}`);
     }
