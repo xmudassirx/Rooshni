@@ -20,3 +20,4 @@
 
 - All events inserts go through the single `emitEvent()` helper in `@rooshni/db` — no direct inserts elsewhere.
 - Work in small commits with clear messages.
+- Spec-level judgment calls need Mudassir's approval and are then recorded in `DECISIONS.md`. Anything that must change at go-live goes on `GO-LIVE.md` the moment it is introduced.
