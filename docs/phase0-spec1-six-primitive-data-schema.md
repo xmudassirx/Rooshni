@@ -335,3 +335,5 @@ Every arrow lands on a table defined above. The schema passes its own acceptance
 - Multi-currency beyond a currency column, tax regimes beyond UK VAT → Phase 3+.
 - Search/vector indexing (pgvector) of communications and content for the context assembly engine → specified in Spec 2's territory; the extension choice is settled by the Supabase decision.
 - Final product name → open decision, under research; agent name "Light" unchanged.
+
+**v0.5 build amendments (8 July 2026, approved at Session 1):** `stage_definitions.order` renamed `sort_order` (reserved keyword); `field_definitions.template_id` added; `actors.account_id` (nullable) added for RLS scope; `content_versions.business_id` added for direct RLS. §6 clarified: one engagement type `enquiry` with `visa_route` as a declared custom field — visa routes are attributes, not types; `matter` remains a separate future type.
