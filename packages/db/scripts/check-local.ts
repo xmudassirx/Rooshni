@@ -405,13 +405,36 @@ async function main() {
     if (r.rows[0]!.n < 1) throw new Error(`use_count is ${r.rows[0]!.n}`);
   });
 
-  await expectOk("a granted agent drafts an outbound email (the Light path)", () =>
-    db.query(
+  let lightDraftId = "";
+  await expectOk("a granted agent drafts an outbound email (the Light path)", async () => {
+    const r = await db.query<{ id: string }>(
       `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
-       values ($1, $2, $3, 'email', 'outbound', 'draft', 'Draft for approval', $2)`,
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'Draft for approval', $2) returning id`,
       [f.business_id, f.agent_id, thread.rows[0]!.id]
-    )
-  );
+    );
+    lightDraftId = r.rows[0]!.id;
+  });
+
+  // The founder demo: the agent stamps its own draft — and the database
+  // refuses. The exact error text is printed so the refusal is visible.
+  try {
+    await db.query(
+      `update public.communications set status = 'approved', approved_by_actor_id = $2 where id = $1`,
+      [lightDraftId, f.agent_id]
+    );
+    failed += 1;
+    console.error("  FAIL  an agent approves its own draft: no error was raised");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/approvals\.comms|HUMAN actor/.test(message)) {
+      passed += 1;
+      console.log("  PASS  an agent cannot stamp its own draft — the database says:");
+      console.log(`        "${message}"`);
+    } else {
+      failed += 1;
+      console.error(`  FAIL  an agent approves its own draft: wrong error: ${message}`);
+    }
+  }
 
   await expectError("an ungranted actor cannot even draft outbound email", /comms\.email/, () =>
     db.query(
@@ -511,6 +534,77 @@ async function main() {
        values ($1, $2, $3, 'email', 'outbound', 'draft', 'after revocation')`,
       [f.business_id, f.agent_id, thread.rows[0]!.id]
     )
+  );
+
+  // ---------------------------------------------------------------------
+  // Spec 3 — the stage door: stage_id is closed to direct update; stage
+  // changes run only through public.move_engagement_stage(). (These tests
+  // must run under the API roles — the superuser bypasses privileges.)
+  // ---------------------------------------------------------------------
+  console.log("\nSpec 3 — the stage door:");
+
+  const stage2 = await db.query<{ id: string }>(
+    `insert into public.stage_definitions (engagement_type_id, key, label, sort_order)
+     values ($1, 'contact_attempted', 'Contact attempted', 2) returning id`,
+    [f.type_id]
+  );
+  const stage2Id = stage2.rows[0]!.id;
+  const engagementId = engagement.rows[0]!.id;
+
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+  await expectError("a signed-in member cannot update stage_id directly", /permission denied/, () =>
+    db.query(`update public.engagements set stage_id = $1 where id = $2`, [stage2Id, engagementId])
+  );
+  await expectError("stage_entered_at is closed too (timing stays honest)", /permission denied/, () =>
+    db.query(`update public.engagements set stage_entered_at = now() where id = $1`, [engagementId])
+  );
+  await expectOk("other engagement columns remain updatable (title)", () =>
+    db.query(`update public.engagements set title = 'Renamed enquiry' where id = $1`, [engagementId])
+  );
+  await expectError(
+    "a signed-in caller cannot move a stage as someone else's actor",
+    /own actor/,
+    () => db.query(`select public.move_engagement_stage($1, $2, $3)`, [engagementId, stage2Id, f.agent_id])
+  );
+  await expectOk("move_engagement_stage moves with a grant (the owner)", async () => {
+    await db.query(`select public.move_engagement_stage($1, $2, $3)`, [engagementId, stage2Id, f.human_id]);
+    const r = await db.query<{ stage_id: string }>(
+      `select stage_id from public.engagements where id = $1`,
+      [engagementId]
+    );
+    if (r.rows[0]!.stage_id !== stage2Id) throw new Error("stage_id did not move");
+    const h = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.stage_history where engagement_id = $1 and to_stage = $2`,
+      [engagementId, stage2Id]
+    );
+    if (h.rows[0]!.n < 1) throw new Error("no stage_history row was appended");
+  });
+  await db.exec(`reset role`);
+
+  // Server code: service_role carries no JWT subject.
+  await db.exec(`set role service_role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await expectError("service_role cannot update stage_id directly either", /permission denied/, () =>
+    db.query(`update public.engagements set stage_id = $1 where id = $2`, [f.stage_id, engagementId])
+  );
+  await expectError(
+    "move_engagement_stage refuses an ungranted actor (transaction aborts)",
+    /enquiries \(execute\)/,
+    () => db.query(`select public.move_engagement_stage($1, $2, $3)`, [engagementId, f.stage_id, h2.agent2_id])
+  );
+  await db.exec(`reset role`);
+
+  await expectOk("the refused move left the engagement untouched", async () => {
+    const r = await db.query<{ stage_id: string }>(
+      `select stage_id from public.engagements where id = $1`,
+      [engagementId]
+    );
+    if (r.rows[0]!.stage_id !== stage2Id) throw new Error("engagement moved despite the refusal");
+  });
+
+  await expectOk("move_engagement_stage moves for a granted agent via server code", () =>
+    db.query(`select public.move_engagement_stage($1, $2, $3)`, [engagementId, f.stage_id, f.agent_id])
   );
 
   // RLS: tenancy walls
