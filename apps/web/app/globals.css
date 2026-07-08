@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+/*
+ * Rooshni theming — Ledger (shipping default) and Frost, per
+ * docs/mockup-pass1-shell-pipeline-case.html (the design authority).
+ *
+ * Status colour semantics are law in every theme:
+ *   gold  = Light acted · red = human stamp required · green = done.
+ */
+
+:root {
+  /* Ledger palette — paper, ink and the register green. */
+  --paper: #fbf9f3;
+  --panel: #ffffff;
+  --paper-deep: #f2eee2;
+  --ink: #202b38;
+  --ink-soft: #5a6371;
+  --ink-faint: #8b94a1;
+  --ledger: #2e6b4f;
+  --ledger-tint: #e7efe9;
+  --ledger-line: #c7d8cd;
+  --stamp: #c13b2a;
+  --stamp-tint: #f9ece9;
+  --gold: #b07c1f;
+  --gold-tint: #f7eeda;
+  --rule: #ddd6c4;
+  --amber: #c08a1e;
+
+  /* Surfaces the shell components consume; Frost overrides these. */
+  --sidebar: var(--ink);
+  --sidebar-fg: #edeae0;
+  --sidebar-fg-strong: #fbf9f3;
+  --panel-border: var(--rule);
+  --shadow-panel: 0 1px 2px rgba(32, 43, 56, 0.06), 0 4px 14px rgba(32, 43, 56, 0.05);
+
+  /* Ledger headlines are set in Bitter; Frost switches to the sans. */
+  --font-display: var(--font-bitter);
+}
+
+[data-theme="frost"] {
+  --paper: #f1f0f6;
+  --panel: rgba(255, 255, 255, 0.66);
+  --paper-deep: rgba(255, 255, 255, 0.4);
+  --ledger-tint: #e3ede7;
+  --stamp-tint: #f9e9e6;
+  --gold-tint: #f6eedb;
+  --rule: rgba(37, 48, 62, 0.14);
+  --sidebar: rgba(255, 255, 255, 0.55);
+  --sidebar-fg: rgba(37, 48, 62, 0.85);
+  --sidebar-fg-strong: #1e2530;
+  --panel-border: rgba(255, 255, 255, 0.75);
+  --shadow-panel: 0 8px 30px rgba(30, 37, 48, 0.08);
+  --font-display: var(--font-public-sans);
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-paper-deep: var(--paper-deep);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-ledger: var(--ledger);
+  --color-ledger-tint: var(--ledger-tint);
+  --color-ledger-line: var(--ledger-line);
+  --color-stamp: var(--stamp);
+  --color-stamp-tint: var(--stamp-tint);
+  --color-gold: var(--gold);
+  --color-gold-tint: var(--gold-tint);
+  --color-rule: var(--rule);
+  --color-amber: var(--amber);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-fg: var(--sidebar-fg);
+  --color-sidebar-fg-strong: var(--sidebar-fg-strong);
+  --color-panel-border: var(--panel-border);
+  --font-sans: var(--font-public-sans), system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), monospace;
+  --font-display: var(--font-display), serif;
+  --shadow-panel: var(--shadow-panel);
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-public-sans), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+[data-theme="frost"] body {
+  background:
+    radial-gradient(900px 600px at 85% -10%, rgba(244, 214, 183, 0.55), transparent 60%),
+    radial-gradient(800px 700px at -10% 30%, rgba(196, 214, 242, 0.6), transparent 55%),
+    radial-gradient(700px 600px at 70% 110%, rgba(233, 205, 226, 0.5), transparent 60%),
+    linear-gradient(160deg, #f3f1f7, #edf1f4);
+  background-attachment: fixed;
+}
+
+/* Glass surfaces: Ledger renders them solid; Frost blurs what is behind. */
+.glass {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--shadow-panel);
+}
+
+[data-theme="frost"] .glass {
+  backdrop-filter: blur(22px) saturate(1.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+}
+
+[data-theme="frost"] .sidebar-glass {
+  backdrop-filter: blur(26px) saturate(1.5);
+  -webkit-backdrop-filter: blur(26px) saturate(1.5);
+  border-right: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
