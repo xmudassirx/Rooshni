@@ -33,12 +33,31 @@ async function main() {
       "stage_history",
       "tasks",
       "events",
+      "permission_levels",
+      "tools",
+      "grants",
     ];
 
     console.log("Row counts:");
     for (const table of tables) {
       const [row] = await sql`select count(*)::int as n from ${sql("public." + table)}`;
       console.log(`  ${table.padEnd(20)} ${row?.n ?? 0}`);
+    }
+
+    console.log("\nGrants (Spec 3 — who may do what):");
+    const grants = await sql`
+      select ge.display_name as grantee, g.tool, g.access, g.duration,
+             g.scope ->> 'level' as scope_level, g.use_count,
+             gb.display_name as granted_by, g.revoked_at
+      from public.grants g
+      join public.actors ge on ge.id = g.grantee_actor_id
+      join public.actors gb on gb.id = g.granted_by_actor_id
+      order by ge.display_name, g.tool
+    `;
+    for (const g of grants) {
+      console.log(
+        `  ${String(g.grantee).padEnd(16)} ${String(g.tool).padEnd(18)} ${String(g.access).padEnd(8)} ${String(g.scope_level).padEnd(10)} ${String(g.duration).padEnd(10)} uses ${String(g.use_count).padEnd(4)} by ${g.granted_by}${g.revoked_at ? "  [REVOKED]" : ""}`
+      );
     }
 
     console.log("\nEvents ledger (newest first):");
