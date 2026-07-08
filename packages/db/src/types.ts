@@ -88,6 +88,44 @@ export interface GrantRow {
   use_count: number;
 }
 
+// --- Session 3: the Approval Inbox ------------------------------------------
+
+/** One deterministic readiness check (Spec 3 §6, decision 11). */
+export interface PreflightCheck {
+  key: "body" | "placeholders" | "consent" | "attachment" | string;
+  label: string;
+  pass: boolean;
+  detail: string | null;
+}
+
+/** The checklist shown on an inbox card; `pass` gates the Approve control. */
+export interface PreflightResult {
+  pass: boolean;
+  checks: PreflightCheck[];
+}
+
+export type ApprovalInboxItemType = "communication" | "content" | "task";
+
+/** One row of public.approval_inbox — a view over the pending states. */
+export interface ApprovalInboxRow {
+  item_type: ApprovalInboxItemType;
+  item_id: string;
+  business_id: string;
+  engagement_id: string | null;
+  contact_id: string | null;
+  channel: string | null;
+  title: string | null;
+  preview: string | null;
+  drafted_by_actor_id: string;
+  drafted_by: string | null;
+  drafted_by_type: ActorType | null;
+  awaiting_since: string;
+  scheduled_for: string | null;
+  /** Communications only; null for content and tasks (no pre-flight yet). */
+  preflight: PreflightResult | null;
+  preflight_pass: boolean | null;
+}
+
 export interface EmitEventInput {
   business_id: string;
   actor_id: string;

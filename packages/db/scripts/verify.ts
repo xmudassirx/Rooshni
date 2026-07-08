@@ -32,6 +32,8 @@ async function main() {
       "engagements",
       "stage_history",
       "tasks",
+      "comm_threads",
+      "communications",
       "events",
       "permission_levels",
       "tools",
@@ -57,6 +59,45 @@ async function main() {
     for (const g of grants) {
       console.log(
         `  ${String(g.grantee).padEnd(16)} ${String(g.tool).padEnd(18)} ${String(g.access).padEnd(8)} ${String(g.scope_level).padEnd(10)} ${String(g.duration).padEnd(10)} uses ${String(g.use_count).padEnd(4)} by ${g.granted_by}${g.revoked_at ? "  [REVOKED]" : ""}`
+      );
+    }
+
+    console.log("\nApproval inbox (Spec 3 §6 — stamps owed; the inbox is a view):");
+    const inbox = await sql`
+      select item_type, coalesce(channel, '') as channel, title, drafted_by,
+             drafted_by_type, preflight_pass, awaiting_since
+      from public.approval_inbox
+      order by awaiting_since
+    `;
+    if (inbox.length === 0) {
+      console.log("  (empty — no stamps owed)");
+    }
+    for (const i of inbox) {
+      const preflight =
+        i.preflight_pass === null ? "" : i.preflight_pass ? "pre-flight ✓" : "pre-flight BLOCKED";
+      console.log(
+        `  ${String(i.item_type).padEnd(14)} ${String(i.channel).padEnd(9)} ${String(i.title ?? "").slice(0, 44).padEnd(46)} by ${String(i.drafted_by ?? "?").padEnd(14)} (${i.drafted_by_type}) ${preflight}`
+      );
+    }
+
+    console.log("\nCommunication pipeline states:");
+    const comms = await sql`
+      select c.status, c.channel, left(c.body, 40) as body,
+             d.display_name as drafted_by, ap.display_name as approved_by,
+             c.rejection_reason
+      from public.communications c
+      left join public.actors d on d.id = c.drafted_by_actor_id
+      left join public.actors ap on ap.id = c.approved_by_actor_id
+      order by c.id
+    `;
+    for (const c of comms) {
+      const tail = c.approved_by
+        ? `approved by ${c.approved_by}`
+        : c.rejection_reason
+          ? `rejected: "${c.rejection_reason}"`
+          : "";
+      console.log(
+        `  ${String(c.status).padEnd(18)} ${String(c.channel).padEnd(9)} "${c.body}…" drafted by ${String(c.drafted_by ?? "?").padEnd(10)} ${tail}`
       );
     }
 

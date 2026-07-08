@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { scaleDurationMs } from "@rooshni/config";
 import { loadEnv } from "../scripts/env";
+import {
+  approveCommunication,
+  rejectCommunication,
+  submitCommunication,
+} from "../src/approvals";
 import { createServiceClient } from "../src/client";
 import { emitEvent } from "../src/events";
 import { metaLeadFixtures, type MetaLeadFixture } from "./fixtures/meta-leads";
@@ -41,6 +46,16 @@ const GRANTS = [
 ] as const;
 
 const OWNER_EMAIL = "xmudassirx@gmail.com";
+
+// Session 3 — the Approval Inbox demo. Deterministic ids; on the go-live
+// purge list (GO-LIVE.md) with the rest of the fixture data.
+const INBOX_DEMO = {
+  threadLead1: "01980000-0000-7000-8000-000000000501",
+  commPending: "01980000-0000-7000-8000-000000000502",
+  threadLead2: "01980000-0000-7000-8000-000000000503",
+  commApproved: "01980000-0000-7000-8000-000000000504",
+  commRejected: "01980000-0000-7000-8000-000000000505",
+} as const;
 
 // Spec 1 §6 — the X Law pipeline (provisional pending the two-week lead log).
 const STAGES = [
@@ -466,6 +481,165 @@ async function ingestMetaLead(db: SupabaseClient, fixture: MetaLeadFixture): Pro
   console.log(`Lead ingested: ${fullName} (${phone}) → enquiry at "New lead" + call task.`);
 }
 
+async function findLeadEngagement(
+  db: SupabaseClient,
+  leadId: string
+): Promise<{ engagementId: string; contactId: string }> {
+  const { data: engagement, error } = await db
+    .from("engagements")
+    .select("id")
+    .contains("external_refs", JSON.stringify([{ system: "meta", external_id: leadId }]))
+    .limit(1);
+  if (error) throw new Error(`engagement lookup failed: ${error.message}`);
+  if (!engagement || engagement.length === 0) {
+    throw new Error(`No engagement found for Meta lead ${leadId} — run the lead ingestion first.`);
+  }
+  const { data: participant, error: participantError } = await db
+    .from("engagement_participants")
+    .select("contact_id")
+    .eq("engagement_id", engagement[0]!.id)
+    .eq("role", "client")
+    .limit(1);
+  if (participantError) throw new Error(`participant lookup failed: ${participantError.message}`);
+  if (!participant || participant.length === 0) {
+    throw new Error(`Engagement for lead ${leadId} has no client participant.`);
+  }
+  return { engagementId: engagement[0]!.id, contactId: participant[0]!.contact_id };
+}
+
+/**
+ * Light drafts an outbound email and submits it through the real pipeline:
+ * insert at draft (comms.email grant consumed), communication.drafted on the
+ * ledger, then submit_communication → pending_approval + communication.submitted.
+ * Returns false when the fixed id already exists (idempotent re-runs).
+ */
+async function seedLightDraft(
+  db: SupabaseClient,
+  input: { threadId: string; commId: string; leadId: string; subject: string; body: string }
+): Promise<boolean> {
+  const { data: existing, error: lookupError } = await db
+    .from("communications")
+    .select("id")
+    .eq("id", input.commId)
+    .maybeSingle();
+  if (lookupError) throw new Error(`communication lookup failed: ${lookupError.message}`);
+  if (existing) return false;
+
+  const lead = await findLeadEngagement(db, input.leadId);
+
+  await upsert(db, "comm_threads", {
+    id: input.threadId,
+    business_id: IDS.business,
+    created_by: IDS.actorLight,
+    contact_id: lead.contactId,
+    engagement_id: lead.engagementId,
+    channel: "email",
+    subject: input.subject,
+  });
+
+  const { error } = await db.from("communications").insert({
+    id: input.commId,
+    business_id: IDS.business,
+    created_by: IDS.actorLight,
+    thread_id: input.threadId,
+    contact_id: lead.contactId,
+    engagement_id: lead.engagementId,
+    channel: "email",
+    direction: "outbound",
+    status: "draft",
+    body: input.body,
+    body_format: "plain",
+    drafted_by_actor_id: IDS.actorLight,
+  });
+  if (error) throw new Error(`communication insert failed: ${error.message}`);
+
+  await emitEvent(db, {
+    business_id: IDS.business,
+    actor_id: IDS.actorLight,
+    action: "communication.drafted",
+    entity_type: "communication",
+    entity_id: input.commId,
+    payload: { channel: "email", engagement_id: lead.engagementId },
+  });
+
+  await submitCommunication(db, {
+    business_id: IDS.business,
+    communication_id: input.commId,
+    actor_id: IDS.actorLight,
+  });
+  return true;
+}
+
+/**
+ * Session 3 — the Approval Inbox in action. Lead 1's intro draft stays
+ * pending (the inbox demo); lead 2 carries the dev-only demonstration of the
+ * full trail: one draft approved by Mudassir, one rejected with a reason and
+ * returned to Light's queue. Nothing is sent — the send pipeline does not
+ * exist yet, and approved ≠ sent.
+ */
+async function seedApprovalInboxDemo(db: SupabaseClient): Promise<void> {
+  const lead1 = metaLeadFixtures[0]!.lead.id;
+  const lead2 = metaLeadFixtures[1]!.lead.id;
+
+  // Spec 4 §4 step 1: the instant acknowledgement (intro_v1 standard: ~80
+  // words, no advice, no fee promises) → the Approval Inbox.
+  const pendingCreated = await seedLightDraft(db, {
+    threadId: INBOX_DEMO.threadLead1,
+    commId: INBOX_DEMO.commPending,
+    leadId: lead1,
+    subject: "Your enquiry with X Law",
+    body:
+      "Assalamu alaikum Mudassir, thank you for your enquiry with X Law. " +
+      "Mudassir will call you within the next two business hours to talk through your situation and how the process works. " +
+      "If another time suits you better, simply reply to this email and we will arrange the call around you. " +
+      "There is nothing you need to prepare — any dates or paperwork you have to hand will help, but none of it is essential. Speak soon.",
+  });
+  if (pendingCreated) {
+    console.log("Light's intro draft awaits the stamp in the Approval Inbox (lead 1).");
+  } else {
+    console.log("Inbox demo draft already seeded — skipped.");
+  }
+
+  const approvedCreated = await seedLightDraft(db, {
+    threadId: INBOX_DEMO.threadLead2,
+    commId: INBOX_DEMO.commApproved,
+    leadId: lead2,
+    subject: "Your enquiry with X Law",
+    body:
+      "Assalamu alaikum BarakahX, thank you for getting in touch with X Law about your immigration matter. " +
+      "Mudassir will call you within the next two business hours to hear the details and explain the next steps. " +
+      "If you would rather pick a time, reply to this email and we will fit around you. " +
+      "No preparation is needed — the call is simply to understand your situation properly. Speak soon.",
+  });
+  if (approvedCreated) {
+    await approveCommunication(db, {
+      business_id: IDS.business,
+      communication_id: INBOX_DEMO.commApproved,
+      approver_actor_id: IDS.actorMudassir,
+    });
+    console.log("Demo approval: Mudassir stamped Light's draft — communication.approved on the ledger.");
+  }
+
+  const rejectedCreated = await seedLightDraft(db, {
+    threadId: INBOX_DEMO.threadLead2,
+    commId: INBOX_DEMO.commRejected,
+    leadId: lead2,
+    subject: "Your enquiry with X Law",
+    body:
+      "Dear BarakahX, further to your recent enquiry, X Law confirms receipt and will revert in due course " +
+      "regarding the applicable process and requirements. Kindly await further contact.",
+  });
+  if (rejectedCreated) {
+    await rejectCommunication(db, {
+      business_id: IDS.business,
+      communication_id: INBOX_DEMO.commRejected,
+      rejected_by_actor_id: IDS.actorMudassir,
+      reason: "Too formal for a first touch — warm it up and lead with the call we owe them.",
+    });
+    console.log("Demo rejection: reason recorded, draft returned to Light's queue.");
+  }
+}
+
 async function main() {
   loadEnv();
   const db = createServiceClient();
@@ -478,6 +652,8 @@ async function main() {
   for (const fixture of metaLeadFixtures) {
     await ingestMetaLead(db, fixture);
   }
+
+  await seedApprovalInboxDemo(db);
 
   console.log("\nSeed complete. Run `npm run verify --workspace=@rooshni/db` to inspect the ledger.");
 }
