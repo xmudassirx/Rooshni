@@ -1,0 +1,1578 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create You AI — Phase 1 Mockup · Pass 1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@600;700;800;900&family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Nunito:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FBF9F3; --panel:#FFFFFF; --paper-deep:#F2EEE2;
+    --ink:#202B38; --ink-soft:#5A6371; --ink-faint:#8B94A1;
+    --ledger:#2E6B4F; --ledger-tint:#E7EFE9; --ledger-line:#C7D8CD;
+    --stamp:#C13B2A; --stamp-tint:#F9ECE9;
+    --gold:#B07C1F; --gold-tint:#F7EEDA;
+    --rule:#DDD6C4; --amber:#C08A1E; --mono:'IBM Plex Mono',monospace;
+    --shadow:0 1px 2px rgba(32,43,56,.06),0 4px 14px rgba(32,43,56,.05);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+  body{background:var(--paper);color:var(--ink);font-family:'Public Sans',system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+
+  /* ===== layout ===== */
+  .app{display:flex;min-height:100vh}
+  .sidebar{
+    width:232px;flex-shrink:0;background:var(--ink);color:#EDEAE0;
+    display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
+  }
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+  /* ===== sidebar ===== */
+  .logo{padding:20px 18px 14px;border-bottom:1px solid rgba(237,234,224,.14)}
+  .logo .name{font-family:'Bitter',serif;font-weight:900;font-size:17px;color:#FBF9F3;letter-spacing:.01em}
+  .logo .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:rgba(237,234,224,.5);text-transform:uppercase;margin-top:2px}
+  .bizswitch{margin:14px 12px 6px;position:relative}
+  .biztab{
+    width:100%;display:flex;align-items:center;gap:9px;text-align:left;
+    background:rgba(251,249,243,.07);border:1px solid rgba(237,234,224,.18);border-radius:8px;
+    padding:9px 11px;color:#FBF9F3;transition:background .15s;
+  }
+  .biztab:hover{background:rgba(251,249,243,.12)}
+  .biztab .dot{width:9px;height:9px;border-radius:2px;background:var(--ledger);flex-shrink:0;box-shadow:0 0 0 1px rgba(251,249,243,.4)}
+  .biztab .bn{font-weight:600;font-size:13.5px;flex:1}
+  .biztab .chev{font-size:10px;opacity:.6}
+  .bizmenu{
+    display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:40;
+    background:#2A3644;border:1px solid rgba(237,234,224,.2);border-radius:8px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  .bizmenu.open{display:block}
+  .bizmenu button{display:flex;width:100%;text-align:left;gap:9px;align-items:center;padding:10px 11px;font-size:13px;color:#EDEAE0}
+  .bizmenu button:hover{background:rgba(251,249,243,.08)}
+  .bizmenu .dot{width:9px;height:9px;border-radius:2px;flex-shrink:0}
+  nav{padding:10px 12px;flex:1}
+  .navlabel{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:rgba(237,234,224,.42);padding:12px 8px 6px}
+  .navitem{
+    display:flex;width:100%;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;
+    color:rgba(237,234,224,.82);font-size:13.5px;font-weight:500;margin-bottom:1px;transition:background .12s;text-align:left;
+  }
+  .navitem:hover{background:rgba(251,249,243,.07)}
+  .navitem.active{background:var(--ledger);color:#fff;font-weight:600}
+  .navitem .ic{width:17px;text-align:center;font-size:14px;opacity:.9}
+  .navitem .badge{
+    margin-left:auto;background:var(--stamp);color:#fff;font-family:var(--mono);
+    font-size:10.5px;font-weight:600;border-radius:9px;padding:1px 7px;
+  }
+  .userrow{padding:14px 18px;border-top:1px solid rgba(237,234,224,.14);display:flex;gap:10px;align-items:center}
+  .avatar{width:30px;height:30px;border-radius:50%;background:var(--gold);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+  .userrow .un{font-size:12.5px;font-weight:600;color:#FBF9F3}
+  .userrow .ur{font-family:var(--mono);font-size:9.5px;color:rgba(237,234,224,.5);letter-spacing:.08em}
+
+  /* ===== topbar ===== */
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:12px 22px;background:var(--paper);
+    border-bottom:1px solid var(--rule);position:sticky;top:0;z-index:30;
+  }
+  .hamb{display:none;font-size:20px;padding:4px 8px}
+  .crumb{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);letter-spacing:.04em}
+  .crumb b{color:var(--ink);font-weight:600}
+  .askbar{
+    margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--rule);border-radius:20px;padding:7px 14px;color:var(--ink-faint);
+    font-size:13px;min-width:150px;box-shadow:var(--shadow);
+  }
+  .askbar .spark{color:var(--gold);font-size:14px}
+
+  .content{padding:22px;max-width:1220px;width:100%}
+
+  /* ===== view switching ===== */
+  .view{display:none}
+  .view.active{display:block}
+
+  /* ===== pipeline ===== */
+  .pagehead{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  .pagehead h1{font-family:'Bitter',serif;font-weight:800;font-size:24px;letter-spacing:-.01em}
+  .pagehead .sub{color:var(--ink-soft);font-size:13px;padding-bottom:3px}
+  .pagehead .actions{margin-left:auto;display:flex;gap:8px}
+  .btn{
+    display:inline-flex;align-items:center;gap:7px;border-radius:8px;padding:8px 14px;
+    font-weight:600;font-size:13px;border:1px solid var(--rule);background:var(--panel);
+    color:var(--ink);box-shadow:var(--shadow);transition:transform .1s;
+  }
+  .btn:active{transform:scale(.98)}
+  .btn.primary{background:var(--ledger);border-color:var(--ledger);color:#fff}
+  .board{display:flex;gap:12px;overflow-x:auto;padding:20px 2px 18px;scroll-snap-type:x proximity}
+  .col{min-width:248px;width:248px;flex-shrink:0;scroll-snap-align:start}
+  .colhead{
+    background:var(--ink);color:#FBF9F3;border-radius:8px 8px 0 0;padding:7px 12px;
+    display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;
+    font-weight:600;letter-spacing:.08em;text-transform:uppercase;position:relative;margin-left:0;
+  }
+  .colhead::before{content:"";position:absolute;left:0;right:auto;top:-6px;width:34px;height:6px;background:var(--ink);border-radius:6px 6px 0 0}
+  .colhead .cnt{margin-left:auto;background:rgba(251,249,243,.18);border-radius:8px;padding:0 7px;font-size:10.5px}
+  .colbody{background:var(--paper-deep);border:1px solid var(--rule);border-top:none;border-radius:0 0 10px 10px;padding:8px;min-height:120px;display:flex;flex-direction:column;gap:8px}
+  .card{
+    background:var(--panel);border:1px solid var(--rule);border-radius:9px;padding:11px 12px;
+    box-shadow:var(--shadow);cursor:pointer;transition:transform .12s,border-color .12s;text-align:left;width:100%;
+  }
+  .card:hover{transform:translateY(-1px);border-color:var(--ledger)}
+  .card .nm{font-weight:700;font-size:14px}
+  .card .ct{font-family:var(--mono);font-size:11px;color:var(--ledger);font-weight:600;margin:1px 0 7px}
+  .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .chip{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;border-radius:4px;padding:1.5px 7px;text-transform:uppercase}
+  .chip.src{background:#EAF0F6;color:#40638C;border:1px solid #C9D8E8}
+  .chip.val{background:var(--ledger-tint);color:var(--ledger);border:1px solid var(--ledger-line)}
+  .chip.time{background:transparent;color:var(--ink-faint);border:1px dashed var(--rule)}
+  .chip.time.warn{color:var(--amber);border-color:var(--amber)}
+  .chip.gold{background:var(--gold-tint);color:var(--gold);border:1px solid #E5D2A4}
+  .chip.red{background:var(--stamp-tint);color:var(--stamp);border:1px solid #E8BCB2}
+  .card .foot{margin-top:8px;padding-top:7px;border-top:1px dashed var(--rule);font-size:11.5px;color:var(--ink-soft);display:flex;gap:6px;align-items:center}
+  .card .foot .sp{color:var(--gold)}
+
+  /* ===== case detail ===== */
+  .backrow{margin-bottom:14px}
+  .backbtn{font-family:var(--mono);font-size:12px;color:var(--ink-soft);font-weight:600;letter-spacing:.04em}
+  .backbtn:hover{color:var(--ink)}
+  .casehead{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:18px 20px;box-shadow:var(--shadow)}
+  .casehead .toprow{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+  .casehead h1{font-family:'Bitter',serif;font-weight:800;font-size:22px}
+  .casehead .sub{font-family:var(--mono);font-size:12px;color:var(--ledger);font-weight:600;margin-top:2px}
+  .casehead .right{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .stages{display:flex;gap:4px;margin-top:16px;overflow-x:auto;padding-bottom:4px}
+  .stg{
+    flex:1;min-width:86px;text-align:center;font-family:var(--mono);font-size:9.5px;font-weight:600;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);
+    padding:7px 4px;background:var(--paper-deep);border-radius:5px;position:relative;
+  }
+  .stg.done{background:var(--ledger-tint);color:var(--ledger)}
+  .stg.now{background:var(--ledger);color:#fff}
+  .grid2{display:grid;grid-template-columns:1fr 328px;gap:16px;margin-top:16px;align-items:start}
+  .panelbox{background:var(--panel);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+  .panelbox h2{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-soft);font-weight:600;padding:12px 16px;border-bottom:1px solid var(--rule);background:var(--paper);
+  }
+  /* timeline */
+  .tl{padding:6px 16px 16px;position:relative}
+  .tl::before{content:"";position:absolute;left:29px;top:16px;bottom:16px;width:2px;background:repeating-linear-gradient(to bottom,var(--rule) 0 5px,transparent 5px 10px)}
+  .ev{position:relative;padding:12px 0 12px 42px}
+  .ev .pin{
+    position:absolute;left:5px;top:14px;width:18px;height:18px;border-radius:50%;
+    background:var(--panel);border:2px solid var(--ink-faint);z-index:1;
+  }
+  .ev.gold .pin{border-color:var(--gold);background:var(--gold-tint)}
+  .ev.red .pin{border-color:var(--stamp);background:var(--stamp-tint)}
+  .ev.green .pin{border-color:var(--ledger);background:var(--ledger-tint)}
+  .ev .when{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);letter-spacing:.05em}
+  .ev .what{font-size:13.5px;margin-top:2px}
+  .ev .what b{font-weight:700}
+  .msg{
+    margin-top:8px;background:var(--paper);border:1px solid var(--rule);border-radius:9px;padding:11px 13px;font-size:13px;color:var(--ink-soft);
+  }
+  .msg .mh{display:flex;gap:7px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+  .msg .body{color:var(--ink)}
+  .msg .cost{font-family:var(--mono);font-size:10px;color:var(--gold);margin-top:7px}
+  .approvebar{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
+  .btn.approve{background:var(--stamp);border-color:var(--stamp);color:#fff;font-size:12.5px;padding:7px 13px}
+  .btn.refine{font-size:12.5px;padding:7px 13px}
+  .stamped{
+    display:none;transform:rotate(-5deg);border:2.5px solid var(--stamp);color:var(--stamp);
+    border-radius:7px;font-family:var(--mono);font-weight:600;letter-spacing:.14em;font-size:11px;
+    padding:4px 11px;text-transform:uppercase;
+  }
+  .approved-state .approvebar .btn{display:none}
+  .approved-state .stamped{display:inline-block;animation:stampin .25s ease-out}
+  @keyframes stampin{0%{transform:rotate(-5deg) scale(1.6);opacity:0}100%{transform:rotate(-5deg) scale(1);opacity:1}}
+  /* side panels */
+  .kv{padding:12px 16px;display:flex;flex-direction:column;gap:9px}
+  .kv .row{display:flex;gap:10px;font-size:13px}
+  .kv .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);width:104px;flex-shrink:0;padding-top:2px}
+  .kv .v{font-weight:500}
+  .kv .v .sub{display:block;font-size:11.5px;color:var(--ink-soft);font-weight:400}
+  .tasklist{padding:8px 12px 12px;display:flex;flex-direction:column;gap:7px}
+  .task{display:flex;gap:9px;align-items:flex-start;background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:9px 11px}
+  .task .cb{width:15px;height:15px;border:1.5px solid var(--ink-faint);border-radius:4px;margin-top:2px;flex-shrink:0}
+  .task .tt{font-size:12.5px;font-weight:500;flex:1}
+  .task .tt .due{display:block;font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:2px}
+  .notebox{padding:12px 16px}
+  .note{background:#FDF9EC;border:1px solid #EDE3C0;border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--ink)}
+  .note .nw{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:6px}
+
+  /* ===== placeholder views ===== */
+  .ph{
+    border:1.5px dashed var(--rule);border-radius:14px;background:var(--panel);
+    padding:38px 26px;text-align:center;max-width:560px;margin:40px auto;
+  }
+  .ph .ic{font-size:30px;margin-bottom:10px}
+  .ph h2{font-family:'Bitter',serif;font-weight:800;font-size:20px;margin-bottom:8px}
+  .ph p{color:var(--ink-soft);font-size:14px;max-width:42ch;margin:0 auto 6px}
+  .ph .spec{
+    display:inline-block;margin-top:12px;font-family:var(--mono);font-size:11px;font-weight:600;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--ledger);
+    border:1px solid var(--ledger-line);background:var(--ledger-tint);border-radius:6px;padding:4px 12px;
+  }
+
+  /* toast */
+  .toast{
+    position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(80px);
+    background:var(--ink);color:#FBF9F3;border-radius:10px;padding:11px 18px;font-size:13px;
+    box-shadow:0 10px 30px rgba(0,0,0,.3);transition:transform .25s;z-index:100;max-width:92vw;text-align:center;
+  }
+  .toast.show{transform:translateX(-50%) translateY(0)}
+
+  /* ===== theme & accent tokens ===== */
+  [data-accent="green"]{--accent:#2E6B4F;--accent-tint:#E7EFE9}
+  [data-accent="cool"]{--accent:#3E5A78;--accent-tint:#E9EFF6}
+  [data-accent="warm"]{--accent:#A65E2E;--accent-tint:#F6EBE2}
+  .navitem.active{background:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent)}
+  .stg.now{background:var(--accent)}
+  .stg.done{background:var(--accent-tint);color:var(--accent)}
+  .biztab .dot{background:var(--accent)}
+  .askbar .spark,.card .foot .sp{color:var(--gold)} /* semantic: gold is always Light */
+
+  /* ===== FROST theme ===== */
+  body[data-theme="frost"]{
+    background:
+      radial-gradient(900px 600px at 85% -10%, rgba(244,214,183,.55), transparent 60%),
+      radial-gradient(800px 700px at -10% 30%, rgba(196,214,242,.6), transparent 55%),
+      radial-gradient(700px 600px at 70% 110%, rgba(233,205,226,.5), transparent 60%),
+      linear-gradient(160deg,#F3F1F7,#EDF1F4);
+    background-attachment:fixed;
+  }
+  body[data-theme="frost"] .pagehead h1,
+  body[data-theme="frost"] .casehead h1,
+  body[data-theme="frost"] .ph h2,
+  body[data-theme="frost"] .logo .name{font-family:'Public Sans',system-ui,sans-serif;letter-spacing:-.02em;font-weight:700}
+  body[data-theme="frost"] .sidebar{
+    background:rgba(255,255,255,.55);backdrop-filter:blur(26px) saturate(1.5);-webkit-backdrop-filter:blur(26px) saturate(1.5);
+    color:#25303E;border-right:1px solid rgba(255,255,255,.7);
+  }
+  body[data-theme="frost"] .logo{border-bottom-color:rgba(37,48,62,.1)}
+  body[data-theme="frost"] .logo .name{color:#1E2530}
+  body[data-theme="frost"] .logo .sub{color:rgba(37,48,62,.5)}
+  body[data-theme="frost"] .biztab{background:rgba(255,255,255,.55);border-color:rgba(37,48,62,.12);color:#1E2530}
+  body[data-theme="frost"] .bizmenu{background:rgba(255,255,255,.92);border-color:rgba(37,48,62,.12)}
+  body[data-theme="frost"] .bizmenu button{color:#25303E}
+  body[data-theme="frost"] .bizmenu button:hover{background:rgba(37,48,62,.06)}
+  body[data-theme="frost"] .navlabel{color:rgba(37,48,62,.45)}
+  body[data-theme="frost"] .navitem{color:rgba(37,48,62,.85)}
+  body[data-theme="frost"] .navitem:hover{background:rgba(37,48,62,.06)}
+  body[data-theme="frost"] .navitem.active{color:#fff}
+  body[data-theme="frost"] .userrow{border-top-color:rgba(37,48,62,.1)}
+  body[data-theme="frost"] .userrow .un{color:#1E2530}
+  body[data-theme="frost"] .userrow .ur{color:rgba(37,48,62,.5)}
+  body[data-theme="frost"] .topbar{
+    background:rgba(255,255,255,.5);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);
+    border-bottom:1px solid rgba(255,255,255,.65);
+  }
+  body[data-theme="frost"] .askbar,
+  body[data-theme="frost"] .btn{
+    background:rgba(255,255,255,.62);border-color:rgba(255,255,255,.75);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    box-shadow:0 2px 10px rgba(30,37,48,.06);
+  }
+  body[data-theme="frost"] .btn.primary{background:var(--accent);border-color:transparent}
+  body[data-theme="frost"] .btn.approve{background:var(--stamp);border-color:transparent}
+  body[data-theme="frost"] .panelbox,
+  body[data-theme="frost"] .casehead{
+    background:rgba(255,255,255,.6);border-color:rgba(255,255,255,.75);border-radius:18px;
+    backdrop-filter:blur(22px) saturate(1.3);-webkit-backdrop-filter:blur(22px) saturate(1.3);
+    box-shadow:0 8px 30px rgba(30,37,48,.08);
+  }
+  body[data-theme="frost"] .panelbox h2{background:rgba(255,255,255,.35);border-bottom-color:rgba(37,48,62,.08)}
+  body[data-theme="frost"] .card{
+    background:rgba(255,255,255,.66);border-color:rgba(255,255,255,.8);border-radius:14px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  }
+  body[data-theme="frost"] .card:hover{border-color:var(--accent)}
+  body[data-theme="frost"] .colhead{
+    background:rgba(255,255,255,.55);color:#25303E;border-radius:12px 12px 0 0;
+    backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  }
+  body[data-theme="frost"] .colhead::before{display:none}
+  body[data-theme="frost"] .colhead .cnt{background:rgba(37,48,62,.1);color:#25303E}
+  body[data-theme="frost"] .colbody{background:rgba(255,255,255,.26);border-color:rgba(255,255,255,.55);border-radius:0 0 14px 14px}
+  body[data-theme="frost"] .msg{background:rgba(255,255,255,.55);border-color:rgba(255,255,255,.8)}
+  body[data-theme="frost"] .stg{background:rgba(255,255,255,.4);color:rgba(37,48,62,.55)}
+  body[data-theme="frost"] .stg.done{background:var(--accent-tint);color:var(--accent)}
+  body[data-theme="frost"] .stg.now{background:var(--accent);color:#fff}
+  body[data-theme="frost"] .ev .pin{background:rgba(255,255,255,.85)}
+  body[data-theme="frost"] .task,body[data-theme="frost"] .ph{background:rgba(255,255,255,.5);border-color:rgba(255,255,255,.8)}
+  body[data-theme="frost"] .note{background:rgba(253,247,228,.7);border-color:rgba(222,205,150,.6)}
+  body[data-theme="frost"] .chip.time{border-color:rgba(37,48,62,.2)}
+
+  /* ===== memory cards screen ===== */
+  .memtray{border:1.5px solid var(--gold);background:var(--gold-tint);border-radius:12px;padding:14px 16px;margin-bottom:18px}
+  .memtray h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:600;margin-bottom:10px}
+  .prop{background:var(--panel);border:1px solid var(--rule);border-radius:9px;padding:11px 13px;margin-bottom:8px}
+  .prop:last-child{margin-bottom:0}
+  .prop .pt{font-size:13.5px}
+  .prop .pt b{font-weight:700}
+  .prop .pwhy{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-top:3px}
+  .prop .pact{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+  .btn.sm{font-size:12px;padding:6px 11px}
+  .btn.gold{background:var(--gold);border-color:var(--gold);color:#fff}
+  .memfilters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
+  .fpill{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 12px;border-radius:16px;border:1px solid var(--rule);background:var(--panel);color:var(--ink-soft)}
+  .fpill.on{background:var(--ink);border-color:var(--ink);color:#FBF9F3}
+  .fsep{width:1px;height:18px;background:var(--rule);margin:0 4px}
+  .memgrid{display:grid;grid-template-columns:1fr;gap:12px}
+  @media(min-width:640px){.memgrid{grid-template-columns:1fr 1fr}}
+  @media(min-width:1000px){.memgrid{grid-template-columns:1fr 1fr 1fr}}
+  .mcard{
+    background:
+      linear-gradient(to bottom, transparent 0 30px, rgba(193,59,42,.35) 30px 31px, transparent 31px),
+      repeating-linear-gradient(to bottom, transparent 0 25px, rgba(32,43,56,.05) 25px 26px),
+      var(--panel);
+    border:1px solid var(--rule);border-radius:10px;padding:10px 14px 12px;box-shadow:var(--shadow);
+    display:flex;flex-direction:column;gap:8px;
+  }
+  .mcard.faded{opacity:.45}
+  .mcard .mhrow{display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-height:20px}
+  .mcard .mtitle{font-family:'Bitter',serif;font-weight:700;font-size:15px;line-height:1.3;padding-top:2px}
+  body[data-font="sans"] .mcard .mtitle,body[data-theme="frost"] .mcard .mtitle{font-family:'Public Sans',sans-serif}
+  body[data-font="round"] .mcard .mtitle{font-family:'Nunito',sans-serif}
+  body[data-font="serif"] .mcard .mtitle{font-family:'Bitter',serif}
+  .mcard .mbody{font-size:12.5px;color:var(--ink-soft);line-height:1.5}
+  .mcard .mprov{font-family:var(--mono);font-size:10px;color:var(--ink-faint);border-top:1px dashed var(--rule);padding-top:8px}
+  .mcard .mprov a{color:var(--ledger);text-decoration:underline;cursor:pointer}
+  .mcard .mact{display:flex;gap:4px;margin-top:2px;flex-wrap:wrap}
+  .iact{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);padding:3px 8px;border-radius:5px;border:1px solid transparent}
+  .iact:hover{border-color:var(--rule);color:var(--ink)}
+  .kb{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;border-radius:4px;padding:2px 7px}
+  .kb.fact{background:#EAF0F6;color:#40638C}
+  .kb.preference{background:#EFE9F4;color:#6D4E93}
+  .kb.standard{background:var(--ledger-tint);color:var(--ledger)}
+  .kb.method{background:#F4E9E3;color:#9A5230}
+  .kb.scope{background:var(--paper-deep);color:var(--ink-soft);border:1px solid var(--rule)}
+  .kb.trust-observed{background:transparent;color:var(--ink-faint);border:1px dashed var(--ink-faint)}
+  .kb.trust-confirmed{background:transparent;color:var(--ledger);border:1px solid var(--ledger)}
+  .kb.trust-authoritative{background:var(--ink);color:#FBF9F3}
+  .kb.pin{background:var(--gold-tint);color:var(--gold);border:1px solid #E3CD9C}
+  .workstrip{margin-top:22px;border:1.5px dashed var(--rule);border-radius:12px;padding:12px 16px;background:var(--paper-deep)}
+  .workstrip h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;margin-bottom:9px}
+  .wrow{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px dashed var(--rule);flex-wrap:wrap}
+  .wrow:last-child{border-bottom:none}
+  .wrow .wt{font-size:13px;flex:1;min-width:200px}
+  .wrow .wexp{font-family:var(--mono);font-size:10px;color:var(--amber)}
+  body[data-theme="frost"] .mcard{background:rgba(255,255,255,.66);border-color:rgba(255,255,255,.8);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+  body[data-theme="frost"] .memtray{background:rgba(247,238,218,.6);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  body[data-theme="frost"] .workstrip{background:rgba(255,255,255,.3)}
+  body[data-theme="frost"] .fpill{background:rgba(255,255,255,.6);border-color:rgba(255,255,255,.75)}
+  body[data-theme="frost"] .fpill.on{background:var(--ink);color:#FBF9F3}
+
+  /* import modal */
+  .imodal-scrim{display:none;position:fixed;inset:0;background:rgba(32,43,56,.45);z-index:80}
+  .imodal-scrim.show{display:block}
+  .imodal{
+    display:none;position:fixed;z-index:81;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:min(520px,92vw);background:var(--panel);border:1px solid var(--rule);border-radius:14px;
+    padding:20px;box-shadow:0 20px 60px rgba(32,43,56,.3);
+  }
+  .imodal.show{display:block}
+  body[data-theme="frost"] .imodal{background:rgba(255,255,255,.85);backdrop-filter:blur(28px) saturate(1.4);-webkit-backdrop-filter:blur(28px) saturate(1.4);border-color:rgba(255,255,255,.9)}
+  .imodal h3{font-family:'Bitter',serif;font-weight:800;font-size:19px}
+  body[data-theme="frost"] .imodal h3,body[data-font="sans"] .imodal h3{font-family:'Public Sans',sans-serif}
+  body[data-font="round"] .imodal h3{font-family:'Nunito',sans-serif}
+  .imodal .isub{font-size:13px;color:var(--ink-soft);margin:6px 0 14px}
+  .ipaste{
+    width:100%;height:96px;resize:vertical;border:1px solid var(--rule);border-radius:9px;
+    background:var(--paper);padding:10px 12px;font-family:var(--mono);font-size:12px;color:var(--ink);
+  }
+  .idrop{
+    margin-top:10px;border:1.5px dashed var(--rule);border-radius:10px;padding:16px;text-align:center;
+    color:var(--ink-soft);font-size:13px;cursor:pointer;display:flex;flex-direction:column;gap:3px;
+  }
+  .idrop:hover{border-color:var(--gold);color:var(--ink)}
+  .idrop-sub{font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .iact-row{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+
+  /* ===== approval inbox ===== */
+  .qitem{background:var(--panel);border:1px solid var(--rule);border-radius:11px;padding:13px 15px;margin-bottom:11px;box-shadow:var(--shadow)}
+  body[data-theme="frost"] .qitem{background:rgba(255,255,255,.66);border-color:rgba(255,255,255,.8);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+  .qtop{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+  .qfor{font-size:12.5px;color:var(--ink-soft);font-weight:500}
+  .qage{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .qage.warn{color:var(--amber);font-weight:600}
+  .qprev{margin:9px 0 7px;font-size:13.5px;color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:9px 12px}
+  body[data-theme="frost"] .qprev{background:rgba(255,255,255,.5);border-color:rgba(255,255,255,.75)}
+  .qmeta{font-family:var(--mono);font-size:10px;color:var(--ink-faint);letter-spacing:.03em;margin-bottom:9px}
+  .qmeta .gold{color:var(--gold)}
+  .qitem.approved-state .qage{display:none}
+  /* team screen */
+  .trow{display:flex;gap:12px;align-items:flex-start;background:var(--panel);border:1px solid var(--rule);border-radius:11px;padding:13px 15px;margin-bottom:11px;box-shadow:var(--shadow);flex-wrap:wrap}
+  body[data-theme="frost"] .trow{background:rgba(255,255,255,.66);border-color:rgba(255,255,255,.8)}
+  .trow .tinfo{min-width:150px}
+  .trow .tname{font-weight:700;font-size:14.5px}
+  .trow .trole{font-family:var(--mono);font-size:10px;color:var(--ink-faint);letter-spacing:.08em;text-transform:uppercase;margin-top:1px}
+  .tgrants{flex:1;display:flex;gap:5px;flex-wrap:wrap;align-items:center;min-width:220px}
+  .gchip{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;border-radius:5px;padding:2.5px 8px;border:1px solid var(--rule);background:var(--paper);color:var(--ink-soft);cursor:pointer}
+  .gchip:hover{border-color:var(--stamp);color:var(--stamp)}
+  .gchip.x{background:var(--ledger-tint);border-color:var(--ledger-line);color:var(--ledger)}
+  .gchip.d{background:var(--gold-tint);border-color:#E3CD9C;color:var(--gold)}
+  .gchip.none{background:transparent;border-style:dashed;color:var(--ink-faint)}
+  .tava{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;flex-shrink:0}
+  /* permission matrix */
+  .mxrow{display:grid;grid-template-columns:minmax(120px,1.4fr) 56px 56px 56px minmax(0,1fr);gap:8px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--rule)}
+  .mxrow:last-child{border-bottom:none}
+  .mxhead{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;border-bottom:1px solid var(--rule)}
+  .mxtool{font-size:13px;font-weight:600}
+  .mxt{width:40px;height:24px;border-radius:12px;border:1.5px solid var(--rule);background:var(--paper-deep);color:transparent;font-size:12px;transition:all .15s}
+  .mxt.on{background:var(--ledger);border-color:var(--ledger);color:#fff}
+  body[data-theme="frost"] .mxt{background:rgba(255,255,255,.5)}
+  body[data-theme="frost"] .mxt.on{background:var(--accent);border-color:var(--accent)}
+  .mxna{font-family:var(--mono);font-size:11px;color:var(--ink-faint);text-align:center}
+  .mxnote{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
+  /* workflow rows */
+  .wfrow{display:grid;grid-template-columns:1fr 140px 90px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--rule);font-size:13px}
+  .wfrow:last-of-type{border-bottom:none}
+  .wfrow span:nth-child(2){font-family:var(--mono);font-size:11px;color:var(--amber)}
+  .wfhead{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;border-bottom:1px solid var(--rule)}
+  .wfhead span:nth-child(2){color:var(--ink-faint)}
+  @media(max-width:640px){.wfrow{grid-template-columns:1fr 100px 70px}}
+  /* flow canvas */
+  .flowwrap{background:radial-gradient(circle,rgba(32,43,56,.08) 1px,transparent 1px) 0 0/18px 18px,var(--panel);border:1px solid var(--rule);border-radius:14px;padding:26px 12px;overflow-x:auto}
+  body[data-theme="frost"] .flowwrap{background:radial-gradient(circle,rgba(32,43,56,.1) 1px,transparent 1px) 0 0/18px 18px,rgba(255,255,255,.45)}
+  .flowcol{display:flex;flex-direction:column;align-items:center;min-width:280px;margin:0 auto;max-width:420px}
+  .fnode{width:100%;background:var(--panel);border:1.5px solid var(--rule);border-radius:10px;padding:10px 13px;box-shadow:var(--shadow);display:flex;gap:9px;align-items:center;cursor:pointer}
+  .fnode:hover{border-color:var(--accent)}
+  .fnode .fic{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;flex-shrink:0}
+  .fnode .ft{font-size:12.5px;font-weight:600;flex:1}
+  .fnode .ft small{display:block;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);font-weight:500;margin-top:1px}
+  .fnode.trigger{border-color:var(--ink);border-width:2px}
+  .fconn{width:2px;height:22px;background:var(--rule);position:relative}
+  .fconn::after{content:"+";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:16px;height:16px;border-radius:50%;background:var(--paper);border:1px solid var(--rule);font-size:11px;color:var(--ink-faint);display:flex;align-items:center;justify-content:center}
+  .fbranch{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%}
+  .fbranch .flowcol{min-width:0}
+  .flabel{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;background:var(--paper-deep);border:1px solid var(--rule);border-radius:10px;padding:2px 10px;color:var(--ink-soft);margin-bottom:8px}
+  .ftabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+
+  /* ===== dashboard ===== */
+  .digest{border:1.5px solid var(--gold);background:var(--gold-tint);border-radius:12px;padding:15px 18px;margin-bottom:18px}
+  body[data-theme="frost"] .digest{background:rgba(247,238,218,.6);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .digest .dh{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:600;margin-bottom:8px}
+  .digest .dt{font-size:14.5px;line-height:1.6}
+  .digest .dt b{font-weight:700}
+  .digest .dt a{color:var(--ledger);text-decoration:underline;cursor:pointer;font-weight:600}
+  .vitem{display:flex;gap:11px;align-items:flex-start;background:var(--panel);border:1px solid var(--rule);border-left-width:4px;border-radius:9px;padding:11px 13px;margin-bottom:9px;box-shadow:var(--shadow)}
+  body[data-theme="frost"] .vitem{background:rgba(255,255,255,.66);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  .vitem.amber{border-left-color:var(--amber)}
+  .vitem.red{border-left-color:var(--stamp)}
+  .vitem.gold{border-left-color:var(--gold)}
+  .vitem .vt{flex:1;font-size:13.5px}
+  .vitem .vt small{display:block;font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:3px;letter-spacing:.04em}
+  .vitem .vact{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap}
+  .dgrid{display:grid;grid-template-columns:1fr;gap:13px;margin-top:18px}
+  @media(min-width:680px){.dgrid{grid-template-columns:1fr 1fr}}
+  .dtile{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow);cursor:pointer}
+  body[data-theme="frost"] .dtile{background:rgba(255,255,255,.66);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+  .dtile:hover{border-color:var(--accent)}
+  .dtile .th{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;margin-bottom:10px}
+  .dtile .th .pin2{margin-left:auto;font-size:11px;color:var(--gold)}
+  .dnum{font-family:'Bitter',serif;font-weight:900;font-size:30px;line-height:1}
+  body[data-theme="frost"] .dnum,body[data-font="sans"] .dnum{font-family:'Public Sans',sans-serif;font-weight:800}
+  body[data-font="round"] .dnum{font-family:'Nunito',sans-serif;font-weight:800}
+  .dsub{font-size:12px;color:var(--ink-soft);margin-top:5px}
+  .pipemini{display:flex;gap:3px;margin-top:8px;align-items:flex-end;height:44px}
+  .pipemini .pb{flex:1;background:var(--accent-tint);border-radius:4px 4px 0 0;position:relative}
+  .pipemini .pb.hot{background:var(--accent)}
+  .meterbar{height:8px;border-radius:5px;background:var(--paper-deep);overflow:hidden;margin-top:10px}
+  .meterbar .fill{height:100%;width:52%;background:var(--gold);border-radius:5px}
+  .sched{display:flex;flex-direction:column;gap:7px;margin-top:4px}
+  .sched .si{display:flex;gap:9px;font-size:12.5px;align-items:baseline}
+  .sched .si .st2{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);width:52px;flex-shrink:0}
+
+  /* ===== conversations ===== */
+  .cthread{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border-bottom:1px solid var(--rule);cursor:pointer;background:var(--panel)}
+  .cthread:hover{background:var(--paper)}
+  .cthread.sel{background:var(--ledger-tint);border-left:3px solid var(--ledger)}
+  body[data-theme="frost"] .cthread{background:transparent}
+  body[data-theme="frost"] .cthread.sel{background:var(--accent-tint)}
+  .cthread .cn{font-weight:700;font-size:13.5px}
+  .cthread .cp{font-size:12px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+  .cthread .ct2{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex-shrink:0}
+  .cmsgs{padding:14px 16px;display:flex;flex-direction:column;gap:10px;max-height:520px;overflow-y:auto}
+  .cmsg{max-width:82%;border-radius:12px;padding:9px 12px;font-size:13px;position:relative;border:1px solid var(--rule)}
+  .cmsg.in{align-self:flex-start;background:var(--paper);border-bottom-left-radius:4px}
+  .cmsg.out{align-self:flex-end;background:var(--ledger-tint);border-color:var(--ledger-line);border-bottom-right-radius:4px}
+  body[data-theme="frost"] .cmsg.out{background:var(--accent-tint)}
+  .cmsg .cm-meta{display:flex;gap:5px;margin-bottom:5px;flex-wrap:wrap;align-items:center}
+  .cmsg .cm-when{font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-top:5px;text-align:right}
+  .csys{align-self:center;font-family:var(--mono);font-size:10px;color:var(--ink-faint);background:var(--paper-deep);border-radius:10px;padding:3px 12px}
+  .composer{display:flex;gap:8px;padding:11px 14px;border-top:1px solid var(--rule);align-items:center}
+  .composer input{flex:1;border:1px solid var(--rule);border-radius:20px;padding:9px 15px;background:var(--paper);font-family:inherit;font-size:13px;color:var(--ink)}
+  /* ===== contacts ===== */
+  .crow{display:flex;gap:12px;align-items:center;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:11px 14px;margin-bottom:9px;box-shadow:var(--shadow);cursor:pointer;flex-wrap:wrap}
+  body[data-theme="frost"] .crow{background:rgba(255,255,255,.66)}
+  .crow:hover{border-color:var(--accent)}
+  .crow .ci{min-width:150px}
+  .crow .cn2{font-weight:700;font-size:14px}
+  .crow .cr2{font-family:var(--mono);font-size:10px;color:var(--ink-faint);letter-spacing:.05em;margin-top:1px}
+  .crow .cch{display:flex;gap:5px;flex-wrap:wrap;flex:1}
+  /* ===== ledger ===== */
+  .lgrow{display:grid;grid-template-columns:86px 1fr auto;gap:10px;align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--rule);background:var(--panel);font-size:13px}
+  body[data-theme="frost"] .lgrow{background:transparent}
+  .lgrow:hover{background:var(--paper)}
+  .lgrow .lt2{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
+  .lgrow .lv2 .verb{font-family:var(--mono);font-size:10px;color:var(--ledger);letter-spacing:.04em}
+  .lgrow .lcost{font-family:var(--mono);font-size:10px;color:var(--gold)}
+
+  /* theme control */
+  .themectl{display:flex;align-items:center;gap:10px;position:relative}
+  .appear-pop{
+    display:none;position:absolute;top:calc(100% + 8px);right:0;z-index:60;width:264px;
+    background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:12px;
+    box-shadow:0 12px 36px rgba(32,43,56,.16);
+  }
+  .appear-pop.open{display:block}
+  body[data-theme="frost"] .appear-pop{
+    background:rgba(255,255,255,.8);border-color:rgba(255,255,255,.85);
+    backdrop-filter:blur(24px) saturate(1.4);-webkit-backdrop-filter:blur(24px) saturate(1.4);
+  }
+  .ap-row{display:flex;align-items:center;gap:10px;padding:6px 2px}
+  .ap-label{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);width:52px;flex-shrink:0;font-weight:600}
+  .ap-note{margin-top:8px;padding-top:9px;border-top:1px dashed var(--rule);font-size:11px;color:var(--ink-soft);line-height:1.45}
+  .tseg{display:flex;background:var(--paper-deep);border:1px solid var(--rule);border-radius:8px;padding:2px;flex-wrap:wrap}
+  body[data-theme="frost"] .tseg{background:rgba(255,255,255,.5);border-color:rgba(255,255,255,.7)}
+  .tbtn{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:5px 9px;border-radius:6px;color:var(--ink-soft)}
+  .tbtn.active{background:var(--ink);color:#FBF9F3}
+  .accents{display:flex;gap:6px;align-items:center}
+  .adot{width:16px;height:16px;border-radius:50%;background:var(--c);border:2px solid transparent;box-shadow:0 0 0 1px rgba(32,43,56,.15)}
+  .adot.active{border-color:#fff;box-shadow:0 0 0 2px var(--c)}
+
+  /* ===== font tokens (explicit choice beats theme default) ===== */
+  body[data-font="serif"] .pagehead h1, body[data-font="serif"] .casehead h1,
+  body[data-font="serif"] .ph h2, body[data-font="serif"] .logo .name{
+    font-family:'Bitter',serif;letter-spacing:-.01em;font-weight:800;
+  }
+  body[data-font="sans"] .pagehead h1, body[data-font="sans"] .casehead h1,
+  body[data-font="sans"] .ph h2, body[data-font="sans"] .logo .name{
+    font-family:'Public Sans',system-ui,sans-serif;letter-spacing:-.02em;font-weight:800;
+  }
+  body[data-font="round"]{font-family:'Nunito',system-ui,sans-serif}
+  body[data-font="round"] .pagehead h1, body[data-font="round"] .casehead h1,
+  body[data-font="round"] .ph h2, body[data-font="round"] .logo .name{
+    font-family:'Nunito',sans-serif;letter-spacing:-.015em;font-weight:800;
+  }
+  /* mono never changes: table names, timestamps and ledger lines are technical truth */
+
+  /* ===== size tokens ===== */
+  body[data-size="compact"]{zoom:.9}
+  body[data-size="large"]{zoom:1.12}
+
+  /* ===== responsive ===== */
+  .scrim{display:none;position:fixed;inset:0;background:rgba(32,43,56,.5);z-index:49}
+  @media(max-width:880px){
+    .sidebar{position:fixed;left:-240px;transition:left .2s;z-index:50}
+    .sidebar.open{left:0}
+    .scrim.show{display:block}
+    .hamb{display:block}
+    .grid2{grid-template-columns:1fr}
+    .content{padding:16px 14px}
+    .askbar{min-width:0;flex:1}
+  }
+</style>
+</head>
+<body data-theme="ledger" data-accent="green" data-font="theme" data-size="default">
+<div class="app">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">
+      <div class="name">Create You AI</div>
+      <div class="sub">working title · mockup pass 1</div>
+    </div>
+    <div class="bizswitch">
+      <button class="biztab" onclick="toggleBiz(event)">
+        <span class="dot"></span><span class="bn">X Law</span><span class="chev">▼</span>
+      </button>
+      <div class="bizmenu" id="bizmenu">
+        <button onclick="bizNote('X Law is the active business.')"><span class="dot" style="background:var(--ledger)"></span>X Law</button>
+        <button onclick="bizNote('BarakahX exists from day one to prove the walls between businesses — Phase 1 work happens in X Law.')"><span class="dot" style="background:#40638C"></span>BarakahX</button>
+        <button onclick="bizNote('Your Personal space — same cabinets, no vertical template. Usable from Phase 2.')"><span class="dot" style="background:var(--gold)"></span>Personal</button>
+      </div>
+    </div>
+    <nav>
+      <div class="navlabel">Run</div>
+      <button class="navitem" data-view="dashboard" onclick="go('dashboard')"><span class="ic">◫</span>Dashboard</button>
+      <button class="navitem" data-view="inbox" onclick="go('inbox')"><span class="ic">✓</span>Approval Inbox<span class="badge" id="inboxBadge">5</span></button>
+      <button class="navitem" data-view="convos" onclick="go('convos')"><span class="ic">✉</span>Conversations</button>
+      <button class="navitem active" data-view="pipeline" onclick="go('pipeline')"><span class="ic">☰</span>Enquiries</button>
+      <button class="navitem" data-view="automation" onclick="go('automation')"><span class="ic">⟳</span>Automation</button>
+      <button class="navitem" data-view="contacts" onclick="go('contacts')"><span class="ic">◉</span>Contacts</button>
+      <div class="navlabel">Think</div>
+      <button class="navitem" data-view="notes" onclick="go('notes')"><span class="ic">✎</span>Notes</button>
+      <button class="navitem" data-view="memory" onclick="go('memory')"><span class="ic">▤</span>Light's Memory</button>
+      <div class="navlabel">Trust</div>
+      <button class="navitem" data-view="audit" onclick="go('audit')"><span class="ic">≡</span>The Ledger</button>
+      <button class="navitem" data-view="settings" onclick="go('settings')"><span class="ic">⚙</span>Settings</button>
+    </nav>
+    <div class="userrow">
+      <div class="avatar">M</div>
+      <div><div class="un">Mudassir</div><div class="ur">OWNER · ACCOUNT</div></div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" onclick="closeSidebar()"></div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <div class="topbar">
+      <button class="hamb" onclick="openSidebar()">☰</button>
+      <span class="crumb" id="crumb"><b>X Law</b> / Cases</span>
+      <div class="askbar"><span class="spark">✦</span> Ask Light anything…</div>
+      <div class="themectl">
+        <button class="btn" style="padding:7px 12px;font-size:13px" onclick="toggleAppear(event)">Aa</button>
+        <div class="appear-pop" id="appearPop" onclick="event.stopPropagation()">
+          <div class="ap-row">
+            <span class="ap-label">Theme</span>
+            <div class="tseg">
+              <button class="tbtn active" id="tb-ledger" onclick="setTheme('ledger')">Ledger</button>
+              <button class="tbtn" id="tb-frost" onclick="setTheme('frost')">Frost</button>
+            </div>
+          </div>
+          <div class="ap-row">
+            <span class="ap-label">Accent</span>
+            <span class="accents">
+              <button class="adot active" id="ad-green" style="--c:#2E6B4F" onclick="setAccent('green')" aria-label="Green accent"></button>
+              <button class="adot" id="ad-cool" style="--c:#3E5A78" onclick="setAccent('cool')" aria-label="Cool accent"></button>
+              <button class="adot" id="ad-warm" style="--c:#A65E2E" onclick="setAccent('warm')" aria-label="Warm accent"></button>
+            </span>
+          </div>
+          <div class="ap-row">
+            <span class="ap-label">Font</span>
+            <div class="tseg">
+              <button class="tbtn active" id="fb-theme" onclick="setFont('theme')">Theme</button>
+              <button class="tbtn" id="fb-serif" onclick="setFont('serif')" style="font-family:'Bitter',serif;text-transform:none">Serif</button>
+              <button class="tbtn" id="fb-sans" onclick="setFont('sans')" style="text-transform:none">Sans</button>
+              <button class="tbtn" id="fb-round" onclick="setFont('round')" style="font-family:'Nunito',sans-serif;text-transform:none">Round</button>
+            </div>
+          </div>
+          <div class="ap-row">
+            <span class="ap-label">Size</span>
+            <div class="tseg">
+              <button class="tbtn" id="sb-compact" onclick="setSize('compact')">A−</button>
+              <button class="tbtn active" id="sb-default" onclick="setSize('default')">A</button>
+              <button class="tbtn" id="sb-large" onclick="setSize('large')">A+</button>
+            </div>
+          </div>
+          <div class="ap-note">Gold always means Light acted; red always means your stamp — in every theme, font and size.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ======== PIPELINE VIEW ======== -->
+      <div class="view active" id="view-pipeline">
+        <div class="pagehead">
+          <h1>Enquiries</h1>
+          <span class="sub">Lead-to-consultation pipeline · instructed clients graduate to Cases (a later, separate module)</span>
+          <div class="actions">
+            <button class="btn" onclick="toast('Filters — designed in the next pass.')">Filter</button>
+            <button class="btn primary" onclick="toast('New case — manual creation flow, next pass. Most cases arrive by themselves from Meta.')">+ New case</button>
+          </div>
+        </div>
+
+        <div class="board">
+          <!-- NEW LEAD -->
+          <div class="col">
+            <div class="colhead">New lead <span class="cnt">3</span></div>
+            <div class="colbody">
+              <button class="card" onclick="toast('Each card opens a full case view — Ayesha\'s card (Consultation booked column) is wired in this mockup.')">
+                <div class="nm">Imran Hussain</div><div class="ct">Visit visa enquiry</div>
+                <div class="meta"><span class="chip src">Meta · Ad B2</span><span class="chip time warn">4h in stage</span></div>
+                <div class="foot"><span class="sp">✦</span> Light: first email drafted — in your inbox</div>
+              </button>
+              <button class="card" onclick="toast('Each card opens a full case view — Ayesha\'s card is the wired example.')">
+                <div class="nm">Fatima N.</div><div class="ct">Student visa enquiry</div>
+                <div class="meta"><span class="chip src">Meta · Ad A1</span><span class="chip time">38m in stage</span></div>
+                <div class="foot"><span class="sp">✦</span> Light: qualifying questions sent to draft</div>
+              </button>
+              <button class="card" onclick="toast('Each card opens a full case view — Ayesha\'s card is the wired example.')">
+                <div class="nm">"gimme visa fast"</div><div class="ct">Unclassified</div>
+                <div class="meta"><span class="chip src">Meta · Ad B2</span><span class="chip red">Likely junk</span></div>
+                <div class="foot"><span class="sp">✦</span> Light: proposes Disqualify — awaiting you</div>
+              </button>
+            </div>
+          </div>
+          <!-- CONTACT ATTEMPTED -->
+          <div class="col">
+            <div class="colhead">Contact attempted <span class="cnt">2</span></div>
+            <div class="colbody">
+              <button class="card" onclick="toast('Ayesha\'s card is the wired example in this pass.')">
+                <div class="nm">Bilal Ahmed</div><div class="ct">Skilled Worker</div>
+                <div class="meta"><span class="chip src">Meta · Ad A1</span><span class="chip time">1d in stage</span></div>
+                <div class="foot"><span class="sp">✦</span> Retry call scheduled 4:00pm today</div>
+              </button>
+              <button class="card" onclick="toast('Ayesha\'s card is the wired example in this pass.')">
+                <div class="nm">Sana Malik</div><div class="ct">Spouse visa</div>
+                <div class="meta"><span class="chip src">Referral</span><span class="chip time warn">2d in stage</span></div>
+                <div class="foot"><span class="sp">✦</span> WhatsApp follow-up 2 of 4 queued</div>
+              </button>
+            </div>
+          </div>
+          <!-- IN CONVERSATION -->
+          <div class="col">
+            <div class="colhead">In conversation <span class="cnt">2</span></div>
+            <div class="colbody">
+              <button class="card" onclick="toast('Ayesha\'s card is the wired example in this pass.')">
+                <div class="nm">Omar Farooq</div><div class="ct">ILR</div>
+                <div class="meta"><span class="chip src">Website</span><span class="chip val">est £1,500</span></div>
+                <div class="foot">Replied 22m ago — Light drafting response</div>
+              </button>
+              <button class="card" onclick="toast('Ayesha\'s card is the wired example in this pass.')">
+                <div class="nm">Huda &amp; Yusuf Ali</div><div class="ct">Spouse visa</div>
+                <div class="meta"><span class="chip src">Meta · Ad C1</span><span class="chip val">est £1,200</span></div>
+                <div class="foot"><span class="sp">✦</span> Eligibility answers received</div>
+              </button>
+            </div>
+          </div>
+          <!-- QUALIFIED -->
+          <div class="col">
+            <div class="colhead">Qualified <span class="cnt">1</span></div>
+            <div class="colbody">
+              <button class="card" onclick="toast('Ayesha\'s card is the wired example in this pass.')">
+                <div class="nm">Zara Sheikh</div><div class="ct">Skilled Worker</div>
+                <div class="meta"><span class="chip src">Meta · Ad A1</span><span class="chip val">est £1,800</span></div>
+                <div class="foot"><span class="sp">✦</span> Booking link sent — awaiting slot pick</div>
+              </button>
+            </div>
+          </div>
+          <!-- CONSULTATION BOOKED -->
+          <div class="col">
+            <div class="colhead">Consultation booked <span class="cnt">1</span></div>
+            <div class="colbody">
+              <button class="card" onclick="go('case')">
+                <div class="nm">Ayesha Khan</div><div class="ct">Spouse visa</div>
+                <div class="meta"><span class="chip src">Meta · Ad C1</span><span class="chip val">est £1,200</span><span class="chip gold">1 pending approval</span></div>
+                <div class="foot">Thu 2:00pm with Mudassir · <span class="sp">✦</span> brief in progress</div>
+              </button>
+            </div>
+          </div>
+          <!-- CONSULTATION HELD -->
+          <div class="col">
+            <div class="colhead">Consultation held <span class="cnt">1</span></div>
+            <div class="colbody">
+              <button class="card" onclick="toast('Ayesha\'s card is the wired example in this pass.')">
+                <div class="nm">Rashid Mahmood</div><div class="ct">Spouse visa</div>
+                <div class="meta"><span class="chip val">est £1,200</span><span class="chip time">Held Mon</span></div>
+                <div class="foot"><span class="sp">✦</span> Engagement letter drafted — in your inbox</div>
+              </button>
+            </div>
+          </div>
+          <!-- INSTRUCTED -->
+          <div class="col">
+            <div class="colhead" style="background:var(--ledger)">Instructed ✓ <span class="cnt">2</span></div>
+            <div class="colbody">
+              <button class="card" onclick="toast('Won cases fire their outcome back to Meta after the 24h cooling window.')">
+                <div class="nm">Kamran Butt</div><div class="ct">Skilled Worker</div>
+                <div class="meta"><span class="chip val">£1,800 · paid</span><span class="chip gold">→ Meta in 6h</span></div>
+                <div class="foot">Cooling window — reversal still possible</div>
+              </button>
+              <button class="card" onclick="toast('This outcome has already been reported to Meta — the ad algorithm just got smarter.')">
+                <div class="nm">Nadia Iqbal</div><div class="ct">Spouse visa</div>
+                <div class="meta"><span class="chip val">£1,200 · paid</span><span class="chip gold">✓ Meta told</span></div>
+                <div class="foot">Won · outcome + value reported</div>
+              </button>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono)">Terminal stages (Closed-lost · Unresponsive · Disqualified) live behind the filter — the board shows live work by default.</p>
+      </div>
+
+      <!-- ======== CASE DETAIL VIEW ======== -->
+      <div class="view" id="view-case">
+        <div class="backrow"><button class="backbtn" onclick="go('pipeline')">← Back to Enquiries</button></div>
+        <div class="casehead">
+          <div class="toprow">
+            <div>
+              <h1>Ayesha Khan</h1>
+              <div class="sub">SPOUSE VISA · ENQUIRY #0114</div>
+            </div>
+            <div class="right">
+              <span class="chip src" style="align-self:center">Meta · Campaign "Spouse Mar" · Ad C1</span>
+              <span class="chip val" style="align-self:center">est £1,200</span>
+              <button class="btn" onclick="toast('Case actions menu — next pass.')">⋯</button>
+            </div>
+          </div>
+          <div class="stages">
+            <div class="stg done">New lead</div>
+            <div class="stg done">Contact attempted</div>
+            <div class="stg done">In conversation</div>
+            <div class="stg done">Qualified</div>
+            <div class="stg now">Consult. booked</div>
+            <div class="stg">Consult. held</div>
+            <div class="stg">Instructed</div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <!-- timeline -->
+          <div class="panelbox">
+            <h2>Timeline — every touch, on every channel</h2>
+            <div class="tl">
+              <div class="ev">
+                <span class="pin"></span>
+                <div class="when">MON 21:14 · META LEAD SYNC</div>
+                <div class="what"><b>Lead arrived</b> from Facebook ad "Spouse Mar / C1" — contact + enquiry created, filed against the ad that found her. <span class="chip src">Facebook</span></div>
+              </div>
+              <div class="ev gold">
+                <span class="pin"></span>
+                <div class="when">MON 21:14 · LIGHT</div>
+                <div class="what"><b>Nurture sequence opened</b> — intro email drafted for approval.</div>
+                <div class="msg">
+                  <div class="mh"><span class="chip src">Email</span><span class="chip gold">✦ drafted by Light</span><span class="chip red">stamped by you</span><span class="chip" style="background:var(--ledger-tint);color:var(--ledger)">sent Mon 21:39</span></div>
+                  <div class="body">"Thank you for reaching out to X Law about a UK Spouse visa. To point you in the right direction, could I ask where your husband currently lives, and…"</div>
+                  <div class="cost">✦ drafting cost 12¢ · on the ledger</div>
+                </div>
+              </div>
+              <div class="ev">
+                <span class="pin"></span>
+                <div class="when">TUE 09:02 · INBOUND</div>
+                <div class="what"><b>Ayesha replied</b> — husband is in Pakistan; she works full-time in Manchester, salary £29,400. <span class="chip src">Email</span></div>
+              </div>
+              <div class="ev gold">
+                <span class="pin"></span>
+                <div class="when">TUE 09:31 · LIGHT</div>
+                <div class="what"><b>Qualified</b> — meets first-look criteria; booking link sent (stamped by you, 09:30). Slot picked: <b>Thu 2:00pm</b>.</div>
+              </div>
+              <div class="ev green">
+                <span class="pin"></span>
+                <div class="when">TUE 10:05 · LIGHT</div>
+                <div class="what"><b>Stage moved</b> → Consultation booked · calendar invite linked to your Google Calendar.</div>
+              </div>
+              <div class="ev gold" id="pendingMsg">
+                <span class="pin"></span>
+                <div class="when">TODAY 08:40 · LIGHT · AWAITING YOUR STAMP</div>
+                <div class="what"><b>Consultation reminder</b> (WhatsApp) drafted — scheduled for tomorrow 10:00 if approved.</div>
+                <div class="msg">
+                  <div class="mh"><span class="chip src">WhatsApp</span><span class="chip gold">✦ drafted by Light</span><span class="chip red">pending approval</span></div>
+                  <div class="body">"Assalamu alaikum Ayesha, a gentle reminder of your consultation with Mudassir at X Law tomorrow (Thursday) at 2:00pm. Please have your passport and your husband's details to hand. Reply here if you need to reschedule."</div>
+                  <div class="cost">✦ drafting cost 4¢ · on the ledger</div>
+                  <div class="approvebar">
+                    <button class="btn approve" onclick="approve(this)">Approve &amp; schedule</button>
+                    <button class="btn refine" onclick="toast('Refine opens an edit — your changes teach Light. Designed with Spec 3.')">Refine</button>
+                    <span class="stamped">Human approved</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- side column -->
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <div class="panelbox">
+              <h2>Enquiry file</h2>
+              <div class="kv">
+                <div class="row"><span class="k">Client</span><span class="v">Ayesha Khan <span class="sub">Manchester · en / ur · WhatsApp preferred</span></span></div>
+                <div class="row"><span class="k">Sponsor</span><span class="v">Hamza Khan <span class="sub">husband · in Pakistan · dependant of case</span></span></div>
+                <div class="row"><span class="k">Consultation</span><span class="v">Thu 2:00pm <span class="sub">Google Calendar · confirmed</span></span></div>
+                <div class="row"><span class="k">Source</span><span class="v">Meta lead form <span class="sub">Campaign "Spouse Mar" · outcome will be reported back</span></span></div>
+                <div class="row"><span class="k">Consent</span><span class="v">✓ transactional · ✓ marketing <span class="sub">granted via lead form, Mon 21:14</span></span></div>
+              </div>
+            </div>
+            <div class="panelbox">
+              <h2>Tasks on this enquiry</h2>
+              <div class="tasklist">
+                <div class="task"><span class="cb"></span><span class="tt">Prepare consultation brief — financial requirement summary <span class="due">✦ LIGHT · due Thu 12:00</span></span></div>
+                <div class="task"><span class="cb"></span><span class="tt">Hold consultation with Ayesha <span class="due">MUDASSIR · Thu 14:00</span></span></div>
+              </div>
+            </div>
+            <div class="panelbox">
+              <h2>Notes (internal)</h2>
+              <div class="notebox">
+                <div class="note">Salary £29,400 — above threshold on first look, but self-employed top-up income mentioned; check SA302s at consultation.
+                  <div class="nw">M · TUE 09:40 · internal_note — never visible to the client</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ======== PLACEHOLDER VIEWS ======== -->
+      <div class="view" id="view-automation">
+        <div class="pagehead">
+          <h1>Automation</h1>
+          <span class="sub">Workflows are data — readable, toggleable, and only ever changed through your stamp</span>
+          <div class="actions">
+            <button class="btn primary" onclick="toast('New workflows are described in plain English and land in your Approval Inbox as Level 3 config changes — the visual builder arrives in Phase 3.')">+ New workflow</button>
+          </div>
+        </div>
+
+        <div class="panelbox" style="cursor:pointer" onclick="go('wfview')">
+          <h2>Lead → Booked Consultation · v1 · <span style="color:var(--ledger)">ACTIVE</span> · 14 enquiries currently inside · <span style="color:var(--ledger)">TAP TO OPEN THE FLOW →</span></h2>
+          <div style="padding:10px 16px 16px">
+            <p style="font-size:13px;color:var(--ink-soft);margin-bottom:12px">Trigger: a new enquiry arrives from Meta. Every timer below is <b>provisional</b> — your two-week lead log is what confirms or corrects them before Phase 1 wiring.</p>
+            <div class="wfrow wfhead"><span>Step</span><span>Timer</span><span>Gate</span></div>
+            <div class="wfrow"><span>1 · Intro email drafted → your inbox</span><span>within 60s of arrival</span><span class="kb trust-authoritative">L3 stamp</span></div>
+            <div class="wfrow"><span>2 · Call task for Mudassir, brief attached</span><span>due in 2 business hrs</span><span class="kb scope">L2</span></div>
+            <div class="wfrow"><span>3 · No answer → retry call</span><span>+4 hrs same day</span><span class="kb scope">L2</span></div>
+            <div class="wfrow"><span>4 · Both missed → sorry-we-missed-you email + WhatsApp</span><span>same day</span><span class="kb trust-authoritative">L3 stamp</span></div>
+            <div class="wfrow"><span>5 · Reply parsed vs qualification criteria → move or clarify</span><span>draft in 15 min</span><span class="kb scope">L2 / L3</span></div>
+            <div class="wfrow"><span>6 · Qualified → booking link (your real free slots)</span><span>same message</span><span class="kb trust-authoritative">L3 stamp</span></div>
+            <div class="wfrow"><span>7 · Consultation reminders + auto-prepared brief</span><span>−24h / −2h</span><span class="kb trust-authoritative">L3 / L1</span></div>
+            <div class="wfrow"><span>8 · Silence → nurture touches</span><span>+2d, +5d, +9d</span><span class="kb trust-authoritative">L3 each</span></div>
+            <div class="wfrow"><span>9 · Auto-close → Unresponsive, junk signal queued</span><span>≈ day 12</span><span class="kb scope">L2</span></div>
+            <div class="wfrow"><span>10 · Won → Meta told outcome + value</span><span>24h cooling window</span><span class="kb scope">L2 · evented</span></div>
+            <p style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-top:12px">A REPLY AT ANY POINT CANCELS QUEUED TOUCHES · JUNK IS PROPOSED, NEVER AUTO-DECLARED, IN PHASE 1 · <span style="color:var(--ledger);cursor:pointer" onclick="go('case')">AYESHA KHAN IS AT STEP 7 — HER REMINDER AWAITS YOUR STAMP →</span></p>
+          </div>
+        </div>
+
+        <div class="panelbox" style="margin-top:16px;border-color:var(--gold)">
+          <h2 style="color:var(--gold)">✦ Proposed by Light — awaiting your stamp</h2>
+          <div style="padding:12px 16px 16px">
+            <div style="font-weight:700;font-size:15px">Post-consultation follow-up</div>
+            <p style="font-size:13px;color:var(--ink-soft);margin:6px 0 10px">"You've manually sent a thank-you message after each of the last 5 consultations. Proposed: consultation marked held → thank-you draft (+2h) → engagement letter draft if instructed (+1d) → gentle nudge if unsigned (+4d). Every send still passes your inbox."</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn gold" style="font-size:12.5px" onclick="go('inbox')">Review in Approval Inbox</button>
+              <button class="btn" style="font-size:12.5px" onclick="toast('Dismissed — Light will only re-propose if the manual pattern continues.')">Dismiss</button>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:12px">CREATING OR EDITING A WORKFLOW IS A LEVEL 3 CONFIGURATION CHANGE — THE MACHINE GROWS NEW HABITS ONLY ON THE RECORD. FULL VISUAL BUILDER: PHASE 3.</p>
+      </div>
+
+      <div class="view" id="view-wfview">
+        <div class="backrow"><button class="backbtn" onclick="go('automation')">← Back to Automation</button></div>
+        <div class="pagehead">
+          <h1>Lead → Booked Consultation</h1>
+          <span class="sub">v1 · ACTIVE · this canvas is generated from the workflow data — nothing to keep in sync</span>
+          <div class="actions">
+            <button class="btn" onclick="toast('Test mode runs the flow against a dummy enquiry — every step evented, nothing sent.')">Test workflow</button>
+            <button class="btn primary" onclick="toast('Publishing a change is a Level 3 configuration change — it goes to your Approval Inbox first, in plain English.')">Publish changes</button>
+          </div>
+        </div>
+        <div class="ftabs">
+          <button class="fpill on">Flow</button>
+          <button class="fpill" onclick="toast('Settings: trigger filters, business hours, quiet hours, per-step templates.')">Settings</button>
+          <button class="fpill" onclick="toast('Runs: 14 active — every enquiry currently inside, with its current step. A view over workflow_runs.')">Runs (14)</button>
+          <button class="fpill" onclick="toast('Execution log: every step of every run, from the ledger. Nothing is ever lost.')">Execution log</button>
+        </div>
+        <div class="flowwrap">
+          <div class="flowcol">
+            <div class="fnode trigger" onclick="toast('Trigger: engagement.created with Meta source. Filters editable in Settings.')"><span class="fic" style="background:var(--ink)">⚡</span><span class="ft">New enquiry arrives<small>TRIGGER · META LEAD FORM</small></span></div>
+            <div class="fconn"></div>
+            <div class="fnode" onclick="toast('Step 1 · draft_comm: template intro_v1, 80-word standard applies. Every send needs your stamp.')"><span class="fic" style="background:var(--gold)">✦</span><span class="ft">Draft intro email → Inbox<small>WITHIN 60s · L3 STAMP</small></span></div>
+            <div class="fconn"></div>
+            <div class="fnode" onclick="toast('Step 2 · create_task: assignee Mudassir, context brief attached by Light.')"><span class="fic" style="background:#40638C">☎</span><span class="ft">Call task for Mudassir<small>DUE IN 2 BUSINESS HRS · L2</small></span></div>
+            <div class="fconn"></div>
+            <div class="fbranch">
+              <div class="flowcol">
+                <span class="flabel">Answered</span>
+                <div class="fnode" onclick="toast('Step 5 · reply parsed against qualification criteria → stage move proposal or clarifying questions.')"><span class="fic" style="background:var(--ledger)">✓</span><span class="ft">Qualify → booking link<small>YOUR REAL FREE SLOTS · L3</small></span></div>
+                <div class="fconn"></div>
+                <div class="fnode" onclick="toast('Step 7 · reminders −24h and −2h; consultation brief auto-prepared by Light.')"><span class="fic" style="background:var(--ledger)">◷</span><span class="ft">Booked → reminders + brief<small>−24H / −2H · L3 / L1</small></span></div>
+              </div>
+              <div class="flowcol">
+                <span class="flabel">No answer</span>
+                <div class="fnode" onclick="toast('Step 3 · retry call same day at +4 hours.')"><span class="fic" style="background:var(--amber)">↺</span><span class="ft">Retry call<small>+4 HRS SAME DAY · L2</small></span></div>
+                <div class="fconn"></div>
+                <div class="fnode" onclick="toast('Step 4 · missed-you email + WhatsApp (if consented) → Inbox.')"><span class="fic" style="background:var(--gold)">✦</span><span class="ft">Missed-you email + WhatsApp<small>SAME DAY · L3 STAMP</small></span></div>
+                <div class="fconn"></div>
+                <div class="fnode" onclick="toast('Step 8 · nurture touches at +2d, +5d, +9d — a reply at any point cancels the queue.')"><span class="fic" style="background:var(--gold)">✉</span><span class="ft">Nurture touches<small>+2D / +5D / +9D · L3 EACH</small></span></div>
+                <div class="fconn"></div>
+                <div class="fnode" onclick="toast('Step 9 · auto-close: stage Unresponsive, junk signal queued for Meta. Every sequence ends.')"><span class="fic" style="background:var(--stamp)">✕</span><span class="ft">Auto-close → Unresponsive<small>≈ DAY 12 · L2 · META TOLD</small></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:12px">TAP ANY NODE FOR ITS CONFIG · TIMERS IN AMBER ARE PROVISIONAL PENDING THE LEAD LOG · DRAG-AND-DROP EDITING OF THIS SAME CANVAS ARRIVES IN PHASE 3 — UNTIL THEN, EDITS GO THROUGH FORMS AND LIGHT PROPOSALS.</p>
+      </div>
+
+      <div class="view" id="view-convos">
+        <div class="pagehead">
+          <h1>Conversations</h1>
+          <span class="sub">Every channel, one thread per person — because it always was one thread in the database</span>
+        </div>
+        <div class="grid2" style="margin-top:0">
+          <div style="order:2" class="panelbox">
+            <h2>Ayesha Khan · Facebook → Email → WhatsApp, one story</h2>
+            <div class="cmsgs">
+              <div class="csys">MON 21:14 · ARRIVED VIA FACEBOOK LEAD FORM · AD "SPOUSE MAR / C1"</div>
+              <div class="cmsg out"><div class="cm-meta"><span class="chip src">Email</span><span class="chip gold">✦ Light</span><span class="chip red">stamped</span></div>Thank you for reaching out to X Law about a UK Spouse visa. To point you in the right direction, could I ask where your husband currently lives, and whether you're working in the UK at the moment?<div class="cm-when">MON 21:39</div></div>
+              <div class="cmsg in"><div class="cm-meta"><span class="chip src">Email</span></div>Hi, thank you for replying so fast! My husband is in Pakistan. I work full time in Manchester, salary £29,400. What do we need to do?<div class="cm-when">TUE 09:02</div></div>
+              <div class="cmsg out"><div class="cm-meta"><span class="chip src">Email</span><span class="chip gold">✦ Light</span><span class="chip red">stamped</span></div>That's helpful, thank you. Based on what you've shared, a consultation is the right next step — here's a link to book directly into Mudassir's diary: [booking link]<div class="cm-when">TUE 09:31</div></div>
+              <div class="csys">TUE 10:05 · SLOT PICKED — THU 2:00PM · STAGE → CONSULTATION BOOKED</div>
+              <div class="cmsg out" style="opacity:.7;border-style:dashed"><div class="cm-meta"><span class="chip src">WhatsApp</span><span class="chip gold">✦ Light</span><span class="chip red">pending approval</span></div>Assalamu alaikum Ayesha, a gentle reminder of your consultation with Mudassir at X Law tomorrow (Thursday) at 2:00pm…<div class="cm-when">SCHEDULED — AWAITING YOUR STAMP</div></div>
+            </div>
+            <div class="composer">
+              <input placeholder="Reply… Light drafts, you stamp" onclick="toast('Typing here creates a draft communication — it sends via the channel you pick, through the same approval ladder.')">
+              <button class="btn sm" onclick="toast('Channel picker: Email / WhatsApp — only consented channels appear.')">Email ▾</button>
+            </div>
+          </div>
+          <div style="order:1" class="panelbox">
+            <h2>Threads</h2>
+            <div class="cthread sel"><div><div class="cn">Ayesha Khan</div><div class="cp">✦ Reminder awaiting your stamp</div></div><span class="ct2">WHATSAPP · NOW</span></div>
+            <div class="cthread" onclick="toast('Ayesha\'s thread is the wired example in this pass — same pattern for everyone.')"><div><div class="cn">Omar Farooq</div><div class="cp">Replied 22m ago — Light drafting</div></div><span class="ct2">EMAIL · 22M</span></div>
+            <div class="cthread" onclick="toast('Ayesha\'s thread is the wired example in this pass.')"><div><div class="cn">Huda &amp; Yusuf Ali</div><div class="cp">Eligibility answers received</div></div><span class="ct2">WHATSAPP · 3H</span></div>
+            <div class="cthread" onclick="toast('Ayesha\'s thread is the wired example in this pass.')"><div><div class="cn">Bilal Ahmed</div><div class="cp">Missed-call email sent · retry 4pm</div></div><span class="ct2">EMAIL · 1D</span></div>
+            <div style="padding:11px 13px;font-family:var(--mono);font-size:10px;color:var(--ink-faint)">INCOMING MAIL LANDS HERE — NEVER IN THE APPROVAL INBOX. INTERNAL NOTES STAY OFF-THREAD, ON THE ENQUIRY.</div>
+          </div>
+        </div>
+      </div>
+      <div class="view" id="view-dashboard">
+        <div class="pagehead">
+          <h1>Dashboard</h1>
+          <span class="sub">Curated by attention — tiles you check get promoted, ignored ones fade. Pin to override.</span>
+        </div>
+
+        <!-- Morning digest -->
+        <div class="digest">
+          <div class="dh">✦ Morning digest · Tuesday 8:30 — Light's watch overnight</div>
+          <div class="dt">Good morning. <b>2 new enquiries</b> arrived overnight (both Meta, one likely junk — proposal waiting). Today: <b>1 consultation</b> (Ayesha Khan, 2:00pm — brief ready at noon) and <b>1 call task</b> (Bilal Ahmed, 4:00pm retry). <a onclick="go('inbox')">5 stamps are owed</a>, the oldest nearing its SLA. <b>Kamran's won outcome fires to Meta in 6 hours</b> unless reversed. Nothing else is stuck.</div>
+        </div>
+
+        <!-- Vigilance items -->
+        <div class="vitem red">
+          <div class="vt"><b>Approval nearing SLA:</b> Ayesha's consultation reminder has waited 3h 40m of the 4h window.
+            <small>MONITOR: INBOX SLA · ADVISE-ONLY — LIGHT NEVER ACTS PAST A GATE</small></div>
+          <div class="vact"><button class="btn sm" onclick="go('inbox')">Open inbox</button></div>
+        </div>
+        <div class="vitem amber">
+          <div class="vt"><b>Stuck enquiry:</b> Sana Malik has sat in <i>Contact attempted</i> for 2 days — stage SLA is 1 day.
+            <small>MONITOR: STAGE SLA (stage_definitions.sla_hours) · SUGGESTION: MOVE HER NEXT WHATSAPP TOUCH FORWARD?</small></div>
+          <div class="vact"><button class="btn sm gold" onclick="toast('Light drafts the earlier touch → it lands in your inbox for a stamp. The suggestion was free; the action still needs you.')">✦ Chase now</button><button class="btn sm" onclick="toast('Snoozed until tomorrow\'s digest — snoozes are how tiles and alerts learn what you care about.')">Snooze</button></div>
+        </div>
+        <div class="vitem amber">
+          <div class="vt"><b>Meta window closing:</b> Kamran Butt's £1,800 won outcome fires in 6 hours. Reverse now if the instruction fell through.
+            <small>MONITOR: CONVERSION COOLING TIMER (24H) · FIRING IS L2, EVENTED</small></div>
+          <div class="vact"><button class="btn sm" onclick="toast('Reversal cancels the pending conversion — meta.conversion_cancelled on the ledger.')">Reverse</button><button class="btn sm" onclick="toast('Left to fire on schedule.')">Let it fire</button></div>
+        </div>
+        <div class="vitem gold">
+          <div class="vt"><b>2 memory proposals</b> wait in the tray — a greeting preference and one tone conflict to re-scope.
+            <small>SOURCE: SPEC 2 PROPOSALS TRAY, SURFACED HERE DAILY</small></div>
+          <div class="vact"><button class="btn sm" onclick="go('memory')">Review</button></div>
+        </div>
+
+        <!-- Curated tiles -->
+        <div class="dgrid">
+          <div class="dtile" onclick="go('inbox')">
+            <div class="th">Stamps owed <span class="pin2">📌</span></div>
+            <div class="dnum">5</div>
+            <div class="dsub">2 messages · 1 spend gate · 1 grant · 1 workflow — oldest 3h 40m</div>
+          </div>
+          <div class="dtile" onclick="go('pipeline')">
+            <div class="th">Live pipeline · 12 enquiries</div>
+            <div class="pipemini">
+              <div class="pb" style="height:100%"></div><div class="pb" style="height:70%"></div><div class="pb" style="height:70%"></div><div class="pb" style="height:40%"></div><div class="pb hot" style="height:40%"></div><div class="pb" style="height:40%"></div><div class="pb hot" style="height:70%"></div>
+            </div>
+            <div class="dsub">New 3 · Attempted 2 · Talking 2 · Qualified 1 · Booked 1 · Held 1 · Instructed 2</div>
+          </div>
+          <div class="dtile" onclick="toast('Opens today in your connected calendar — slots reflect Outlook/Google free-busy (3.17).')">
+            <div class="th">Today</div>
+            <div class="sched">
+              <div class="si"><span class="st2">12:00</span><span>✦ Ayesha's consultation brief lands (Light)</span></div>
+              <div class="si"><span class="st2">14:00</span><span><b>Consultation — Ayesha Khan</b> (Spouse visa)</span></div>
+              <div class="si"><span class="st2">16:00</span><span>Call retry — Bilal Ahmed (Skilled Worker)</span></div>
+            </div>
+          </div>
+          <div class="dtile" onclick="toast('The visible meter: every AI action\'s cost is on the ledger; big burns gate at $2; the cap pauses work to pending credits, never silent failure.')">
+            <div class="th">AI credits · July</div>
+            <div class="dnum" style="font-size:22px">£31.40 <span style="font-size:13px;color:var(--ink-faint);font-weight:500">of £60 cap</span></div>
+            <div class="meterbar"><span class="fill"></span></div>
+            <div class="dsub">Biggest burn this week: enquiry triage (£4.10) · junk-ad analysis pending your gate</div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:14px">VIGILANCE IS EVENT-DRIVEN, NOT ALWAYS-RUNNING: FIVE DETERMINISTIC MONITORS + THIS DIGEST IN PHASE 1 · MODEL SWEEPS ARRIVE PHASE 2 · EVERY SUGGESTION IS LEVEL 0 — ACTIONS STILL CLIMB THE LADDER.</p>
+      </div>
+      <div class="view" id="view-inbox">
+        <div class="pagehead">
+          <h1>Approval Inbox</h1>
+          <span class="sub">Only stamps owed live here — incoming client email belongs to Conversations. The badge counts approvals, nothing else.</span>
+          <div class="actions">
+            <button class="btn" onclick="toast('Batch approval works within same-kind groups only — five WhatsApps at once, yes; a WhatsApp and an invoice, no.')">Batch approve…</button>
+          </div>
+        </div>
+
+        <div class="qitem">
+          <div class="qtop"><span class="chip src">WhatsApp</span><span class="chip gold">✦ drafted by Light</span><span class="qfor">→ Ayesha Khan · Enquiry #0114</span><span class="qage warn">waiting 3h 40m of 4h SLA</span></div>
+          <div class="qprev" onclick="toast('Opens the full message before stamping — every inbox item is openable.')">"Assalamu alaikum Ayesha, a gentle reminder of your consultation with Mudassir at X Law tomorrow (Thursday) at 2:00pm…"</div>
+          <div class="qmeta"><span class="gold">✦ COST 4¢</span> · PRE-FLIGHT: CONSENT ✓ · STANDARDS ✓ · COMPLIANCE ✓ · SENDS TOMORROW 10:00 ON APPROVAL</div>
+          <div class="approvebar">
+            <button class="btn approve" onclick="approveQ(this,'Stamped — communication.approved on the ledger; dispatches tomorrow 10:00. This is the same row you saw on Ayesha\'s timeline: the inbox is a view, not a place.')">Approve</button>
+            <button class="btn refine" onclick="toast('Refine opens the editor — your changes become a diff Light learns from (Spec 2).')">Refine</button>
+            <button class="btn refine" onclick="toast('Rejected drafts are kept on the ledger with your reason — Light learns from those too.')">Reject</button>
+            <span class="stamped">Human approved</span>
+          </div>
+        </div>
+
+        <div class="qitem" id="rashidItem">
+          <div class="qtop"><span class="chip src">Email</span><span class="chip gold">✦ drafted by Light</span><span class="qfor">→ Rashid Mahmood · engagement letter</span><span class="qage">waiting 1h 05m</span></div>
+          <div class="qprev" onclick="toast('Opens the full letter — every item is openable to its complete content, attachments and all, before you stamp it.')">"Dear Mr Mahmood, further to your consultation on Monday, please find our letter of engagement for your spouse visa application…" <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">— TAP TO OPEN FULL LETTER</span></div>
+          <div class="qmeta" id="rashidMeta"><span class="gold">✦ COST 11¢</span> · TEMPLATE: ENGAGEMENT LETTER v3 · FEE £1,200 ✓ · <span style="color:var(--stamp);font-weight:600">ATTACHMENT: letter_of_engagement.pdf ✗ MISSING</span></div>
+          <div class="approvebar" id="rashidBlocked">
+            <button class="btn" style="border-color:var(--stamp);color:var(--stamp)" onclick="toast('The Approve button must be earned: this letter references an attachment that isn\'t attached, so the stamp is withheld by pre-flight — not by your vigilance.')">⛔ Blocked — attachment missing</button>
+            <button class="btn refine" onclick="fixAttachment()">✦ Ask Light to attach it</button>
+          </div>
+          <div class="approvebar" id="rashidReady" style="display:none">
+            <button class="btn approve" onclick="approveQ(this,'Stamped and sent, letter attached. The fee promise is why this could never send itself — template no-go rule.')">Approve</button>
+            <button class="btn refine" onclick="toast('Refine opens the editor.')">Refine</button>
+            <button class="btn refine" onclick="toast('Rejected — kept on the ledger with your reason.')">Reject</button>
+            <span class="stamped">Human approved</span>
+          </div>
+        </div>
+
+        <div class="qitem">
+          <div class="qtop"><span class="chip red">Spend gate</span><span class="chip gold">✦ requested by Light</span><span class="qfor">Deep analysis: which ads send junk leads</span><span class="qage">waiting 22m</span></div>
+          <div class="qprev">Light wants to run a strong-model analysis across 6 weeks of enquiries and ad spend to find which campaigns produce the 80% junk — estimated cost <b>$4.20</b> (above your $2 gate).</div>
+          <div class="qmeta">LEVEL 3: SPENDING MONEY · CREDITS METER: £31.40 USED OF £60 CAP THIS MONTH</div>
+          <div class="approvebar">
+            <button class="btn approve" onclick="approveQ(this,'Approved — $4.20 released, on the ledger with the result to follow. Spend gates are Level 3 like any other money action.')">Approve $4.20</button>
+            <button class="btn refine" onclick="toast('Declined — Light will suggest a cheaper triage-model version instead.')">Decline</button>
+            <span class="stamped">Human approved</span>
+          </div>
+        </div>
+
+        <div class="qitem">
+          <div class="qtop"><span class="chip gold">Grant request</span><span class="qfor">Light requests: <b>WhatsApp send · X Law · standing</b></span><span class="qage">waiting 10m</span></div>
+          <div class="qprev">"To chase enquiries without asking each time, I'd like standing send access to X Law's WhatsApp. Every send still passes your approval inbox — this grant only lets me <i>submit</i> drafts."</div>
+          <div class="qmeta">TOOL: COMMS.WHATSAPP · ACCESS: EXECUTE · SCOPE: BUSINESS (X LAW) · DURATION: STANDING · VIA: CHAT</div>
+          <div class="approvebar">
+            <button class="btn approve" onclick="approveQ(this,'Grant issued and on the ledger: comms.whatsapp · execute · X Law · standing · granted by you, just now. Revoke any time in Settings → Team.')">Grant standing</button>
+            <button class="btn refine" onclick="toast('Scoped down: granted for this task only — expires when the nurture sequence for this enquiry closes.')">This task only</button>
+            <button class="btn refine" onclick="toast('Denied — Light will ask per-send instead. Graceful denial, never silent failure.')">Deny</button>
+            <span class="stamped">Human approved</span>
+          </div>
+        </div>
+
+        <div class="qitem">
+          <div class="qtop"><span class="chip gold">Workflow change</span><span class="chip gold">✦ proposed by Light</span><span class="qfor">New automation: <b>Post-consultation follow-up</b></span><span class="qage">waiting 5m</span></div>
+          <div class="qprev" onclick="toast('Opens the full plain-English workflow description with every step, timer and gate.')">Consultation held → thank-you draft (+2h) → engagement letter draft if instructed (+1d) → nudge if unsigned (+4d). Basis: you've sent this manually after the last 5 consultations. Every send still passes this inbox.</div>
+          <div class="qmeta">LEVEL 3: CONFIGURATION CHANGE · THE MACHINE GROWS A HABIT ONLY ON THE RECORD</div>
+          <div class="approvebar">
+            <button class="btn approve" onclick="approveQ(this,'Workflow activated and on the ledger — workflow_definition v1, proposed by Light, stamped by you. It appears in your Automation tab, toggleable any time.')">Activate workflow</button>
+            <button class="btn refine" onclick="toast('Refine opens the steps for editing before activation.')">Refine steps</button>
+            <button class="btn refine" onclick="toast('Declined — recorded; Light will only re-propose if the manual pattern continues.')">Decline</button>
+            <span class="stamped">Human approved</span>
+          </div>
+        </div>
+
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono)">ANYTHING WAITING PAST THE SLA ESCALATES TO YOUR DASHBOARD — AN INBOX THAT SILTS UP IS A DEAD PRODUCT. APPROVING HERE OR ON THE ENQUIRY TIMELINE IS THE SAME ACT ON THE SAME ROW.</p>
+      </div>
+      <div class="view" id="view-contacts">
+        <div class="pagehead">
+          <h1>Contacts</h1>
+          <span class="sub">People and organisations in one book — channels and consents per person, GDPR at the door</span>
+          <div class="actions">
+            <button class="btn" onclick="toast('Filters: status, consent, source, has-open-enquiry.')">Filter</button>
+            <button class="btn primary" onclick="toast('Manual contact creation — most contacts arrive by themselves from leads and forms.')">+ New contact</button>
+          </div>
+        </div>
+        <div class="crow" onclick="go('case')">
+          <div class="ci"><div class="cn2">Ayesha Khan</div><div class="cr2">PERSON · MANCHESTER · EN / UR</div></div>
+          <div class="cch"><span class="gchip x">email ✓ consented</span><span class="gchip x">WhatsApp ✓ consented</span><span class="gchip d">1 open enquiry — tap to open</span><span class="gchip">source: Meta · Spouse Mar / C1</span></div>
+        </div>
+        <div class="crow" onclick="toast('Hamza is linked to Ayesha as spouse/sponsor via contact_relationships — Light knows who he is to the case.')">
+          <div class="ci"><div class="cn2">Hamza Khan</div><div class="cr2">PERSON · PAKISTAN · SPONSOR</div></div>
+          <div class="cch"><span class="gchip">related: spouse of Ayesha Khan</span><span class="gchip none">no direct channels yet</span></div>
+        </div>
+        <div class="crow" onclick="toast('Organisations live in the same contacts table — a sponsoring employer, an opposing firm, a referrer company.')">
+          <div class="ci"><div class="cn2">Salford Foods Ltd</div><div class="cr2">ORGANISATION · SPONSOR EMPLOYER</div></div>
+          <div class="cch"><span class="gchip x">email ✓ transactional</span><span class="gchip">employer of: Zara Sheikh</span><span class="gchip d">1 open enquiry (Skilled Worker)</span></div>
+        </div>
+        <div class="crow" onclick="toast('Won client — his contact record now anchors both the closed enquiry and, in Phase 3, his matter.')">
+          <div class="ci"><div class="cn2">Kamran Butt</div><div class="cr2">PERSON · INSTRUCTED CLIENT</div></div>
+          <div class="cch"><span class="gchip x">email ✓</span><span class="gchip x">WhatsApp ✓</span><span class="gchip x">won · £1,800 paid</span></div>
+        </div>
+        <div class="crow" style="opacity:.55" onclick="toast('Junk is a first-class status — it powers the Meta feedback loop. Never deleted; the algorithm needs to learn from it.')">
+          <div class="ci"><div class="cn2">"gimme visa fast"</div><div class="cr2">PERSON · STATUS: JUNK</div></div>
+          <div class="cch"><span class="gchip none">invalid phone</span><span class="gchip" style="border-color:var(--stamp);color:var(--stamp)">junk signal → Meta</span><span class="gchip">source: Meta · Ad B2</span></div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:12px">CONSENT IS PER CHANNEL, NOT PER PERSON — LEGALLY AND IN THE SCHEMA. ONLY CONSENTED CHANNELS APPEAR IN THE COMPOSER.</p>
+      </div>
+      <div class="view" id="view-notes"><div class="ph"><div class="ic">✎</div><h2>Notes</h2><p>Folders-as-views: Inbox for quick captures, projects generated from links, saved views as pseudo-folders.</p><p>Phase 2 surface — mocked when we design Phase 2.</p><span class="spec">locked in master context 3.10</span></div></div>
+      <div class="view" id="view-memory">
+        <div class="pagehead">
+          <h1>Light's Memory</h1>
+          <span class="sub">Everything Light believes — nothing hidden, everything editable</span>
+          <div class="actions">
+            <button class="btn" onclick="openImport()">⇪ Import memories</button>
+            <button class="btn primary" onclick="toast('Manual cards are born core + authoritative — you wrote them yourself.')">+ Add card</button>
+          </div>
+        </div>
+
+        <!-- Proposals tray -->
+        <div class="memtray" id="memtray">
+          <h2>✦ Proposals — Light asks before it remembers</h2>
+          <div class="prop" id="prop1">
+            <div class="pt">Save as a preference: <b>"Open with Assalamu alaikum for clients who used it first."</b></div>
+            <div class="pwhy">OBSERVED 3 TIMES — you corrected greetings in drafts on 2, 4 &amp; 7 Jul · scope: X Law</div>
+            <div class="pact">
+              <button class="btn sm gold" onclick="confirmProp('prop1','Preference saved as core · confirmed. It will shape every X Law draft from now — and the ledger recorded this exact moment.')">Confirm — remember it</button>
+              <button class="btn sm" onclick="confirmProp('prop1','Discarded. Light will not raise this pattern again unless it re-emerges strongly.')">Discard</button>
+            </div>
+          </div>
+          <div class="prop" id="prop2">
+            <div class="pt">Conflict inside X Law: <b>"Formal tone in client emails"</b> vs <b>"Casual, friendly tone"</b>.</div>
+            <div class="pwhy">BOTH CONFIRMED — Light suspects the casual one was learned from your BarakahX work</div>
+            <div class="pact">
+              <button class="btn sm gold" onclick="confirmProp('prop2','Re-scoped: casual tone moved to BarakahX. Both cards kept, each true in its own world — the usual fix.')">Re-scope casual → BarakahX</button>
+              <button class="btn sm" onclick="confirmProp('prop2','Kept formal; casual marked outdated (superseded, never deleted).')">Keep formal only</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="memfilters">
+          <button class="fpill on" data-f="scope" data-v="all" onclick="memFilter(this)">All scopes</button>
+          <button class="fpill" data-f="scope" data-v="me" onclick="memFilter(this)">Me</button>
+          <button class="fpill" data-f="scope" data-v="xlaw" onclick="memFilter(this)">X Law</button>
+          <button class="fpill" data-f="scope" data-v="bx" onclick="memFilter(this)">BarakahX</button>
+          <span class="fsep"></span>
+          <button class="fpill on" data-f="kind" data-v="all" onclick="memFilter(this)">All kinds</button>
+          <button class="fpill" data-f="kind" data-v="fact" onclick="memFilter(this)">Facts</button>
+          <button class="fpill" data-f="kind" data-v="preference" onclick="memFilter(this)">Preferences</button>
+          <button class="fpill" data-f="kind" data-v="standard" onclick="memFilter(this)">Standards</button>
+          <button class="fpill" data-f="kind" data-v="method" onclick="memFilter(this)">Methods</button>
+        </div>
+
+        <!-- Core cards -->
+        <div class="memgrid" id="memgrid">
+          <div class="mcard" data-scope="me" data-kind="preference">
+            <div class="mhrow"><span class="kb preference">Preference</span><span class="kb scope">ME</span><span class="kb trust-authoritative">Authoritative</span><span class="kb pin">📌 Pinned</span></div>
+            <div class="mtitle">Short intros — no flowery openings</div>
+            <div class="mbody">Get to the point in the first sentence. Applies to every draft, in every business.</div>
+            <div class="mprov">YOU WROTE THIS · USED 61× · LAST USED TODAY · <a onclick="toast('Deep-links to the ledger event where this card was created.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Editing makes a card authoritative — your hand beats Light\'s inference.')">Edit</button><button class="iact" onclick="toast('Pinned cards never decay and are always assembly-eligible.')">Unpin</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="me" data-kind="preference">
+            <div class="mhrow"><span class="kb preference">Preference</span><span class="kb scope">ME</span><span class="kb trust-confirmed">Confirmed</span></div>
+            <div class="mtitle">Reply in Urdu when the other person writes in Urdu</div>
+            <div class="mbody">Language follows the counterparty. English otherwise.</div>
+            <div class="mprov">LEARNED FROM CONVERSATION · CONFIRMED 3 JUL · USED 9× · <a onclick="toast('Deep-links to the ledger event.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Edit → authoritative.')">Edit</button><button class="iact" onclick="toast('Re-scope moves a card between Me / a business — the one-tap conflict fix.')">Re-scope</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="xlaw" data-kind="fact">
+            <div class="mhrow"><span class="kb fact">Fact</span><span class="kb scope">X LAW</span><span class="kb trust-authoritative">Authoritative</span><span class="kb pin">📌 Pinned</span></div>
+            <div class="mtitle">X Law is IAA Level 1 — advice scope is limited</div>
+            <div class="mbody">No advice beyond Level 1 authorisation in any output, ever. Feeds the compliance no-go rules.</div>
+            <div class="mprov">YOU WROTE THIS · USED BY EVERY DRAFT · <a onclick="toast('Deep-links to the ledger event.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Edit → authoritative.')">Edit</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="xlaw" data-kind="preference">
+            <div class="mhrow"><span class="kb preference">Preference</span><span class="kb scope">X LAW</span><span class="kb trust-confirmed">Confirmed</span></div>
+            <div class="mtitle">Clients respond better on WhatsApp than email</div>
+            <div class="mbody">Prefer WhatsApp for follow-ups and reminders once a number is consented; email for documents.</div>
+            <div class="mprov">OBSERVED ACROSS 12 ENQUIRIES · CONFIRMED 28 JUN · USED 34× · <a onclick="toast('Deep-links to the ledger event.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Edit → authoritative.')">Edit</button><button class="iact" onclick="toast('Re-scope: Me / X Law / BarakahX.')">Re-scope</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="xlaw" data-kind="standard">
+            <div class="mhrow"><span class="kb standard">Standard</span><span class="kb scope">X LAW</span><span class="kb trust-authoritative">Authoritative</span><span class="kb pin">📌 Pinned</span></div>
+            <div class="mtitle">Never promise or guarantee visa success</div>
+            <div class="mbody">Applies to every draft, page and campaign. Violations block at the compliance score, not after.</div>
+            <div class="mprov">YOU WROTE THIS · GATES ALL CONTENT · <a onclick="toast('Deep-links to the ledger event.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Edit → authoritative.')">Edit</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="xlaw" data-kind="standard">
+            <div class="mhrow"><span class="kb standard">Standard</span><span class="kb scope">X LAW</span><span class="kb trust-confirmed">Confirmed</span></div>
+            <div class="mtitle">Email intros under 80 words</div>
+            <div class="mbody">First message to a new enquiry stays under 80 words, one question maximum.</div>
+            <div class="mprov">LEARNED FROM YOUR REFINE-EDIT · CONFIRMED 30 JUN · USED 21× · <a onclick="toast('This card was born from a diff: you shortened a draft, Light asked, you confirmed. That moment is on the ledger.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Edit → authoritative.')">Edit</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="xlaw" data-kind="method">
+            <div class="mhrow"><span class="kb method">Method</span><span class="kb scope">X LAW</span><span class="kb trust-confirmed">Confirmed</span></div>
+            <div class="mtitle">Spouse-visa qualification question sequence</div>
+            <div class="mbody">1) Where does the partner live · 2) sponsor's income &amp; employment type · 3) English evidence · 4) previous refusals. Stop at any disqualifier.</div>
+            <div class="mprov">APPLIED 3 OF 5 TIMES SUCCESSFULLY — GRADUATES TO A SKILL AT 5 · <a onclick="toast('Methods are larval skills: at 5 successful uses Light proposes graduation into a versioned skill.')">what's this?</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Edit → authoritative.')">Edit</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="xlaw" data-kind="fact">
+            <div class="mhrow"><span class="kb fact">Fact</span><span class="kb scope">X LAW</span><span class="kb trust-observed">Observed</span></div>
+            <div class="mtitle">Ayesha Khan's husband lives in Pakistan</div>
+            <div class="mbody">Sponsor abroad — entry-clearance route, not in-country switch. Linked to her enquiry.</div>
+            <div class="mprov">FROM HER EMAIL, TUE 09:02 · LINKED TO ENQUIRY #0114 · USED 4× · <a onclick="toast('Provenance points at the exact communication row that taught this.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Confirming raises trust: observed → confirmed.')">Confirm</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+
+          <div class="mcard" data-scope="bx" data-kind="preference">
+            <div class="mhrow"><span class="kb preference">Preference</span><span class="kb scope">BARAKAHX</span><span class="kb trust-confirmed">Confirmed</span></div>
+            <div class="mtitle">Casual, friendly tone with IT clients</div>
+            <div class="mbody">First names, contractions, light emoji tolerated. Never crosses into X Law — different world, by design.</div>
+            <div class="mprov">CONFIRMED 1 JUL · USED 7× · <a onclick="toast('Deep-links to the ledger event.')">view the moment</a></div>
+            <div class="mact"><button class="iact" onclick="toast('Edit → authoritative.')">Edit</button><button class="iact" onclick="toast('Re-scope: Me / X Law / BarakahX.')">Re-scope</button><button class="iact" onclick="markWrong(this)">Wrong</button></div>
+          </div>
+        </div>
+
+        <!-- Working memory -->
+        <div class="workstrip">
+          <h2>Working memory — fades unless it earns promotion</h2>
+          <div class="wrow"><span class="wt">Leads from Ad B2 are mostly junk (3 of 4 this week)</span><span class="wexp">EXPIRES IN 11 DAYS</span><button class="btn sm" onclick="toast('Promoted to proposed — one more observation and Light will ask to keep it.')">Keep an eye on this</button></div>
+          <div class="wrow"><span class="wt">Thursday afternoons book best for consultations</span><span class="wexp">EXPIRES IN 9 DAYS</span><button class="btn sm" onclick="toast('Promoted to proposed.')">Keep an eye on this</button></div>
+          <div class="wrow"><span class="wt">Ayesha mentioned a previous visit-visa refusal in passing</span><span class="wexp">EXPIRES IN 13 DAYS</span><button class="btn sm" onclick="toast('Confirmed directly to core — important case fact, linked to Enquiry #0114.')">Remember now</button></div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:14px">EVERY TIME LIGHT USES A CARD, THE LEDGER RECORDS WHICH CARDS FED WHICH DRAFT — "WHY DID LIGHT SAY THAT?" IS ALWAYS ANSWERABLE. · FULL EXPORT LIVES IN SETTINGS → DATA (OWNER ONLY, ON THE LEDGER).</p>
+
+        <!-- Import modal -->
+        <div class="imodal-scrim" id="importScrim" onclick="closeImport()"></div>
+        <div class="imodal" id="importModal" onclick="event.stopPropagation()">
+          <h3>Import memories</h3>
+          <p class="isub">From Claude, ChatGPT, or anywhere. Light reads what you give it and turns each claim into a <b>proposal</b> — nothing enters memory until you confirm it.</p>
+          <textarea class="ipaste" placeholder="Paste memory text here — e.g. copied from ChatGPT's 'Manage memories' page…">Prefers concise answers without preamble. Runs an immigration law firm in Manchester. Interested in AI tools for business automation. Writes in British English.</textarea>
+          <div class="idrop" onclick="toast('In the real build this opens your photos — drop screenshots of any memory page and Light reads them.')">
+            <span>⇪ or drop screenshots here</span>
+            <span class="idrop-sub">e.g. a screenshot of ChatGPT's memory list — Light reads images natively</span>
+          </div>
+          <div class="iact-row">
+            <button class="btn" onclick="closeImport()">Cancel</button>
+            <button class="btn gold" onclick="runImport()">✦ Convert to memory proposals</button>
+          </div>
+        </div>
+      </div>
+      <div class="view" id="view-audit">
+        <div class="pagehead">
+          <h1>The Ledger</h1>
+          <span class="sub">Append-only, forever — every actor writes here, no one edits, not even you</span>
+          <div class="actions"><button class="btn" onclick="toast('Search the ledger: by person, enquiry, action, date — \'why did Light say that?\' is a query, not a mystery.')">Search</button></div>
+        </div>
+        <div class="memfilters">
+          <button class="fpill on" data-la="all" onclick="ledFilter(this)">All</button>
+          <button class="fpill" data-la="human" onclick="ledFilter(this)">Humans</button>
+          <button class="fpill" data-la="light" onclick="ledFilter(this)">Light</button>
+          <button class="fpill" data-la="robot" onclick="ledFilter(this)">Integrations</button>
+        </div>
+        <div class="panelbox">
+          <h2>Today · Tuesday 7 July</h2>
+          <div class="lgrow" data-actor="light"><span class="lt2">08:30:00</span><span class="lv2"><span class="verb">digest.sent</span> — morning digest delivered: 2 new enquiries, 5 stamps owed, 1 window closing</span><span class="la"><span class="tag light">✦ Light</span></span></div>
+          <div class="lgrow" data-actor="light" onclick="toast('THE spec 2 promise: this event lists exactly which memory cards fed the draft — tap in the real build to see them. Why did Light say that? Always answerable.')"><span class="lt2">08:40:02</span><span class="lv2"><span class="verb">context.assembled</span> — 6 cards fed the reminder draft (tap to see which)</span><span class="lcost">0.3¢</span></div>
+          <div class="lgrow" data-actor="light"><span class="lt2">08:40:11</span><span class="lv2"><span class="verb">communication.drafted</span> — WhatsApp reminder for Ayesha Khan → pending approval</span><span class="lcost">✦ 4¢</span></div>
+          <div class="lgrow" data-actor="light"><span class="lt2">08:41:00</span><span class="lv2"><span class="verb">grant.requested</span> — Light asked for comms.whatsapp · execute · X Law · standing</span><span class="la"><span class="tag light">✦ Light</span></span></div>
+          <div class="lgrow" data-actor="robot"><span class="lt2">03:12:44</span><span class="lv2"><span class="verb">contact.created</span> — new lead (Meta · Ad B2), consent recorded from form</span><span class="la"><span class="tag robot">meta sync</span></span></div>
+        </div>
+        <div class="panelbox" style="margin-top:14px">
+          <h2>Yesterday · Monday 6 July</h2>
+          <div class="lgrow" data-actor="human"><span class="lt2">21:38:52</span><span class="lv2"><span class="verb">communication.approved</span> — intro email to Ayesha Khan · approval level 3</span><span class="la"><span class="tag human">Mudassir</span></span></div>
+          <div class="lgrow" data-actor="robot"><span class="lt2">21:38:53</span><span class="lv2"><span class="verb">communication.sent</span> — intro email dispatched via connected Gmail</span><span class="la"><span class="tag robot">pipeline</span></span></div>
+          <div class="lgrow" data-actor="light"><span class="lt2">21:14:09</span><span class="lv2"><span class="verb">communication.drafted</span> — intro email for Ayesha Khan</span><span class="lcost">✦ 12¢</span></div>
+          <div class="lgrow" data-actor="light"><span class="lt2">21:14:05</span><span class="lv2"><span class="verb">workflow.run_started</span> — Lead → Booked Consultation v1 · Ayesha Khan</span><span class="la"><span class="tag light">✦ Light</span></span></div>
+          <div class="lgrow" data-actor="robot"><span class="lt2">21:14:03</span><span class="lv2"><span class="verb">engagement.created</span> — Spouse visa enquiry · attribution: Spouse Mar / C1</span><span class="la"><span class="tag robot">meta sync</span></span></div>
+          <div class="lgrow" data-actor="human"><span class="lt2">18:02:10</span><span class="lv2"><span class="verb">grant.issued</span> — Sara Ahmed: enquiries · execute · X Law · standing · granted by Mudassir</span><span class="la"><span class="tag human">Mudassir</span></span></div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:12px">RENDERED AS PLAIN ENGLISH FOR HUMANS; STORED AS STRUCTURE FOR MACHINES. HARD DELETES DON'T EXIST — HISTORY IS THE PRODUCT'S SPINE.</p>
+      </div>
+      <div class="view" id="view-settings">
+        <div class="pagehead">
+          <h1>Settings — Team &amp; access</h1>
+          <span class="sub">Humans and AI, one permission system. No grant on a tool = no tab in their sidebar.</span>
+          <div class="actions">
+            <button class="btn primary" onclick="toast('Invite flow: email → they join with ZERO access → you apply a preset or grant tool by tool. Least privilege by default.')">+ Invite employee</button>
+          </div>
+        </div>
+
+        <div class="trow">
+          <div class="tava" style="background:var(--ink)">M</div>
+          <div class="tinfo"><div class="tname">Mudassir</div><div class="trole">Owner · Account</div></div>
+          <div class="tgrants">
+            <span class="gchip x">everything · execute</span>
+            <span class="gchip x">approvals.* — the stamp</span>
+            <span class="gchip d">memory export (Level 3, ledgered)</span>
+          </div>
+        </div>
+
+        <div class="trow" style="cursor:pointer" onclick="go('member')">
+          <div class="tava" style="background:#40638C">S</div>
+          <div class="tinfo"><div class="tname">Sara Ahmed <span style="font-family:var(--mono);font-size:9.5px;color:var(--ledger)">— TAP FOR FULL MATRIX</span></div><div class="trole">Caseworker preset · X Law</div></div>
+          <div class="tgrants">
+            <span class="gchip x">enquiries · execute</span>
+            <span class="gchip x">conversations · execute</span>
+            <span class="gchip x">notes · execute</span>
+            <span class="gchip x">calendar · execute (her own, connected)</span>
+            <span class="gchip d">content · draft</span>
+            <span class="gchip none">money — no access (tab hidden)</span>
+          </div>
+        </div>
+
+        <div class="trow">
+          <div class="tava" style="background:var(--gold)">✦</div>
+          <div class="tinfo"><div class="tname">Light</div><div class="trole">AI COO · same grant table as everyone</div></div>
+          <div class="tgrants">
+            <span class="gchip d" onclick="revokeChip(this)">comms · draft (all channels)</span>
+            <span class="gchip x" onclick="revokeChip(this)">enquiries · execute (stage moves, tasks)</span>
+            <span class="gchip x" onclick="revokeChip(this)">calendar · execute</span>
+            <span class="gchip d" onclick="revokeChip(this)">content · draft</span>
+            <span class="gchip none">approvals — structurally unholdable by AI</span>
+          </div>
+          <button class="btn" style="font-size:12px" onclick="toast('One pending request from Light is in your Approval Inbox: WhatsApp send, standing.')">1 pending request</button>
+        </div>
+
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono)">EVERY GRANT: ISSUED, USED, EXPIRED, REVOKED — ON THE LEDGER. STANDING GRANTS UNUSED FOR 90 DAYS GET THE DECAY QUESTION: "KEEP OR REVOKE?" · APPEARANCE (Aa), BUSINESSES, DOMAINS &amp; BILLING SETTINGS ARRIVE IN A LATER PASS.</p>
+      </div>
+
+      <div class="view" id="view-member">
+        <div class="backrow"><button class="backbtn" onclick="go('settings')">← Back to Team</button></div>
+        <div class="casehead">
+          <div class="toprow">
+            <div style="display:flex;gap:12px;align-items:center">
+              <div class="tava" style="background:#40638C;width:44px;height:44px;font-size:17px">S</div>
+              <div><h1>Sara Ahmed</h1><div class="sub">CASEWORKER PRESET · X LAW · CALENDAR: OUTLOOK CONNECTED ✓</div></div>
+            </div>
+            <div class="right">
+              <button class="btn" onclick="toast('Working hours & time-off: Mon–Fri 9:30–17:30. Booking flows offer only her Outlook free/busy ∩ these hours — a blocked calendar shows no slots.')">Availability</button>
+              <button class="btn" style="border-color:var(--stamp);color:var(--stamp)" onclick="toast('Suspends all grants at once — membership kept, access frozen, evented.')">Suspend access</button>
+            </div>
+          </div>
+        </div>
+        <div class="panelbox" style="margin-top:16px">
+          <h2>Permission matrix — every flip is a grant row, evented. You hold Admin, so you can edit.</h2>
+          <div style="padding:6px 16px 16px">
+            <div class="mxrow mxhead"><span></span><span>View</span><span>Draft</span><span>Execute</span></div>
+            <div class="mxrow"><span class="mxtool">Dashboard</span><button class="mxt on" onclick="flipT(this)">✓</button><span class="mxna">—</span><span class="mxna">—</span></div>
+            <div class="mxrow"><span class="mxtool">Enquiries</span><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt on" onclick="flipT(this)">✓</button></div>
+            <div class="mxrow"><span class="mxtool">Conversations</span><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt on" onclick="flipT(this)">✓</button></div>
+            <div class="mxrow"><span class="mxtool">Notes</span><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt on" onclick="flipT(this)">✓</button></div>
+            <div class="mxrow"><span class="mxtool">Calendar (own)</span><button class="mxt on" onclick="flipT(this)">✓</button><span class="mxna">—</span><button class="mxt on" onclick="flipT(this)">✓</button></div>
+            <div class="mxrow"><span class="mxtool">Content / Website</span><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt on" onclick="flipT(this)">✓</button><button class="mxt" onclick="flipT(this)"></button></div>
+            <div class="mxrow"><span class="mxtool">Money / Invoicing</span><button class="mxt" onclick="flipT(this)"></button><button class="mxt" onclick="flipT(this)"></button><button class="mxt" onclick="flipT(this)"></button><span class="mxnote">tab hidden</span></div>
+            <div class="mxrow"><span class="mxtool">Light's Memory</span><button class="mxt" onclick="flipT(this)"></button><span class="mxna">—</span><button class="mxt" onclick="flipT(this)"></button></div>
+            <div class="mxrow"><span class="mxtool">The Ledger</span><button class="mxt" onclick="flipT(this)"></button><span class="mxna">—</span><span class="mxna">—</span></div>
+            <div class="mxrow"><span class="mxtool">Approvals — the stamp</span><span class="mxna">—</span><span class="mxna">—</span><button class="mxt" onclick="flipT(this)"></button><span class="mxnote">grantable to seniors; never to AI</span></div>
+            <div class="mxrow"><span class="mxtool">Settings → Team (Admin)</span><button class="mxt" onclick="flipT(this)"></button><span class="mxna">—</span><button class="mxt" onclick="flipT(this)"></button><span class="mxnote">Admin = can edit this page for others</span></div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:12px">FIELD-LEVEL VISIBILITY INSIDE EACH TAB (E.G. HIDE FEE COLUMNS FROM CASEWORKERS) IS TEMPLATE CONFIGURATION — SURFACE_VISIBILITY ON EACH FIELD DEFINITION.</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const crumbs = {
+    pipeline:'<b>X Law</b> / Enquiries', case:'<b>X Law</b> / Enquiries / Ayesha Khan',
+    convos:'<b>X Law</b> / Conversations', automation:'<b>X Law</b> / Automation', wfview:'<b>X Law</b> / Automation / Lead → Booked Consultation',
+    dashboard:'<b>X Law</b> / Dashboard', inbox:'<b>X Law</b> / Approval Inbox',
+    contacts:'<b>X Law</b> / Contacts', notes:'<b>X Law</b> / Notes',
+    memory:'<b>X Law</b> / Light\u2019s Memory', audit:'<b>X Law</b> / The Ledger',
+    settings:'<b>X Law</b> / Settings', member:'<b>X Law</b> / Settings / Sara Ahmed'
+  };
+  function go(v){
+    document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+    document.getElementById('view-'+v).classList.add('active');
+    document.querySelectorAll('.navitem').forEach(n=>n.classList.toggle('active', n.dataset.view===v || (v==='case'&&n.dataset.view==='pipeline') || (v==='member'&&n.dataset.view==='settings') || (v==='wfview'&&n.dataset.view==='automation')));
+    document.getElementById('crumb').innerHTML = crumbs[v]||crumbs.pipeline;
+    closeSidebar(); window.scrollTo({top:0});
+  }
+  let toastTimer;
+  function toast(m){
+    const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'), 3400);
+  }
+  function toggleBiz(e){ e.stopPropagation(); document.getElementById('bizmenu').classList.toggle('open'); }
+  function bizNote(m){ document.getElementById('bizmenu').classList.remove('open'); toast(m); }
+  document.addEventListener('click',()=>document.getElementById('bizmenu').classList.remove('open'));
+  function openSidebar(){ document.getElementById('sidebar').classList.add('open'); document.getElementById('scrim').classList.add('show'); }
+  function closeSidebar(){ document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').classList.remove('show'); }
+  function setTheme(t){
+    document.body.dataset.theme=t;
+    document.getElementById('tb-ledger').classList.toggle('active',t==='ledger');
+    document.getElementById('tb-frost').classList.toggle('active',t==='frost');
+    toast(t==='frost' ? 'Frost theme — glass panels over a soft backdrop. Gold is still Light; red is still your stamp.' : 'Ledger theme — paper, ink and the register green.');
+  }
+  function setAccent(a){
+    document.body.dataset.accent=a;
+    ['green','cool','warm'].forEach(x=>document.getElementById('ad-'+x).classList.toggle('active',x===a));
+  }
+  function setFont(f){
+    document.body.dataset.font=f;
+    ['theme','serif','sans','round'].forEach(x=>document.getElementById('fb-'+x).classList.toggle('active',x===f));
+  }
+  function setSize(s){
+    document.body.dataset.size=s;
+    ['compact','default','large'].forEach(x=>document.getElementById('sb-'+x).classList.toggle('active',x===s));
+  }
+  function toggleAppear(e){
+    e.stopPropagation();
+    document.getElementById('appearPop').classList.toggle('open');
+    document.getElementById('bizmenu').classList.remove('open');
+  }
+  document.addEventListener('click',()=>document.getElementById('appearPop').classList.remove('open'));
+  const memState={scope:'all',kind:'all'};
+  function memFilter(btn){
+    const f=btn.dataset.f, v=btn.dataset.v;
+    memState[f]=v;
+    document.querySelectorAll('.fpill[data-f="'+f+'"]').forEach(p=>p.classList.toggle('on',p.dataset.v===v));
+    document.querySelectorAll('#memgrid .mcard').forEach(c=>{
+      const okS = memState.scope==='all'||c.dataset.scope===memState.scope;
+      const okK = memState.kind==='all'||c.dataset.kind===memState.kind;
+      c.style.display = (okS&&okK)?'flex':'none';
+    });
+  }
+  function confirmProp(id,msg){
+    const p=document.getElementById(id);
+    p.style.opacity='0'; p.style.transition='opacity .25s';
+    setTimeout(()=>{p.remove(); if(!document.querySelector('#memtray .prop')){document.getElementById('memtray').style.display='none';}},260);
+    toast(msg);
+  }
+  function markWrong(btn){
+    const card=btn.closest('.mcard');
+    card.classList.add('faded');
+    btn.closest('.mact').innerHTML='<span class="kb trust-observed">Rejected — kept on record, never fed to assembly again</span>';
+    toast('Marked wrong → status rejected. Re-labelled, not deleted: the history of belief is itself audit.');
+  }
+  function openImport(){document.getElementById('importScrim').classList.add('show');document.getElementById('importModal').classList.add('show');}
+  function closeImport(){document.getElementById('importScrim').classList.remove('show');document.getElementById('importModal').classList.remove('show');}
+  function runImport(){
+    closeImport();
+    const tray=document.getElementById('memtray'); tray.style.display='block';
+    const items=[
+      {t:'Preference: <b>"Concise answers, no preamble."</b>', w:'IMPORTED FROM PASTED TEXT · scope: Me · trust: observed until you confirm'},
+      {t:'Fact: <b>"Runs an immigration law firm in Manchester."</b>', w:'IMPORTED · Light notes this duplicates an existing pinned card — will merge, not double'},
+      {t:'Preference: <b>"Writes in British English."</b>', w:'IMPORTED FROM PASTED TEXT · scope: Me'}
+    ];
+    items.forEach((it,i)=>{
+      const id='imp'+Date.now()+i;
+      const div=document.createElement('div');
+      div.className='prop'; div.id=id;
+      div.innerHTML='<div class="pt">'+it.t+'</div><div class="pwhy">'+it.w+'</div>'+
+        '<div class="pact"><button class="btn sm gold" onclick="confirmProp(\''+id+'\',\'Confirmed → core. Provenance keeps the import source forever.\')">Confirm</button>'+
+        '<button class="btn sm" onclick="confirmProp(\''+id+'\',\'Discarded — never entered memory.\')">Discard</button></div>';
+      tray.appendChild(div);
+    });
+    toast('Light read your paste and extracted 3 claims — each is now a proposal awaiting your confirmation. Nothing imported becomes memory unvouched.');
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+  function fixAttachment(){
+    document.getElementById('rashidMeta').innerHTML='<span class="gold">✦ COST 11¢</span> · TEMPLATE: ENGAGEMENT LETTER v3 · FEE £1,200 ✓ · <span style="color:var(--ledger);font-weight:600">ATTACHMENT: letter_of_engagement.pdf ✓ ATTACHED</span>';
+    document.getElementById('rashidBlocked').style.display='none';
+    document.getElementById('rashidReady').style.display='flex';
+    toast('Light generated and attached the letter from the template — pre-flight now passes, so the stamp has appeared. The Approve button is earned, never assumed.');
+  }
+  function flipT(btn){
+    btn.classList.toggle('on');
+    btn.textContent = btn.classList.contains('on') ? '✓' : '';
+    toast(btn.classList.contains('on') ? 'Grant issued — a row in the grants table, on the ledger, effective immediately.' : 'Grant revoked — evented; her next attempt parks as pending access, never a silent failure.');
+  }
+  function ledFilter(btn){
+    const v=btn.dataset.la;
+    document.querySelectorAll('.fpill[data-la]').forEach(p=>p.classList.toggle('on',p.dataset.la===v));
+    document.querySelectorAll('.lgrow').forEach(r=>{r.style.display=(v==='all'||r.dataset.actor===v)?'grid':'none';});
+  }
+  function approveQ(btn,msg){
+    btn.closest('.qitem').classList.add('approved-state');
+    const b=document.getElementById('inboxBadge');
+    const n=Math.max(0,parseInt(b.textContent)-1); b.textContent=n; if(n===0)b.style.display='none';
+    toast(msg);
+  }
+  function revokeChip(chip){
+    toast('Tap-to-revoke: "'+chip.textContent.trim()+'" — revocation is immediate, evented, and the next attempt fails gracefully to pending access.');
+  }
+  function approve(btn){
+    const wrap = btn.closest('.msg');
+    wrap.classList.add('approved-state');
+    wrap.querySelector('.chip.red').textContent='approved by Mudassir · just now';
+    toast('Stamped. communication.approved written to the ledger — the send pipeline will dispatch at 10:00 tomorrow.');
+  }
+</script>
+</body>
+</html>

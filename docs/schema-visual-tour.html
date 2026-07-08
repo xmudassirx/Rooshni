@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Six-Primitive Schema — A Visual Tour</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@600;800;900&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FBF9F3;
+    --paper-deep:#F3EFE4;
+    --ink:#202B38;
+    --ink-soft:#5A6371;
+    --ledger:#2E6B4F;
+    --ledger-tint:#E7EFE9;
+    --stamp:#C13B2A;
+    --stamp-tint:#F7E7E3;
+    --light-gold:#B07C1F;
+    --gold-tint:#F6EDD8;
+    --pencil:#9A937F;
+    --rule:#D9D2BF;
+    --mono:'IBM Plex Mono',monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion: reduce){html{scroll-behavior:auto} *{transition:none!important;animation:none!important}}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Public Sans',system-ui,sans-serif;
+    font-size:16px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:0 20px 96px}
+
+  /* ---------- header ---------- */
+  header{
+    background:
+      repeating-linear-gradient(to bottom, transparent 0 27px, rgba(46,107,79,.14) 27px 28px),
+      var(--paper);
+    border-bottom:3px double var(--ledger);
+    padding:56px 0 36px;
+  }
+  .eyebrow{
+    font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ledger);font-weight:600;margin-bottom:14px;
+  }
+  h1{
+    font-family:'Bitter',serif;font-weight:900;
+    font-size:clamp(30px,6.4vw,46px);line-height:1.08;letter-spacing:-.01em;
+    max-width:14ch;
+  }
+  .lede{margin-top:16px;color:var(--ink-soft);max-width:52ch;font-size:17px}
+  .lede strong{color:var(--ink)}
+
+  /* ---------- sections ---------- */
+  section{padding-top:64px}
+  .sec-label{
+    display:flex;align-items:baseline;gap:12px;border-bottom:1.5px solid var(--ink);
+    padding-bottom:8px;margin-bottom:8px;
+  }
+  .sec-label .no{font-family:var(--mono);font-size:13px;color:var(--pencil);font-weight:600}
+  h2{font-family:'Bitter',serif;font-weight:800;font-size:clamp(21px,4.5vw,27px);letter-spacing:-.005em}
+  .sec-intro{color:var(--ink-soft);margin:14px 0 26px;max-width:58ch}
+  .sec-intro em{color:var(--ink);font-style:normal;font-weight:600}
+
+  /* ---------- shared chips ---------- */
+  .tbl{
+    display:inline-block;font-family:var(--mono);font-size:12.5px;font-weight:500;
+    background:#fff;border:1px solid var(--rule);border-bottom-width:2px;border-radius:5px;
+    padding:2px 8px;margin:2px 2px 2px 0;color:var(--ink);white-space:nowrap;
+  }
+  .tag{
+    display:inline-flex;align-items:center;gap:5px;
+    font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    border-radius:4px;padding:2px 8px;vertical-align:middle;
+  }
+  .tag.light{background:var(--gold-tint);color:var(--light-gold);border:1px solid #E3CD9C}
+  .tag.human{background:var(--stamp-tint);color:var(--stamp);border:1px solid #E5B3A9}
+  .tag.robot{background:#EDF0F4;color:var(--ink-soft);border:1px solid #D4DAE2}
+
+  /* ---------- 1. the building (tenancy) ---------- */
+  .doors{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+  .door{
+    flex:1;min-width:170px;background:#fff;border:1.5px solid var(--ink);border-radius:8px;
+    padding:12px 14px;position:relative;
+  }
+  .door::before{
+    content:"ENTRANCE";position:absolute;top:-9px;left:12px;background:var(--paper);
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--pencil);padding:0 6px;font-weight:600;
+  }
+  .door .url{font-family:var(--mono);font-size:13.5px;font-weight:600;color:var(--ledger)}
+  .door p{font-size:13px;color:var(--ink-soft);margin-top:4px;line-height:1.45}
+  .account{
+    border:2px solid var(--ink);border-radius:12px;background:#fff;
+    padding:18px 16px 16px;position:relative;margin-top:26px;
+  }
+  .account>.plate{
+    position:absolute;top:-13px;left:16px;background:var(--ink);color:var(--paper);
+    font-family:var(--mono);font-size:11px;letter-spacing:.12em;font-weight:600;
+    padding:3px 12px;border-radius:4px;text-transform:uppercase;
+  }
+  .account>.who{font-size:14px;color:var(--ink-soft);margin:4px 0 14px}
+  .biz-row{display:flex;gap:12px;flex-wrap:wrap}
+  .biz{
+    flex:1;min-width:230px;border:1.5px solid var(--ledger);border-radius:0 10px 10px 10px;
+    background:var(--ledger-tint);padding:14px;position:relative;margin-top:16px;
+  }
+  .biz .foldertab{
+    position:absolute;top:-24px;left:-1.5px;height:24px;display:flex;align-items:center;
+    background:var(--ledger);color:#fff;font-family:var(--mono);font-size:11.5px;font-weight:600;
+    letter-spacing:.06em;padding:0 14px;border-radius:8px 8px 0 0;
+  }
+  .biz.ghost{border-style:dashed;background:transparent}
+  .biz.ghost .foldertab{background:transparent;color:var(--ledger);border:1.5px dashed var(--ledger);border-bottom:none}
+  .biz p{font-size:13px;color:var(--ink-soft);line-height:1.5;margin-top:8px}
+  .cabinets-mini{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}
+  .cab-mini{
+    background:#fff;border:1px solid var(--ledger);border-radius:5px;text-align:center;
+    font-family:var(--mono);font-size:10.5px;font-weight:600;color:var(--ledger);
+    padding:7px 2px 5px;letter-spacing:.02em;
+  }
+  .cab-mini::before{
+    content:"";display:block;height:3px;margin:0 auto 5px;width:60%;
+    border-top:1px solid var(--ledger);border-bottom:1px solid var(--ledger);
+  }
+  .tenant-domain{
+    margin-top:14px;border-top:1px dashed var(--ledger);padding-top:10px;
+    font-size:12.5px;color:var(--ink-soft);
+  }
+  .tenant-domain .url{font-family:var(--mono);color:var(--ledger);font-weight:600}
+  .note-card{
+    margin-top:20px;background:var(--paper-deep);border-left:3px solid var(--pencil);
+    padding:12px 16px;font-size:14px;color:var(--ink-soft);border-radius:0 8px 8px 0;
+  }
+  .note-card strong{color:var(--ink)}
+
+  /* ---------- 2. six cabinets ---------- */
+  .cabinet-grid{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:560px){.cabinet-grid{grid-template-columns:1fr 1fr}}
+  .cabinet{
+    border:1.5px solid var(--ink);border-radius:0 10px 10px 10px;background:#fff;
+    position:relative;margin-top:24px;overflow:hidden;
+  }
+  .cabinet .foldertab{
+    position:absolute;top:0;left:0;transform:translateY(-100%);
+    background:var(--ink);color:var(--paper);font-family:var(--mono);
+    font-size:11px;font-weight:600;letter-spacing:.1em;padding:4px 14px 3px;
+    border-radius:8px 8px 0 0;
+  }
+  .cabinet-inner{padding:14px 16px 16px}
+  .cabinet h3{font-family:'Bitter',serif;font-weight:800;font-size:18px;margin-bottom:2px}
+  .cabinet .law{font-family:var(--mono);font-size:11.5px;color:var(--ledger);font-weight:600;margin-bottom:8px}
+  .cabinet p{font-size:13.5px;color:var(--ink-soft);line-height:1.5;margin-bottom:10px}
+  .drawers{border-top:1px solid var(--rule);padding-top:9px}
+  .drawers .dl{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--pencil);font-weight:600;text-transform:uppercase;display:block;margin-bottom:4px}
+
+  /* ---------- 3. connection map ---------- */
+  .mapbox{background:#fff;border:1.5px solid var(--ink);border-radius:12px;padding:10px 6px 4px}
+  .maplegend{display:flex;gap:16px;flex-wrap:wrap;padding:8px 12px 12px;font-size:12px;color:var(--ink-soft)}
+  .maplegend span{display:inline-flex;align-items:center;gap:6px}
+  .lg-line{display:inline-block;width:22px;height:0;border-top:2px solid var(--ink)}
+  .lg-dash{display:inline-block;width:22px;height:0;border-top:2px dashed var(--pencil)}
+
+  /* ---------- 4. journey ---------- */
+  .journey{position:relative;margin-top:8px}
+  .journey::before{
+    content:"";position:absolute;left:17px;top:8px;bottom:8px;width:2px;
+    background:repeating-linear-gradient(to bottom,var(--ledger) 0 6px,transparent 6px 11px);
+  }
+  .step{position:relative;padding:0 0 26px 54px}
+  .step:last-child{padding-bottom:0}
+  .step .dot{
+    position:absolute;left:0;top:0;width:36px;height:36px;border-radius:50%;
+    background:var(--ledger);color:#fff;font-family:var(--mono);font-weight:600;font-size:14px;
+    display:flex;align-items:center;justify-content:center;border:3px solid var(--paper);
+    box-shadow:0 0 0 1.5px var(--ledger);
+  }
+  .step.gate .dot{background:var(--stamp);box-shadow:0 0 0 1.5px var(--stamp)}
+  .step h3{font-family:'Bitter',serif;font-size:16.5px;font-weight:800;padding-top:5px}
+  .step .who{margin:2px 0 6px}
+  .step p{font-size:14px;color:var(--ink-soft);margin-bottom:8px;max-width:56ch}
+  .step .rows{font-size:12px;color:var(--pencil);font-family:var(--mono);letter-spacing:.05em;text-transform:uppercase;font-weight:600;margin-bottom:3px}
+
+  /* stamp */
+  .stampwrap{margin:10px 0 4px}
+  .stamp{
+    display:inline-block;transform:rotate(-6deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:8px;
+    font-family:var(--mono);font-weight:600;letter-spacing:.18em;font-size:14px;
+    padding:6px 16px;text-transform:uppercase;
+    -webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .85 0'/%3E%3C/filter%3E%3Crect width='120' height='60' filter='url(%23n)' opacity='.55'/%3E%3Crect width='120' height='60' opacity='.75'/%3E%3C/svg%3E");
+    -webkit-mask-size:cover;mask-size:cover;
+  }
+
+  /* ---------- 5. approval pipeline ---------- */
+  .pipe{display:flex;flex-direction:column;gap:0;margin-top:6px}
+  @media(min-width:640px){.pipe{flex-direction:row;align-items:stretch}}
+  .pstage{
+    flex:1;background:#fff;border:1.5px solid var(--rule);border-radius:10px;
+    padding:14px;position:relative;text-align:left;
+  }
+  .pstage h4{font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+  .pstage p{font-size:12.5px;color:var(--ink-soft);margin-top:4px;line-height:1.45}
+  .pstage.final{border-color:var(--ledger);background:var(--ledger-tint)}
+  .pstage.blocked{border-color:var(--stamp)}
+  .parrow{
+    align-self:center;color:var(--pencil);font-size:18px;line-height:1;
+    padding:4px 0;text-align:center;width:100%;
+  }
+  @media(min-width:640px){.parrow{width:auto;padding:0 6px;display:flex;align-items:center}}
+  .pipe-note{margin-top:14px;font-size:14px;color:var(--ink-soft);max-width:58ch}
+  .pipe-note strong{color:var(--stamp)}
+
+  /* ---------- 6. ledger ---------- */
+  .ledgerbook{
+    background:
+      repeating-linear-gradient(to bottom, #fff 0 35px, var(--rule) 35px 36px),
+      #fff;
+    border:1.5px solid var(--ink);border-radius:10px;overflow:hidden;
+  }
+  .ledgerbook .lhead{
+    display:grid;grid-template-columns:78px 1fr 84px;gap:10px;
+    background:var(--ink);color:var(--paper);font-family:var(--mono);
+    font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;
+    padding:7px 14px;
+  }
+  .lrow{
+    display:grid;grid-template-columns:78px 1fr 84px;gap:10px;align-items:baseline;
+    padding:7px 14px;height:36px;overflow:hidden;
+  }
+  .lrow .lt{font-family:var(--mono);font-size:11px;color:var(--pencil)}
+  .lrow .lv{font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lrow .la{font-size:11px;text-align:right}
+  .ledger-note{margin-top:14px;font-size:14px;color:var(--ink-soft);max-width:58ch}
+
+  footer{
+    margin-top:80px;border-top:3px double var(--ledger);padding-top:18px;
+    font-family:var(--mono);font-size:12px;color:var(--pencil);
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap" style="padding-bottom:0">
+    <div class="eyebrow">Phase 0 · Spec 1 · Visual companion</div>
+    <h1>One database, many faces.</h1>
+    <p class="lede">This is the paper version of the schema: <strong>where every piece of your business lives</strong>, how the pieces connect, and how a single Facebook lead travels through the whole system — stamp by stamp.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ================= 1. THE BUILDING ================= -->
+  <section id="building">
+    <div class="sec-label"><span class="no">§1</span><h2>The building — who logs in where</h2></div>
+    <p class="sec-intro">Three doors into one building. Inside, <em>your account</em> holds your businesses like labelled folders — and each business holds an identical set of six filing cabinets.</p>
+
+    <div class="doors">
+      <div class="door"><span class="url">www.[name].com</span><p>The shop window. Tells the world what you sell. Phase 2.</p></div>
+      <div class="door"><span class="url">app.[name].com</span><p>The one workroom. Every owner, every employee, every tenant logs in here — identity decides the view.</p></div>
+      <div class="door"><span class="url">console.[name].com</span><p>Your god-view over all accounts, billing and health. Internal only.</p></div>
+    </div>
+
+    <div class="account">
+      <span class="plate">Account · Mudassir</span>
+      <p class="who">Billing, ownership and account-wide ("Global") memory live at this level.</p>
+      <div class="biz-row">
+        <div class="biz">
+          <span class="foldertab">BUSINESS · X LAW</span>
+          <div class="cabinets-mini">
+            <div class="cab-mini">CONTACTS</div><div class="cab-mini">CASES</div><div class="cab-mini">TASKS</div>
+            <div class="cab-mini">COMMS</div><div class="cab-mini">CONTENT</div><div class="cab-mini">MONEY</div>
+          </div>
+          <p>Customer zero. The law template renames "engagements" to <strong>cases</strong> — same cabinets, its own vocabulary.</p>
+          <div class="tenant-domain">Public faces live on the tenant's own domain → <span class="url">xlaw.co.uk</span> (generated website, later the client portal). Clients see their brand, never ours.</div>
+        </div>
+        <div class="biz ghost">
+          <span class="foldertab">BUSINESS · BARAKAHX</span>
+          <div class="cabinets-mini">
+            <div class="cab-mini">CONTACTS</div><div class="cab-mini">PROJECTS</div><div class="cab-mini">TASKS</div>
+            <div class="cab-mini">COMMS</div><div class="cab-mini">CONTENT</div><div class="cab-mini">MONEY</div>
+          </div>
+          <p>Second business, same account — kept in from day one so cross-business walls are tested with a real neighbour, not a theoretical one.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="note-card"><strong>The wall between businesses is enforced by the database itself</strong> (Row-Level Security): a query from inside X Law physically cannot see BarakahX's rows — the same wall that will later separate one paying tenant from another.</div>
+  </section>
+
+  <!-- ================= 2. SIX CABINETS ================= -->
+  <section id="cabinets">
+    <div class="sec-label"><span class="no">§2</span><h2>The six cabinets — where everything is filed</h2></div>
+    <p class="sec-intro">Six <em>domains</em>, not six tables — each cabinet has a few drawers inside. Every tool you'll ever generate (CRM, portal, LMS, invoicing) is just a different window onto these same cabinets. Nothing is ever copied or synced.</p>
+
+    <div class="cabinet-grid">
+      <div class="cabinet"><span class="foldertab">01 · WHO</span><div class="cabinet-inner">
+        <h3>Contacts</h3><div class="law">X Law: clients, sponsors, dependants</div>
+        <p>Every person and organisation you know — with all their phone numbers, emails and GDPR consents, and how they relate to each other.</p>
+        <div class="drawers"><span class="dl">Drawers</span><span class="tbl">contacts</span><span class="tbl">contact_channels</span><span class="tbl">contact_relationships</span></div>
+      </div></div>
+
+      <div class="cabinet"><span class="foldertab">02 · THE WORK</span><div class="cabinet-inner">
+        <h3>Engagements</h3><div class="law">X Law: cases · LMS: enrolments</div>
+        <p>The container of work over time, moving through pipeline stages. The vertical template only renames it — a visa case and a course enrolment are the same machinery.</p>
+        <div class="drawers"><span class="dl">Drawers</span><span class="tbl">engagements</span><span class="tbl">engagement_participants</span><span class="tbl">stage_history</span></div>
+      </div></div>
+
+      <div class="cabinet"><span class="foldertab">03 · TO-DO</span><div class="cabinet-inner">
+        <h3>Tasks</h3><div class="law">Assigned to humans or to Light</div>
+        <p>What must be done, by whom, by when. One column decides whether the assignee is a person or the AI — so the staff task board and Light's to-do list are the same surface.</p>
+        <div class="drawers"><span class="dl">Drawers</span><span class="tbl">tasks</span></div>
+      </div></div>
+
+      <div class="cabinet"><span class="foldertab">04 · MESSAGES</span><div class="cabinet-inner">
+        <h3>Communications</h3><div class="law">Email · WhatsApp · calls · notes</div>
+        <p>Every message in and out, on every channel, in one thread history. Outbound messages climb a status ladder that ends at a human stamp (§5).</p>
+        <div class="drawers"><span class="dl">Drawers</span><span class="tbl">comm_threads</span><span class="tbl">communications</span></div>
+      </div></div>
+
+      <div class="cabinet"><span class="foldertab">05 · PUBLISHED</span><div class="cabinet-inner">
+        <h3>Content</h3><div class="law">Website · funnels · courses · templates</div>
+        <p>Everything you publish or teach: pages, posts, email templates, courses and lessons — versioned, and only ever published with human approval.</p>
+        <div class="drawers"><span class="dl">Drawers</span><span class="tbl">content_items</span><span class="tbl">content_versions</span></div>
+      </div></div>
+
+      <div class="cabinet"><span class="foldertab">06 · MONEY</span><div class="cabinet-inner">
+        <h3>Money</h3><div class="law">In, owed — and spent on ads</div>
+        <p>Invoices, payments, and imported ad spend side by side. Money out (Meta) + leads in + money in (invoices) is the ROI loop no standalone tool can see whole.</p>
+        <div class="drawers"><span class="dl">Drawers</span><span class="tbl">invoices</span><span class="tbl">invoice_lines</span><span class="tbl">payments</span><span class="tbl">spend_records</span></div>
+      </div></div>
+    </div>
+
+    <div class="note-card"><strong>Behind the cabinets</strong> sit the shared fittings every drawer uses: <span class="tbl">actors</span> (who did it — human, Light, a workflow or an integration), <span class="tbl">events</span> (the ledger, §6), <span class="tbl">files</span> (documents), and the template configuration that renames and re-stages everything per vertical.</div>
+  </section>
+
+  <!-- ================= 3. CONNECTION MAP ================= -->
+  <section id="map">
+    <div class="sec-label"><span class="no">§3</span><h2>How the cabinets connect</h2></div>
+    <p class="sec-intro">The engagement (case) sits at the centre: it belongs to a contact, and it collects the tasks, messages and money that happen along the way. Content stands slightly apart — until a course enrolment ties a contact to it <em>through an engagement</em>.</p>
+
+    <div class="mapbox">
+      <svg viewBox="0 0 680 520" width="100%" role="img" aria-label="Relationship map: contact connects to engagement; engagement connects to tasks, communications and money; content connects to engagement via enrolments">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#202B38"/>
+          </marker>
+        </defs>
+        <!-- lines -->
+        <line x1="340" y1="118" x2="340" y2="196" stroke="#202B38" stroke-width="2" marker-end="url(#arr)"/>
+        <text x="352" y="164" font-family="IBM Plex Mono" font-size="12" fill="#5A6371">has one or many</text>
+
+        <line x1="253" y1="286" x2="120" y2="380" stroke="#202B38" stroke-width="2" marker-end="url(#arr)"/>
+        <line x1="340" y1="298" x2="340" y2="380" stroke="#202B38" stroke-width="2" marker-end="url(#arr)"/>
+        <line x1="427" y1="286" x2="560" y2="380" stroke="#202B38" stroke-width="2" marker-end="url(#arr)"/>
+        <text x="150" y="330" font-family="IBM Plex Mono" font-size="12" fill="#5A6371">spawns</text>
+        <text x="352" y="345" font-family="IBM Plex Mono" font-size="12" fill="#5A6371">collects</text>
+        <text x="465" y="330" font-family="IBM Plex Mono" font-size="12" fill="#5A6371">bills &amp; earns</text>
+
+        <path d="M 588 240 C 640 240 640 150 560 122" fill="none" stroke="#9A937F" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+        <text x="575" y="185" font-family="IBM Plex Mono" font-size="12" fill="#9A937F">enrolment</text>
+
+        <!-- contact -->
+        <g>
+          <rect x="240" y="52" width="200" height="66" rx="10" fill="#fff" stroke="#202B38" stroke-width="2"/>
+          <text x="340" y="80" text-anchor="middle" font-family="Bitter" font-weight="800" font-size="19" fill="#202B38">Contact</text>
+          <text x="340" y="102" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#2E6B4F">a person or organisation</text>
+        </g>
+        <!-- content -->
+        <g>
+          <rect x="470" y="88" width="150" height="58" rx="10" fill="#fff" stroke="#9A937F" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="545" y="112" text-anchor="middle" font-family="Bitter" font-weight="800" font-size="16" fill="#202B38">Content</text>
+          <text x="545" y="131" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" fill="#5A6371">site · courses</text>
+        </g>
+        <!-- engagement -->
+        <g>
+          <rect x="228" y="200" width="224" height="98" rx="12" fill="#E7EFE9" stroke="#2E6B4F" stroke-width="2.5"/>
+          <text x="340" y="234" text-anchor="middle" font-family="Bitter" font-weight="800" font-size="21" fill="#20475F">Engagement</text>
+          <text x="340" y="256" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#2E6B4F">"case" at X Law</text>
+          <text x="340" y="279" text-anchor="middle" font-family="IBM Plex Mono" font-size="11.5" fill="#5A6371">moves stage → stage → outcome</text>
+        </g>
+        <!-- tasks -->
+        <g>
+          <rect x="40" y="384" width="160" height="62" rx="10" fill="#fff" stroke="#202B38" stroke-width="2"/>
+          <text x="120" y="410" text-anchor="middle" font-family="Bitter" font-weight="800" font-size="17" fill="#202B38">Tasks</text>
+          <text x="120" y="430" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" fill="#5A6371">human or Light</text>
+        </g>
+        <!-- comms -->
+        <g>
+          <rect x="252" y="384" width="176" height="62" rx="10" fill="#fff" stroke="#202B38" stroke-width="2"/>
+          <text x="340" y="410" text-anchor="middle" font-family="Bitter" font-weight="800" font-size="17" fill="#202B38">Communications</text>
+          <text x="340" y="430" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" fill="#5A6371">email · WhatsApp · calls</text>
+        </g>
+        <!-- money -->
+        <g>
+          <rect x="480" y="384" width="160" height="62" rx="10" fill="#fff" stroke="#202B38" stroke-width="2"/>
+          <text x="560" y="410" text-anchor="middle" font-family="Bitter" font-weight="800" font-size="17" fill="#202B38">Money</text>
+          <text x="560" y="430" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" fill="#5A6371">invoices · ad spend</text>
+        </g>
+        <!-- events strip -->
+        <rect x="40" y="478" width="600" height="30" rx="6" fill="#202B38"/>
+        <text x="340" y="498" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#FBF9F3" letter-spacing="2">EVERY ARROW ABOVE WRITES A LINE IN THE LEDGER (§6)</text>
+      </svg>
+      <div class="maplegend">
+        <span><span class="lg-line"></span> direct relationship</span>
+        <span><span class="lg-dash"></span> via an enrolment engagement</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. JOURNEY ================= -->
+  <section id="journey">
+    <div class="sec-label"><span class="no">§4</span><h2>The journey of one Facebook lead</h2></div>
+    <p class="sec-intro">The MVP workflow, drawer by drawer. Gold tags are <em>Light acting</em>; the red step is where <em>you</em> hold the stamp. This exact sequence is the acceptance test the schema must pass.</p>
+
+    <div class="journey">
+      <div class="step"><span class="dot">1</span>
+        <h3>A lead lands from Facebook</h3>
+        <div class="who"><span class="tag robot">integration</span></div>
+        <p>Ayesha fills in your lead form at 9:14pm. Within seconds she exists in the system, filed against the exact ad that found her.</p>
+        <div class="rows">New rows in</div>
+        <span class="tbl">contacts</span><span class="tbl">contact_channels</span><span class="tbl">engagements</span><span class="tbl">events</span>
+      </div>
+
+      <div class="step"><span class="dot">2</span>
+        <h3>Light opens the playbook</h3>
+        <div class="who"><span class="tag light">Light</span></div>
+        <p>The orchestrator starts the nurture sequence and writes itself a to-do list — draft the first email, schedule the WhatsApp follow-up, retry the call later today.</p>
+        <div class="rows">New rows in</div>
+        <span class="tbl">tasks</span><span class="tbl">events</span>
+      </div>
+
+      <div class="step"><span class="dot">3</span>
+        <h3>A reply is drafted — not sent</h3>
+        <div class="who"><span class="tag light">Light</span></div>
+        <p>Light writes the email and the WhatsApp message. They sit at <em>pending approval</em> and appear in your approval inbox — which is nothing more than a window onto rows in this state.</p>
+        <div class="rows">New rows in</div>
+        <span class="tbl">communications</span> <span class="tbl">events</span>
+      </div>
+
+      <div class="step gate"><span class="dot">4</span>
+        <h3>You stamp it — now it sends</h3>
+        <div class="who"><span class="tag human">Mudassir</span></div>
+        <p>One tap in the inbox. The database records <em>your</em> name as the approver, and only then does the message leave the building. Retries and later touches queue up the same way.</p>
+        <div class="stampwrap"><span class="stamp">Human approved</span></div>
+        <div class="rows">Updated / new rows in</div>
+        <span class="tbl">communications</span><span class="tbl">events</span>
+      </div>
+
+      <div class="step"><span class="dot">5</span>
+        <h3>Consultation booked</h3>
+        <div class="who"><span class="tag light">Light</span> <span class="tag human">Mudassir</span></div>
+        <p>Ayesha picks a slot. The case moves to <em>Consultation booked</em>, the calendar entry is linked, the confirmation goes out through the same stamped pipeline.</p>
+        <div class="rows">New rows in</div>
+        <span class="tbl">stage_history</span><span class="tbl">communications</span><span class="tbl">events</span>
+      </div>
+
+      <div class="step"><span class="dot">6</span>
+        <h3>Dead leads close themselves</h3>
+        <div class="who"><span class="tag light">Light</span></div>
+        <p>A different lead never answers after N touches. Light closes the case as <em>Unresponsive</em>, marks the contact, and stops spending effort on it — all on the record.</p>
+        <div class="rows">Updated rows in</div>
+        <span class="tbl">engagements</span><span class="tbl">contacts</span><span class="tbl">events</span>
+      </div>
+
+      <div class="step"><span class="dot">7</span>
+        <h3>The outcome teaches Meta</h3>
+        <div class="who"><span class="tag light">Light</span></div>
+        <p>Won cases (with their value) and junk leads are reported back to Meta after a 24-hour cooling window — so the algorithm learns to send more Ayeshas and fewer time-wasters. Imported ad spend closes the loop: spend → lead → outcome → smarter spend.</p>
+        <div class="rows">Rows in</div>
+        <span class="tbl">events</span><span class="tbl">spend_records</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. APPROVAL PIPELINE ================= -->
+  <section id="gate">
+    <div class="sec-label"><span class="no">§5</span><h2>The stamp — approval built into the furniture</h2></div>
+    <p class="sec-intro">Every outbound message, publication and invoice climbs this ladder. It isn't a polite instruction to the AI — it's a rule of the database itself.</p>
+
+    <div class="pipe">
+      <div class="pstage"><h4>Draft</h4><p>Light writes it. Nobody outside can see it.</p></div>
+      <div class="parrow">→</div>
+      <div class="pstage"><h4>Pending approval</h4><p>Appears in your approval inbox, waiting.</p></div>
+      <div class="parrow">→</div>
+      <div class="pstage blocked"><h4>Human stamp</h4><p>A <strong style="color:var(--stamp)">human</strong> approver's name is written onto the row. Light cannot forge this.</p></div>
+      <div class="parrow">→</div>
+      <div class="pstage final"><h4>Sent</h4><p>Only now does the send pipeline accept it.</p></div>
+    </div>
+    <p class="pipe-note"><strong>The send pipeline physically refuses</strong> any message whose approver is not a human. This is the "AI COO, human CEO" promise expressed as a database constraint — the strongest form a promise can take.</p>
+  </section>
+
+  <!-- ================= 6. LEDGER ================= -->
+  <section id="ledger">
+    <div class="sec-label"><span class="no">§6</span><h2>The ledger — nothing is ever erased</h2></div>
+    <p class="sec-intro">Underneath everything runs one append-only book of record. Every layer writes to it; no one — not even you — can edit or delete a line. This is the audit trail, and it is built <em>first</em>.</p>
+
+    <div class="ledgerbook">
+      <div class="lhead"><span>Time</span><span>What happened</span><span>Who</span></div>
+      <div class="lrow"><span class="lt">21:14:03</span><span class="lv">contact.created — Ayesha K.</span><span class="la"><span class="tag robot">meta sync</span></span></div>
+      <div class="lrow"><span class="lt">21:14:04</span><span class="lv">engagement.created — Spouse visa enquiry</span><span class="la"><span class="tag robot">meta sync</span></span></div>
+      <div class="lrow"><span class="lt">21:14:09</span><span class="lv">communication.drafted — intro email · cost 12¢</span><span class="la"><span class="tag light">Light</span></span></div>
+      <div class="lrow"><span class="lt">21:38:52</span><span class="lv">communication.approved — intro email</span><span class="la"><span class="tag human">Mudassir</span></span></div>
+      <div class="lrow"><span class="lt">21:38:53</span><span class="lv">communication.sent — intro email</span><span class="la"><span class="tag robot">pipeline</span></span></div>
+      <div class="lrow"><span class="lt">+2 days</span><span class="lv">engagement.stage_changed — Consultation booked</span><span class="la"><span class="tag light">Light</span></span></div>
+      <div class="lrow"><span class="lt">+9 days</span><span class="lv">meta.conversion_fired — won · £1,200</span><span class="la"><span class="tag light">Light</span></span></div>
+    </div>
+    <p class="ledger-note">Notice the <em>cost</em> written against Light's draft: AI spend is audited per action, which is what makes the "this costs ~$4 — proceed?" gate possible. The native audit surface renders these lines as plain English sentences for non-technical readers — the schema's only job is to never lose a fact.</p>
+  </section>
+
+  <footer>
+    <span>SPEC 1 · v0.2 · VISUAL COMPANION</span>
+    <span>CREATE YOU AI (WORKING TITLE)</span>
+  </footer>
+</div>
+</body>
+</html>
