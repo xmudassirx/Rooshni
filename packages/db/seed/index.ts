@@ -27,6 +27,19 @@ const IDS = {
   membershipMudassir: "01980000-0000-7000-8000-000000000021",
 } as const;
 
+// Spec 3 §7/§9 — Light's Phase 1 bundle (the AI COO cut down to the surfaces
+// that exist): enquiries execute for Level 2 work, comms execute to draft and
+// submit into the approval queue — never to approve; approvals.* is
+// structurally unholdable by non-humans. The Meta integration holds enquiries
+// execute because ingesting a lead creates contacts, engagements and stage
+// history — Level 2 acts under the same grant system (§2.1).
+const GRANTS = [
+  { id: "01980000-0000-7000-8000-000000000401", grantee: IDS.actorLight, tool: "enquiries", access: "execute" },
+  { id: "01980000-0000-7000-8000-000000000402", grantee: IDS.actorLight, tool: "comms.email", access: "execute" },
+  { id: "01980000-0000-7000-8000-000000000403", grantee: IDS.actorLight, tool: "comms.whatsapp", access: "execute" },
+  { id: "01980000-0000-7000-8000-000000000404", grantee: IDS.actorMeta, tool: "enquiries", access: "execute" },
+] as const;
+
 const OWNER_EMAIL = "xmudassirx@gmail.com";
 
 // Spec 1 §6 — the X Law pipeline (provisional pending the two-week lead log).
@@ -231,6 +244,55 @@ async function seedTenant(db: SupabaseClient, ownerUserId: string): Promise<void
 }
 
 /**
+ * Spec 3 Phase 1 grants. Insert-only on fixed ids (grant terms are immutable
+ * — the 0014 trigger refuses updates), with a grant.issued event on first
+ * insert. Granted by Mudassir (the owner), business scope, standing, via chat.
+ */
+async function seedGrants(db: SupabaseClient): Promise<void> {
+  for (const grant of GRANTS) {
+    const { data: existing, error: lookupError } = await db
+      .from("grants")
+      .select("id")
+      .eq("id", grant.id)
+      .maybeSingle();
+    if (lookupError) throw new Error(`grant lookup failed: ${lookupError.message}`);
+    if (existing) continue;
+
+    const scope = { level: "business", ref: IDS.business };
+    const { error } = await db.from("grants").insert({
+      id: grant.id,
+      business_id: IDS.business,
+      created_by: IDS.actorMudassir,
+      grantee_actor_id: grant.grantee,
+      tool: grant.tool,
+      access: grant.access,
+      scope,
+      duration: "standing",
+      granted_by_actor_id: IDS.actorMudassir,
+      via: "chat",
+    });
+    if (error) throw new Error(`grant insert (${grant.tool}) failed: ${error.message}`);
+
+    await emitEvent(db, {
+      business_id: IDS.business,
+      actor_id: IDS.actorMudassir,
+      action: "grant.issued",
+      entity_type: "grant",
+      entity_id: grant.id,
+      payload: {
+        grantee_actor_id: grant.grantee,
+        tool: grant.tool,
+        access: grant.access,
+        scope,
+        duration: "standing",
+        via: "chat",
+      },
+    });
+    console.log(`Grant issued: ${grant.tool} (${grant.access}) → ${grant.grantee === IDS.actorLight ? "Light" : "Meta lead sync"}.`);
+  }
+}
+
+/**
  * Spec 1 §7 steps 1–2 for one lead: the integration actor creates the
  * contact, channels, engagement and events; the call task stands in for the
  * workflow engine's step 2 until Spec 4's tables land in Session 4.
@@ -410,6 +472,8 @@ async function main() {
 
   const ownerUserId = await ensureOwnerAuthUser(db);
   await seedTenant(db, ownerUserId);
+  // Grants before leads: the Meta integration needs enquiries execute to ingest.
+  await seedGrants(db);
 
   for (const fixture of metaLeadFixtures) {
     await ingestMetaLead(db, fixture);
