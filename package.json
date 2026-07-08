@@ -1,0 +1,25 @@
+{
+  "name": "rooshni",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@11.8.0",
+  "description": "Rooshni (working title: Create You AI) — an AI operating system for businesses. One database, many faces.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:migrate": "npm run migrate --workspace=@rooshni/db",
+    "db:seed": "npm run seed --workspace=@rooshni/db"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
