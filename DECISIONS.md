@@ -94,3 +94,56 @@ is enforced in the database; the app being well-behaved is not a control.
 
 15. **No self-granting** — enforced as a check constraint
     (`grants_no_self_granting`), the Level 4 example of §4 made structural.
+
+## Session 3 (8 July 2026) — the Approval Inbox, all approved
+
+16. **The approval door is closed like the stage door** (the decision 12
+    precedent applied to communications). Direct UPDATE of
+    `communications.status`, `approved_by_actor_id` and the rejection record
+    is revoked for every API role; the only paths are
+    `public.submit_communication()`, `public.approve_communication()` and
+    `public.reject_communication()`. Consequence, on the record: the send
+    session must add its own mark-as-sent pipeline function — it inherits a
+    locked door, not a gap.
+
+17. **Rejection is recorded on the row as well as the ledger** — three
+    columns added to `communications` (`rejected_at`, `rejected_by_actor_id`,
+    `rejection_reason`, all-or-none constraint); Spec 1 §4.4 did not
+    enumerate them (same class of addition as decision 4). Reject returns
+    the item to `draft` — the drafter's queue — and the reason also travels
+    to the ledger as `communication.rejected`.
+
+18. **Rejecting requires the same authority as approving** (human +
+    `approvals.comms` execute, or owner): refusing the stamp is exercising
+    stamp authority. Spec 3 §6 lists Reject among the approver's one-tap
+    actions.
+
+19. **Phase 1 pre-flight check set** — everything deterministically
+    checkable in the database today: body present; no unresolved `{{…}}`
+    template variables; per-channel consent on file (email→email,
+    whatsapp→whatsapp, sms/call→phone; meeting/portal have no consent
+    dimension yet); a body that references an attachment must actually carry
+    one (`file_links`). Enforced by trigger on any transition into
+    `approved`/`sent` — approving broken things is impossible, not
+    discouraged. Link resolution and no-go/standards compliance are not
+    deterministically checkable in SQL and arrive with the app layer/Light.
+    **Caveat (Mudassir):** the UI must never render an unearned tick —
+    categories pre-flight has not checked display as *pending*, never green.
+
+20. **Inbox contents Phase 1** = communications and content in
+    `pending_approval` plus tasks in `awaiting_approval`. Spend gates and
+    grant requests (Spec 3 §6) join the `approval_inbox` union when the
+    spend pipeline and the grant-request flow exist; the view shape already
+    accommodates them.
+
+21. **Insert-at-approved stays legal** for an authorised human — drafting
+    and approving your own message in one act (e.g. writing an email from
+    Conversations); every trigger, pre-flight included, fires on that
+    insert. The column closure is on UPDATE transitions, where an approval
+    identity could otherwise be smuggled onto someone else's draft.
+
+22. **The seed demonstrates the full trail as Mudassir in dev** — one Light
+    draft approved, one rejected with a reason, exercising rpc + emitEvent +
+    `approval_event_id` end to end. Dev-only demonstration data, listed on
+    GO-LIVE.md for the go-live purge (Spec 4 §6 measures acceptance from the
+    ledger).
