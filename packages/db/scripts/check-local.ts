@@ -87,6 +87,7 @@ async function main() {
   const ids = {
     user: "00000000-0000-4000-8000-000000000001",
     stranger: "00000000-0000-4000-8000-000000000002",
+    member: "00000000-0000-4000-8000-000000000003",
   };
 
   const fixture = await db.query<{
@@ -138,6 +139,30 @@ async function main() {
     [ids.user]
   );
   const f = fixture.rows[0]!;
+
+  // Session 2 fixtures: a non-owner human (member) and a second agent that
+  // holds no grants at all — the refusal cases of Spec 3.
+  const fixture2 = await db.query<{ human2_id: string; agent2_id: string }>(
+    `
+    with u2 as (
+      insert into auth.users (id, email) values ($1, 'member@example.test') returning id
+    ), mem2 as (
+      insert into public.memberships (user_id, business_id, role)
+      values ($1, $2, 'member') returning id
+    ), human2 as (
+      insert into public.actors (account_id, actor_type, display_name, user_id)
+      values ($3, 'human', 'Test Member', $1) returning id
+    ), agent2 as (
+      insert into public.actors (account_id, actor_type, display_name)
+      values ($3, 'agent', 'Ungranted Agent') returning id
+    )
+    select
+      (select id from human2) as human2_id,
+      (select id from agent2) as agent2_id
+    `,
+    [ids.member, f.business_id, f.account_id]
+  );
+  const h2 = fixture2.rows[0]!;
 
   console.log("\nStructural rules:");
 
@@ -239,6 +264,102 @@ async function main() {
       `insert into public.content_items (business_id, created_by, content_type, title, slug, state, published_by_actor_id)
        values ($1, $2, 'page', 'Test', 'test', 'published', $3)`,
       [f.business_id, f.agent_id, f.agent_id]
+    )
+  );
+
+  // ---------------------------------------------------------------------
+  // Spec 3 — the grants engine: levels as data, meta-rules on grants.
+  // ---------------------------------------------------------------------
+  console.log("\nSpec 3 — grants engine:");
+
+  const grantSql = `insert into public.grants
+    (business_id, created_by, grantee_actor_id, tool, access, scope, duration, expires_at, granted_by_actor_id, via)
+    values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10) returning id`;
+  const bizScope = JSON.stringify({ level: "business", ref: f.business_id });
+
+  await expectOk("permission levels 0–4 exist as data", async () => {
+    const r = await db.query<{ n: number; mx: number }>(
+      `select count(*)::int as n, max(level)::int as mx from public.permission_levels`
+    );
+    if (r.rows[0]!.n !== 5 || r.rows[0]!.mx !== 4) {
+      throw new Error(`saw ${r.rows[0]!.n} levels, max ${r.rows[0]!.mx}`);
+    }
+  });
+
+  await expectError("a non-human granter is refused", /HUMAN actor/, () =>
+    db.query(grantSql, [f.business_id, f.human_id, h2.agent2_id, "calendar", "view", bizScope, "standing", null, f.agent_id, "chat"])
+  );
+
+  await expectError("self-granting is refused (Level 4)", /grants_no_self_granting/, () =>
+    db.query(grantSql, [f.business_id, f.human_id, f.human_id, "calendar", "view", bizScope, "standing", null, f.human_id, "chat"])
+  );
+
+  await expectError(
+    "an agent cannot hold approvals.* (the AI cannot hold the stamp)",
+    /unholdable/,
+    () =>
+      db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "approvals.comms", "execute", bizScope, "standing", null, f.human_id, "chat"])
+  );
+
+  await expectError("a human without settings.team cannot grant", /settings\.team/, () =>
+    db.query(grantSql, [f.business_id, h2.human2_id, h2.agent2_id, "calendar", "view", bizScope, "standing", null, h2.human2_id, "chat"])
+  );
+
+  await expectOk("owner grants settings.team to a member; the member can then grant", async () => {
+    await db.query(grantSql, [f.business_id, f.human_id, h2.human2_id, "settings.team", "execute", bizScope, "standing", null, f.human_id, "dashboard"]);
+    await db.query(grantSql, [f.business_id, h2.human2_id, h2.agent2_id, "calendar", "view", bizScope, "standing", null, h2.human2_id, "chat"]);
+  });
+
+  await expectError("a business-scoped grant must reference its own business", /its own business/, () =>
+    db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "calendar", "view", JSON.stringify({ level: "business", ref: ids.user }), "standing", null, f.human_id, "chat"])
+  );
+
+  await expectError("a scope without a ref is refused (no null scopes, ever)", /grants_scope_shape/, () =>
+    db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "calendar", "view", JSON.stringify({ level: "business" }), "standing", null, f.human_id, "chat"])
+  );
+
+  await expectError("standing grants cannot carry an expiry", /grants_duration_expiry/, () =>
+    db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "calendar", "view", bizScope, "standing", new Date().toISOString(), f.human_id, "chat"])
+  );
+
+  await expectError("a tool outside the registry cannot be granted", /grants_tool_fkey|foreign key/, () =>
+    db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "made.up", "view", bizScope, "standing", null, f.human_id, "chat"])
+  );
+
+  await expectOk("level resolution: tenant overrides raise, never lower", async () => {
+    await db.query(
+      `update public.businesses set settings = '{"tool_level_overrides":{"comms.email":1,"calendar":3}}'::jsonb where id = $1`,
+      [f.business_id]
+    );
+    const r = await db.query<{ email: number; cal: number }>(
+      `select
+         private.resolve_tool_level($1, 'comms.email')::int as email,
+         private.resolve_tool_level($1, 'calendar')::int as cal`,
+      [f.business_id]
+    );
+    if (r.rows[0]!.email !== 3) throw new Error(`comms.email floor lowered to ${r.rows[0]!.email}`);
+    if (r.rows[0]!.cal !== 3) throw new Error(`calendar raise ignored: ${r.rows[0]!.cal}`);
+  });
+
+  await expectError("grant terms are immutable after issue", /immutable/, () =>
+    db.query(
+      `update public.grants set access = 'execute' where grantee_actor_id = $1 and tool = 'calendar' and revoked_at is null`,
+      [h2.agent2_id]
+    )
+  );
+
+  await expectOk("the owner revokes the agent's calendar grant (one-tap, kept for audit)", () =>
+    db.query(
+      `update public.grants set revoked_at = now(), revoked_by_actor_id = $1
+       where grantee_actor_id = $2 and tool = 'calendar'`,
+      [f.human_id, h2.agent2_id]
+    )
+  );
+
+  await expectError("a revoked grant cannot be altered", /permanent/, () =>
+    db.query(
+      `update public.grants set revoked_at = null where grantee_actor_id = $1 and tool = 'calendar'`,
+      [h2.agent2_id]
     )
   );
 
