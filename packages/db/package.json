@@ -10,6 +10,7 @@
     "migrate": "tsx scripts/migrate.ts",
     "seed": "tsx seed/index.ts",
     "verify": "tsx scripts/verify.ts",
+    "check-local": "tsx scripts/check-local.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "postgres": "^3.4.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
     "@types/node": "^22.20.1",
     "dotenv": "^16.5.0",
     "tsx": "^4.19.0",
