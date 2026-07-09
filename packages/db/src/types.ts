@@ -126,6 +126,149 @@ export interface ApprovalInboxRow {
   preflight_pass: boolean | null;
 }
 
+// --- Spec 4: the workflow engine ---------------------------------------------
+
+export type WorkflowDefinitionStatus = "draft" | "pending_approval" | "active" | "paused";
+export type WorkflowRunStatus = "running" | "waiting" | "blocked" | "completed" | "cancelled" | "paused";
+export type StepRunStatus =
+  | "scheduled"
+  | "running"
+  | "awaiting_approval"
+  | "completed"
+  | "skipped"
+  | "failed"
+  | "cancelled";
+export type WorkflowStepKind =
+  | "draft_comm"
+  | "create_task"
+  | "wait"
+  | "move_stage"
+  | "branch"
+  | "close"
+  | "fire_conversion"
+  | "notify";
+
+/** A real-world duration, as stored in step config. Scaled ONLY at scheduling
+ * time via scaleDurationMs() — never pre-scaled in data. */
+export interface RealDuration {
+  days?: number;
+  hours?: number;
+  minutes?: number;
+  seconds?: number;
+}
+
+/** Spec 4 §3 — workflow_steps.config: template ref, channel, assignee, wait
+ * duration, branch conditions. Phase 1 evaluator keys documented inline. */
+export interface WorkflowStepConfig {
+  /** message_templates.key (highest live version wins). */
+  template?: string;
+  channel?: string;
+  /** Used when the configured channel has no consented contact channel. */
+  fallback_channel?: string;
+  /** true = the run parks at `blocked` until the draft is stamped. */
+  await_approval?: boolean;
+  /** wait steps: how long the timer sleeps (real time; TIME_SCALE applies). */
+  wait?: RealDuration;
+  /** create_task: due offset from execution (real time; TIME_SCALE applies). */
+  due?: RealDuration;
+  title?: string;
+  description?: string;
+  /** Phase 1: "owner" resolves to the engagement's accountable human. */
+  assignee?: string;
+  priority?: string;
+  /** stage_definitions.key for move_stage/close steps. */
+  stage?: string;
+  /** Condition gate: the step runs only when this holds (unknown/unobservable
+   * conditions resolve false and the step is SKIPPED on the ledger). */
+  when?: string;
+  /** Nurture touches: an inbound reply cancels the remaining queued touches. */
+  cancel_on_reply?: boolean;
+  /** fire_conversion: which Meta signal the (Phase 1: STUB) executor logs. */
+  signal?: string;
+  cooling?: RealDuration;
+  [key: string]: unknown;
+}
+
+export interface WorkflowDefinitionRow {
+  id: string;
+  business_id: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  archived_at: string | null;
+  attributes: Record<string, unknown>;
+  external_refs: unknown[];
+  key: string;
+  version: number;
+  template_id: string;
+  trigger: { action?: string; source?: string; [key: string]: unknown };
+  status: WorkflowDefinitionStatus;
+  description_plain: string;
+  approved_by_actor_id: string | null;
+}
+
+export interface WorkflowStepRow {
+  id: string;
+  business_id: string;
+  definition_id: string;
+  key: string;
+  sort_order: number;
+  kind: WorkflowStepKind;
+  config: WorkflowStepConfig;
+  gate_level: number | null;
+  archived_at: string | null;
+}
+
+export interface WorkflowRunRow {
+  id: string;
+  business_id: string;
+  created_by: string;
+  definition_id: string;
+  engagement_id: string;
+  status: WorkflowRunStatus;
+  current_step: string | null;
+  started_at: string;
+  context: Record<string, unknown>;
+  archived_at: string | null;
+}
+
+export interface StepRunRow {
+  id: string;
+  business_id: string;
+  created_by: string;
+  run_id: string;
+  step_id: string;
+  status: StepRunStatus;
+  scheduled_for: string;
+  started_at: string | null;
+  finished_at: string | null;
+  outcome: Record<string, unknown>;
+}
+
+export interface MessageTemplateRow {
+  id: string;
+  business_id: string;
+  key: string;
+  channel: string;
+  subject: string | null;
+  body: string;
+  locale: string;
+  version: number;
+  archived_at: string | null;
+}
+
+/** What one runWorkflowTick() pass did — returned to the cron/route caller. */
+export interface TickReport {
+  runs_started: number;
+  steps_completed: number;
+  steps_skipped: number;
+  steps_failed: number;
+  steps_awaiting_approval: number;
+  runs_completed: number;
+  sends_stubbed: number;
+  errors: string[];
+}
+
 export interface EmitEventInput {
   business_id: string;
   actor_id: string;

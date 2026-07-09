@@ -11,6 +11,9 @@
     "seed": "tsx seed/index.ts",
     "verify": "tsx scripts/verify.ts",
     "check-local": "tsx scripts/check-local.ts",
+    "tick": "tsx scripts/tick.ts",
+    "tick:watch": "tsx scripts/tick.ts --watch",
+    "demo:reset": "tsx scripts/demo-reset.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -38,6 +38,11 @@ async function main() {
       "permission_levels",
       "tools",
       "grants",
+      "workflow_definitions",
+      "workflow_steps",
+      "workflow_runs",
+      "step_runs",
+      "message_templates",
     ];
 
     console.log("Row counts:");
@@ -98,6 +103,61 @@ async function main() {
           : "";
       console.log(
         `  ${String(c.status).padEnd(18)} ${String(c.channel).padEnd(9)} "${c.body}…" drafted by ${String(c.drafted_by ?? "?").padEnd(10)} ${tail}`
+      );
+    }
+
+    console.log("\nWorkflow runs (Spec 4 — where is each enquiry and why):");
+    const runs = await sql`
+      select r.id, d.key as definition, e.title as engagement, r.status,
+             s.key as current_step, r.started_at
+      from public.workflow_runs r
+      join public.workflow_definitions d on d.id = r.definition_id
+      join public.engagements e on e.id = r.engagement_id
+      left join public.workflow_steps s on s.id = r.current_step
+      order by r.started_at
+    `;
+    if (runs.length === 0) {
+      console.log("  (no runs yet — run demo:reset then tick)");
+    }
+    for (const r of runs) {
+      console.log(
+        `  ${String(r.definition).padEnd(28)} ${String(r.engagement ?? "").slice(0, 30).padEnd(32)} ${String(r.status).padEnd(10)} at ${String(r.current_step ?? "—").padEnd(18)} since ${r.started_at.toISOString()}`
+      );
+    }
+
+    // Spec 4 §2.2: "where is this enquiry in the sequence and why" must be
+    // answerable from the ledger alone. This replay reads NOTHING but events.
+    console.log("\nWorkflow replay — each run's engagement, from events alone:");
+    const replays = await sql`
+      with run_engagements as (
+        select distinct r.engagement_id, e.title
+        from public.workflow_runs r
+        join public.engagements e on e.id = r.engagement_id
+      )
+      select re.title, ev.occurred_at, ev.action, ev.entity_type,
+             a.display_name as actor,
+             ev.payload ->> 'step_key' as step_key,
+             ev.payload ->> 'reason' as reason,
+             (ev.payload ->> 'stub')::boolean as stub
+      from run_engagements re
+      join public.events ev
+        on ev.entity_id = re.engagement_id
+        or ev.payload ->> 'engagement_id' = re.engagement_id::text
+        or ev.entity_id in (
+             select r2.id from public.workflow_runs r2 where r2.engagement_id = re.engagement_id
+           )
+      left join public.actors a on a.id = ev.actor_id
+      order by re.title, ev.id
+    `;
+    let currentTitle = "";
+    for (const row of replays) {
+      if (row.title !== currentTitle) {
+        currentTitle = row.title;
+        console.log(`\n  ── ${currentTitle} ──`);
+      }
+      const detail = [row.step_key, row.reason, row.stub ? "STUB" : null].filter(Boolean).join(" · ");
+      console.log(
+        `  ${row.occurred_at.toISOString()}  ${String(row.action).padEnd(34)} by ${String(row.actor ?? "?").padEnd(16)}${detail ? ` (${detail})` : ""}`
       );
     }
 

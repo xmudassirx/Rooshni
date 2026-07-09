@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { scaleDurationMs } from "@rooshni/config";
 import { loadEnv } from "../scripts/env";
 import {
   approveCommunication,
@@ -29,6 +28,10 @@ const IDS = {
   actorMudassir: "01980000-0000-7000-8000-000000000011",
   actorLight: "01980000-0000-7000-8000-000000000012",
   actorMeta: "01980000-0000-7000-8000-000000000013",
+  // JUDGMENT (Session 6): the engine acts as its own actor (actor_type
+  // "workflow", a Spec 1 type unused until now) so ledger attribution reads
+  // honestly — Light drafts, the workflow engine schedules/moves/closes.
+  actorWorkflow: "01980000-0000-7000-8000-000000000014",
   membershipMudassir: "01980000-0000-7000-8000-000000000021",
   allowedEmailMudassir: "01980000-0000-7000-8000-000000000031",
 } as const;
@@ -44,6 +47,9 @@ const GRANTS = [
   { id: "01980000-0000-7000-8000-000000000402", grantee: IDS.actorLight, tool: "comms.email", access: "execute" },
   { id: "01980000-0000-7000-8000-000000000403", grantee: IDS.actorLight, tool: "comms.whatsapp", access: "execute" },
   { id: "01980000-0000-7000-8000-000000000404", grantee: IDS.actorMeta, tool: "enquiries", access: "execute" },
+  // Session 6: the workflow engine creates tasks and moves stages — Level 2
+  // acts under the same grant system as everyone else (Spec 4 §2.3).
+  { id: "01980000-0000-7000-8000-000000000405", grantee: IDS.actorWorkflow, tool: "enquiries", access: "execute" },
 ] as const;
 
 const OWNER_EMAIL = "xmudassirx@gmail.com";
@@ -81,11 +87,6 @@ const FIELDS = [
   { entity: "engagement", key: "visa_route", label: "Visa route", data_type: "text" },
   { entity: "engagement", key: "urgency", label: "Urgency", data_type: "text" },
 ] as const;
-
-// Spec 4 §4 step 2: call task due within 2 business hours. This number moves
-// into workflow_definitions rows in Session 4 — timers are data — and is
-// already TIME_SCALE-multiplied here, never a raw hardcoded wait.
-const CALL_TASK_DUE_REAL_MS = 2 * 60 * 60 * 1000;
 
 function stageId(index: number): string {
   return `01980000-0000-7000-8000-0000000001${String(index).padStart(2, "0")}`;
@@ -243,6 +244,12 @@ async function seedTenant(db: SupabaseClient, ownerUserId: string): Promise<void
     actor_type: "integration",
     display_name: "Meta lead sync",
   });
+  await upsert(db, "actors", {
+    id: IDS.actorWorkflow,
+    account_id: IDS.account,
+    actor_type: "workflow",
+    display_name: "Workflow engine",
+  });
 
   await upsert(
     db,
@@ -317,7 +324,11 @@ async function seedGrants(db: SupabaseClient): Promise<void> {
         via: "chat",
       },
     });
-    console.log(`Grant issued: ${grant.tool} (${grant.access}) → ${grant.grantee === IDS.actorLight ? "Light" : "Meta lead sync"}.`);
+    const granteeName =
+      grant.grantee === IDS.actorLight ? "Light"
+      : grant.grantee === IDS.actorWorkflow ? "Workflow engine"
+      : "Meta lead sync";
+    console.log(`Grant issued: ${grant.tool} (${grant.access}) → ${granteeName}.`);
   }
 }
 
@@ -463,36 +474,11 @@ async function ingestMetaLead(db: SupabaseClient, fixture: MetaLeadFixture): Pro
     payload: { stage: "new_lead", attribution },
   });
 
-  // §7 step 2 stand-in: the call task the workflow engine will spawn once
-  // Spec 4's tables exist (workflow_run_id stays null until then).
-  const dueAt = new Date(Date.now() + scaleDurationMs(CALL_TASK_DUE_REAL_MS)).toISOString();
-  const { data: task, error: taskError } = await db
-    .from("tasks")
-    .insert({
-      business_id: IDS.business,
-      created_by: IDS.actorLight,
-      engagement_id: engagement.id,
-      title: `Call ${fullName} — enquiry`,
-      description: `New Meta lead. Phone ${phone}, email ${email}. Call to make first contact.`,
-      status: "open",
-      assignee_actor_id: IDS.actorMudassir,
-      due_at: dueAt,
-      priority: "high",
-    })
-    .select("id")
-    .single();
-  if (taskError) throw new Error(`task insert failed: ${taskError.message}`);
-
-  await emitEvent(db, {
-    business_id: IDS.business,
-    actor_id: IDS.actorLight,
-    action: "task.created",
-    entity_type: "task",
-    entity_id: task.id,
-    payload: { engagement_id: engagement.id, due_at: dueAt, reason: "new_meta_lead" },
-  });
-
-  console.log(`Lead ingested: ${fullName} (${phone}) → enquiry at "New lead" + call task.`);
+  // JUDGMENT (Session 6): the Session 1 stand-in call task is gone — the
+  // workflow engine's step 2 (create_task) now owns it, spawned by the run
+  // with workflow_run_id set. Existing seeded tasks on live are untouched
+  // (they sit on the GO-LIVE purge list with the rest of the fixture data).
+  console.log(`Lead ingested: ${fullName} (${phone}) → enquiry at "New lead".`);
 }
 
 async function findLeadEngagement(
@@ -654,6 +640,253 @@ async function seedApprovalInboxDemo(db: SupabaseClient): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Session 6 — Spec 4 §4: the MVP lead workflow, defined entirely as DATA.
+// ---------------------------------------------------------------------------
+
+// The nurture and acknowledgement messages, each referencing a template (§3).
+// British English; the intro follows the 80-word standard; no advice, no fee
+// promises. Every draft rendered from these is still stamped individually.
+const TEMPLATES = [
+  {
+    id: "01980000-0000-7000-8000-000000000601",
+    key: "intro_v1",
+    channel: "email",
+    subject: "Your enquiry with {{business_name}}",
+    body:
+      "Assalamu alaikum {{first_name}}, thank you for your enquiry with {{business_name}}. " +
+      "{{owner_name}} will call you within the next two business hours to talk through your situation and how the process works. " +
+      "If another time suits you better, simply reply to this email and we will arrange the call around you. " +
+      "There is nothing you need to prepare — any dates or paperwork you have to hand will help, but none of it is essential. Speak soon.",
+  },
+  {
+    id: "01980000-0000-7000-8000-000000000602",
+    key: "missed_call_v1",
+    channel: "email",
+    subject: "Sorry we missed you — {{business_name}}",
+    body:
+      "Assalamu alaikum {{first_name}}, we tried to call you today about your enquiry but could not get through. " +
+      "No trouble at all — reply to this email with a time that suits you, or call us back whenever you are free, " +
+      "and {{owner_name}} will pick things up from there.",
+  },
+  {
+    id: "01980000-0000-7000-8000-000000000603",
+    key: "nurture_t2_v1",
+    channel: "whatsapp",
+    subject: null,
+    body:
+      "Assalamu alaikum {{first_name}}, just a gentle nudge about your enquiry with {{business_name}}. " +
+      "{{owner_name}} would still be glad to talk it through with you — reply here, or tell us a time that suits and we will call you.",
+  },
+  {
+    id: "01980000-0000-7000-8000-000000000604",
+    key: "nurture_t5_v1",
+    channel: "email",
+    subject: "What the financial requirement actually means",
+    body:
+      "Assalamu alaikum {{first_name}}, while your enquiry is open, here is the question we are asked most often: the financial requirement. " +
+      "In short, the Home Office asks the sponsor to show a minimum income or savings above a set threshold, evidenced in a very specific format — " +
+      "and many refusals happen on the format, not the money. If you would like us to look at your situation with you, " +
+      "reply to this email and {{owner_name}} will call you.",
+  },
+  {
+    id: "01980000-0000-7000-8000-000000000605",
+    key: "nurture_t9_v1",
+    channel: "email",
+    subject: "Shall we close your file?",
+    body:
+      "Assalamu alaikum {{first_name}}, we have tried to reach you a few times about your enquiry with {{business_name}} and have not heard back — " +
+      "no problem at all if the timing is not right. Unless we hear from you in the next few days we will close your file for now. " +
+      "If you would like to pick things up again, simply reply to this email or give us a call and we will reopen it straight away.",
+  },
+] as const;
+
+const WORKFLOW = {
+  definition: "01980000-0000-7000-8000-000000000701",
+  stepBase: "01980000-0000-7000-8000-0000000007",
+} as const;
+
+function workflowStepId(index: number): string {
+  return `${WORKFLOW.stepBase}${String(10 + index).padStart(2, "0")}`;
+}
+
+// Spec 4 §4 steps 1–10 as rows. Timers are REAL durations in config, scaled
+// only via timeScale() at scheduling time. Steps whose observers do not exist
+// yet carry a `when` condition; unobservable conditions skip ON THE LEDGER —
+// the definition holds the full sequence, the Phase 1 machinery runs what
+// exists.
+const MVP_STEPS = [
+  // 1 — instant acknowledgement: Light drafts, the run BLOCKS for the stamp.
+  { key: "intro_ack", kind: "draft_comm", gate: 3,
+    config: { template: "intro_v1", channel: "email", await_approval: true, sla: { seconds: 60 } } },
+  // 2 — call task for the owner. JUDGMENT: "2 business hours" runs as plain
+  // hours in Phase 1 (no business-hours calendar exists; §4 timers are
+  // provisional against the lead log anyway).
+  { key: "call_task", kind: "create_task", gate: 2,
+    config: { title: "Call {{first_name}} — enquiry", assignee: "owner", priority: "high", due: { hours: 2 },
+              description: "New Meta lead. Call {{full_name}} to make first contact and talk through their situation." } },
+  // 3 — missed-call retry (+4h): observable once call outcomes exist.
+  { key: "call_retry", kind: "create_task", gate: 2,
+    config: { when: "first_call_no_answer", title: "Second call attempt — {{first_name}}", assignee: "owner",
+              priority: "high", due: { hours: 4 } } },
+  // 4 — both calls failed → sorry-we-missed-you (email; WhatsApp if consented).
+  { key: "missed_call_message", kind: "draft_comm", gate: 3,
+    config: { when: "both_calls_failed", template: "missed_call_v1", channel: "email" } },
+  // 5 — reply handling: Light parses and qualifies — Phase 2 machinery.
+  { key: "reply_handling", kind: "branch", gate: 2,
+    config: { when: "inbound_reply_received", note: "Light qualification against template criteria — Phase 2." } },
+  // 6 — booking link once qualified (calendar session to come).
+  { key: "booking", kind: "draft_comm", gate: 3,
+    config: { when: "qualified", template: "booking_v1", channel: "email" } },
+  // 7 — consultation reminders at fixed offsets (calendar session to come).
+  { key: "reminder", kind: "notify", gate: 1,
+    config: { when: "consultation_booked", offsets: [{ hours: 24 }, { hours: 2 }] } },
+  // 8 — the nurture loop: T+2d WhatsApp, T+5d email, T+9d final notice.
+  // JUDGMENT: waits anchor sequentially after the intro is stamped (2/3/4-day
+  // gaps produce the spec's T+2/5/9); a reply cancels remaining touches.
+  { key: "nurture_wait_t2", kind: "wait", gate: 0, config: { wait: { days: 2 }, cancel_on_reply: true } },
+  { key: "nurture_t2", kind: "draft_comm", gate: 3,
+    // JUDGMENT: WhatsApp nudge falls back to email when no consented WhatsApp
+    // channel is on file (§4 step 4's "(if consented)" applied to step 8).
+    config: { template: "nurture_t2_v1", channel: "whatsapp", fallback_channel: "email", cancel_on_reply: true } },
+  { key: "nurture_wait_t5", kind: "wait", gate: 0, config: { wait: { days: 3 }, cancel_on_reply: true } },
+  { key: "nurture_t5", kind: "draft_comm", gate: 3,
+    config: { template: "nurture_t5_v1", channel: "email", cancel_on_reply: true } },
+  { key: "nurture_wait_t9", kind: "wait", gate: 0, config: { wait: { days: 4 }, cancel_on_reply: true } },
+  { key: "nurture_t9", kind: "draft_comm", gate: 3,
+    config: { template: "nurture_t9_v1", channel: "email", cancel_on_reply: true } },
+  // 9 — auto-close after final touch + 3 days of silence (≈ T+12d).
+  { key: "close_wait", kind: "wait", gate: 0, config: { wait: { days: 3 }, cancel_on_reply: true } },
+  { key: "auto_close", kind: "close", gate: 2, config: { stage: "unresponsive" } },
+  // 10 — outcome feedback to Meta (STUB executor logs the would-be signal;
+  // the real Conversions wiring is its own session — docs/GO-LIVE.md).
+  { key: "outcome_feedback", kind: "fire_conversion", gate: 2,
+    config: { signal: "outcome_feedback", cooling: { hours: 24 } } },
+] as const;
+
+const MVP_DESCRIPTION =
+  "When a new Meta lead arrives: draft an instant acknowledgement email for approval; create a call task for the owner, " +
+  "due within two hours; if both calls fail, draft a sorry-we-missed-you message; watch for replies and, once qualified, " +
+  "send a booking link with consultation reminders (later phase); if there is no response, nudge on day two (WhatsApp), " +
+  "day five (email) and day nine (final notice); after three further days of silence, close the enquiry as Unresponsive " +
+  "and log the outcome signal for Meta. Every outgoing message waits for a human stamp before anything is sent.";
+
+/**
+ * Templates, then the MVP definition through the REAL pipeline: insert at
+ * draft → steps → submit → approve (Mudassir's stamp), every move evented.
+ * Idempotent: fixed ids; the whole block is skipped once the definition
+ * exists (an active definition is immutable — re-seeding must not touch it).
+ */
+async function seedWorkflow(db: SupabaseClient): Promise<void> {
+  for (const template of TEMPLATES) {
+    const { data: existing, error: lookupError } = await db
+      .from("message_templates")
+      .select("id")
+      .eq("id", template.id)
+      .maybeSingle();
+    if (lookupError) throw new Error(`template lookup failed: ${lookupError.message}`);
+    if (existing) continue;
+    const { error } = await db.from("message_templates").insert({
+      id: template.id,
+      business_id: IDS.business,
+      created_by: IDS.actorMudassir,
+      key: template.key,
+      channel: template.channel,
+      subject: template.subject,
+      body: template.body,
+      locale: "en-GB",
+      version: 1,
+    });
+    if (error) throw new Error(`template insert (${template.key}) failed: ${error.message}`);
+    await emitEvent(db, {
+      business_id: IDS.business,
+      actor_id: IDS.actorMudassir,
+      action: "message_template.created",
+      entity_type: "message_template",
+      entity_id: template.id,
+      payload: { key: template.key, channel: template.channel, version: 1 },
+    });
+    console.log(`Message template seeded: ${template.key} (${template.channel}).`);
+  }
+
+  const { data: existingDef, error: defLookupError } = await db
+    .from("workflow_definitions")
+    .select("id, status")
+    .eq("id", WORKFLOW.definition)
+    .maybeSingle();
+  if (defLookupError) throw new Error(`definition lookup failed: ${defLookupError.message}`);
+  if (existingDef) {
+    console.log(`MVP workflow definition already seeded (${existingDef.status}) — skipped.`);
+    return;
+  }
+
+  const { error: defError } = await db.from("workflow_definitions").insert({
+    id: WORKFLOW.definition,
+    business_id: IDS.business,
+    created_by: IDS.actorMudassir,
+    key: "meta_lead_to_consultation",
+    version: 1,
+    template_id: IDS.template,
+    trigger: { action: "engagement.created", source: "meta" },
+    status: "draft",
+    description_plain: MVP_DESCRIPTION,
+  });
+  if (defError) throw new Error(`workflow definition insert failed: ${defError.message}`);
+  await emitEvent(db, {
+    business_id: IDS.business,
+    actor_id: IDS.actorMudassir,
+    action: "workflow_definition.created",
+    entity_type: "workflow_definition",
+    entity_id: WORKFLOW.definition,
+    payload: { key: "meta_lead_to_consultation", version: 1, trigger: { action: "engagement.created", source: "meta" } },
+  });
+
+  for (const [i, step] of MVP_STEPS.entries()) {
+    const { error } = await db.from("workflow_steps").insert({
+      id: workflowStepId(i + 1),
+      business_id: IDS.business,
+      created_by: IDS.actorMudassir,
+      definition_id: WORKFLOW.definition,
+      key: step.key,
+      sort_order: i + 1,
+      kind: step.kind,
+      config: step.config,
+      gate_level: step.gate,
+    });
+    if (error) throw new Error(`workflow step insert (${step.key}) failed: ${error.message}`);
+  }
+
+  const { error: submitError } = await db.rpc("submit_workflow_definition", {
+    p_def: WORKFLOW.definition,
+    p_actor: IDS.actorMudassir,
+  });
+  if (submitError) throw new Error(`submit_workflow_definition failed: ${submitError.message}`);
+  await emitEvent(db, {
+    business_id: IDS.business,
+    actor_id: IDS.actorMudassir,
+    action: "workflow_definition.submitted",
+    entity_type: "workflow_definition",
+    entity_id: WORKFLOW.definition,
+  });
+
+  const { error: approveError } = await db.rpc("approve_workflow_definition", {
+    p_def: WORKFLOW.definition,
+    p_approver: IDS.actorMudassir,
+  });
+  if (approveError) throw new Error(`approve_workflow_definition failed: ${approveError.message}`);
+  await emitEvent(db, {
+    business_id: IDS.business,
+    actor_id: IDS.actorMudassir,
+    action: "workflow_definition.approved",
+    entity_type: "workflow_definition",
+    entity_id: WORKFLOW.definition,
+    approval: { level: 3, approved_by: IDS.actorMudassir, decided_at: new Date().toISOString() },
+    payload: { key: "meta_lead_to_consultation", version: 1, steps: MVP_STEPS.length },
+  });
+
+  console.log(`MVP workflow seeded and activated: meta_lead_to_consultation v1 (${MVP_STEPS.length} steps as data).`);
+}
+
 async function main() {
   loadEnv();
   const db = createServiceClient();
@@ -668,6 +901,7 @@ async function main() {
   }
 
   await seedApprovalInboxDemo(db);
+  await seedWorkflow(db);
 
   console.log("\nSeed complete. Run `npm run verify --workspace=@rooshni/db` to inspect the ledger.");
 }

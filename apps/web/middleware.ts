@@ -18,7 +18,11 @@ import { createServerClient } from "@supabase/ssr";
  */
 
 // Reachable without a session. Everything else is the app.
-const PUBLIC_PATHS = ["/construction", "/signin", "/auth", "/api/health"];
+// /api/workflows/tick is here because a cron holds no session; the route
+// FAILS CLOSED behind CRON_SECRET (exact bearer match, 503 when unset) and
+// every act a tick performs stays gated in the database — the sign-in door
+// for humans is unchanged.
+const PUBLIC_PATHS = ["/construction", "/signin", "/auth", "/api/health", "/api/workflows/tick"];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some(
