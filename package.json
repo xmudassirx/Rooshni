@@ -14,7 +14,8 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "db:migrate": "npm run migrate --workspace=@rooshni/db",
-    "db:seed": "npm run seed --workspace=@rooshni/db"
+    "db:seed": "npm run seed --workspace=@rooshni/db",
+    "check-local": "npm run check-local --workspace=@rooshni/db"
   },
   "devDependencies": {
     "turbo": "^2.5.0"

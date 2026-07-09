@@ -51,6 +51,8 @@ Every session prompt (template: Appendix A) contains, in order:
 7. **Gate 3: founder stamp** — judgment calls signed off (then and only then recorded in `DECISIONS.md`); for UI, click-review of the preview URL, then the founder merges. The builder never merges UI branches.
 8. **Close** — books balance: nothing pending, nothing untracked, session number retired.
 
+**The single-session rule (incident 1, §10):** only one builder session runs in this repo folder at a time — founder-enforced. If at pre-flight, or at any point after, the working tree contains changes the session did not make, stop: that is Lane C. A session never commits, pushes, or builds on foreign work.
+
 ### 3.3 Failure rule
 
 If a session fails twice on the same step, close it. Do not push through in a degrading context. Shrink the scope (§6), write a new numbered session, fresh context. Sessions failing, retrying, and splitting is the system working, not the system breaking.
@@ -141,6 +143,10 @@ Full procedures live in `.claude/skills/`; Claude Code loads each when doing tha
 ## 10. How this document grows — the tightening loop
 
 Rules here are **extracted from incidents, never invented in advance**. When a builder model behaves differently than a session assumed — a misread scope, a lawyered lane, a proof claimed but not run — the incident is reported to the Playbook chat, the smallest rule that would have prevented it is drafted, and it lands here or in the relevant skill via a founder-approved commit. One incident, one rule, same discipline as `DECISIONS.md`: dated, never deleted, superseded entries re-labelled. The playbook is to the build what memory cards are to Light — it improves by being corrected during real work.
+
+### Incident log
+
+1. **9 July 2026** — during the playbook install session, a concurrent builder session in the same repo folder committed and pushed the install session's uncommitted work before founder approval (decision 29). Rules extracted: the single-session rule (§3.2) and the foreign-changes pre-flight stop (CLAUDE.md ritual).
 
 ---
 
