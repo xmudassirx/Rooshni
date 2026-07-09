@@ -49,7 +49,12 @@ export async function POST(request: Request) {
       }
     }
 
-    await supabase.auth.signOut();
+    // Local scope only: signing out THIS browser must not revoke the user's
+    // sessions everywhere else. The supabase-js default is global — during
+    // the Session 5 proof circuit that revoked the founder's production
+    // session every time any other sign-out happened, which read as
+    // "sessions never persist".
+    await supabase.auth.signOut({ scope: "local" });
   }
 
   return NextResponse.redirect(`${externalOrigin(request)}/construction`, {

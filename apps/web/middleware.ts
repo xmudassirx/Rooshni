@@ -60,6 +60,21 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  // A one-time OAuth ?code= that landed anywhere but the callback (Supabase
+  // falls back to the Site URL when a redirect misses its allowlist) would
+  // otherwise strand the sign-in on that page — a sign-in loop. Send it to
+  // the exchange instead.
+  const oauthCode = request.nextUrl.searchParams.get("code");
+  if (!user && oauthCode && !request.nextUrl.pathname.startsWith("/auth/")) {
+    const callbackUrl = new URL("/auth/callback", request.url);
+    callbackUrl.searchParams.set("code", oauthCode);
+    const redirect = NextResponse.redirect(callbackUrl);
+    for (const cookie of response.cookies.getAll()) {
+      redirect.cookies.set(cookie);
+    }
+    return redirect;
+  }
+
   if (isPublic(request.nextUrl.pathname)) {
     return response;
   }
