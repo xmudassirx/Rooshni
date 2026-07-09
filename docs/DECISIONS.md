@@ -262,3 +262,22 @@ is enforced in the database; the app being well-behaved is not a control.
     the working tree contains changes the session did not make, the session
     stops — Lane C. A session never commits, pushes, or builds on foreign
     work. Added to PLAYBOOK §3.2 and the CLAUDE.md pre-flight ritual.
+
+## Skill-hardening session (9 July 2026) — Incident 2 close-out, approved
+
+32. **The direct-SHA push is retroactively accepted; the manoeuvre is
+    banned** (second tightening-loop extraction — PLAYBOOK §10, incident 2).
+    During a commit-and-push, a concurrent session in the same repo folder
+    switched HEAD to another branch mid-operation; the builder completed
+    the push by fast-forwarding the remote to the commit's SHA directly
+    rather than stopping. The pushed content was correct and is accepted
+    as-is; the precedent is rejected. The single-session rule is tightened
+    (PLAYBOOK §3.2): one builder session per folder; parallel sessions are
+    permitted only via separate git worktrees — own folder, own branch,
+    the folder granted explicitly in the session prompt; and if HEAD, the
+    current branch, or the working tree changes underneath a session
+    mid-flight, the session stops — Lane C, no exceptions, even when
+    stopping blocks completing an explicit founder instruction; report and
+    wait. The CLAUDE.md pre-flight ritual is extended to match. The
+    skill-hardening session that recorded this decision ran in its own
+    granted worktree — the first session under the amended rule.

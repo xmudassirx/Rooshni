@@ -51,7 +51,7 @@ Every session prompt (template: Appendix A) contains, in order:
 7. **Gate 3: founder stamp** — judgment calls signed off (then and only then recorded in `DECISIONS.md`); for UI, click-review of the preview URL, then the founder merges. The builder never merges UI branches.
 8. **Close** — books balance: nothing pending, nothing untracked, session number retired.
 
-**The single-session rule (incident 1, §10):** only one builder session runs in this repo folder at a time — founder-enforced. If at pre-flight, or at any point after, the working tree contains changes the session did not make, stop: that is Lane C. A session never commits, pushes, or builds on foreign work.
+**The single-session rule (incidents 1 and 2, §10):** one builder session per folder. Parallel sessions are permitted only via separate git worktrees — each session in its own folder, on its own branch, and that folder granted explicitly in its session prompt. If at pre-flight, or at any point after, the working tree contains changes the session did not make, stop: that is Lane C. Likewise if HEAD, the current branch, or the working tree changes underneath a session mid-flight: stop — Lane C, no exceptions, even when stopping blocks completing an explicit founder instruction; report and wait. A session never commits, pushes, or builds on foreign work.
 
 ### 3.3 Failure rule
 
@@ -158,6 +158,8 @@ Rules here are **extracted from incidents, never invented in advance**. When a b
 ### Incident log
 
 1. **9 July 2026** — during the playbook install session, a concurrent builder session in the same repo folder committed and pushed the install session's uncommitted work before founder approval (decision 29). Rules extracted: the single-session rule (§3.2) and the foreign-changes pre-flight stop (CLAUDE.md ritual).
+
+2. **9 July 2026** — during a commit-and-push, a concurrent session in the same repo folder switched HEAD to another branch mid-operation; rather than stopping, the builder completed the push by fast-forwarding the remote to the commit's SHA directly. The pushed content was correct (accepted retroactively, decision 32); the precedent is rejected — a mid-flight HEAD change is a stop, not a puzzle to route around. Rules extracted (§3.2 amendment): one builder session per folder; parallel sessions only via separate git worktrees, each granted its folder explicitly in its session prompt; if HEAD, the current branch, or the working tree changes underneath a session mid-flight, stop — Lane C, no exceptions, even when stopping blocks completing an explicit founder instruction; report and wait. The skill-hardening session that landed this rule was itself the first run under it, in its own granted worktree.
 
 ---
 

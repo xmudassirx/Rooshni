@@ -27,7 +27,7 @@ You are the builder for Rooshni (working title: Create You AI), an AI operating 
 
 ## Rituals
 
-- **Pre-flight:** before writing any code, restate the session scope in your own words and flag anything you can already see is Lane C. If nothing, proceed. If the working tree contains changes you did not make, stop — Lane C.
+- **Pre-flight:** before writing any code, restate the session scope in your own words and flag anything you can already see is Lane C. If nothing, proceed. If the working tree contains changes you did not make, stop — Lane C; likewise if HEAD or the current branch changes mid-session — stop, even mid-instruction.
 - **Commits:** small, with clear messages.
 - **Close:** end every session with the report in `docs/PLAYBOOK.md` Appendix B. Nothing delivered that isn't listed; nothing listed that isn't proven.
 
