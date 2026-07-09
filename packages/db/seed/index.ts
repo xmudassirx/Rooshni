@@ -49,7 +49,7 @@ const GRANTS = [
 const OWNER_EMAIL = "xmudassirx@gmail.com";
 
 // Session 3 — the Approval Inbox demo. Deterministic ids; on the go-live
-// purge list (GO-LIVE.md) with the rest of the fixture data.
+// purge list (docs/GO-LIVE.md) with the rest of the fixture data.
 const INBOX_DEMO = {
   threadLead1: "01980000-0000-7000-8000-000000000501",
   commPending: "01980000-0000-7000-8000-000000000502",
