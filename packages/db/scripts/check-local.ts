@@ -61,6 +61,11 @@ async function main() {
     language sql stable
     as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 
+    -- Stand-in for Supabase's auth.jwt(): the full claims object.
+    create function auth.jwt() returns jsonb
+    language sql stable
+    as $$ select nullif(current_setting('request.jwt.claims', true), '')::jsonb $$;
+
     -- Supabase grants table privileges to its API roles by default; RLS is
     -- the actual wall. Mirror that so policy tests are realistic.
     grant usage on schema public to anon, authenticated, service_role;
@@ -868,6 +873,61 @@ async function main() {
     )
   );
   await db.exec(`reset role`);
+
+  // ---------------------------------------------------------------------
+  // Session 5 — the sign-in allowlist: a signed-in user reads exactly one
+  // fact (their own live row); managing the list is service-role only.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 5 — the sign-in allowlist:");
+
+  await expectError("allowlist emails must be lower-case", /allowed_emails_email_is_lower/, () =>
+    db.query(`insert into public.allowed_emails (email) values ('Owner@Example.test')`)
+  );
+  await expectError("an allowlist row must look like an email", /allowed_emails_email_shape/, () =>
+    db.query(`insert into public.allowed_emails (email) values ('not-an-email')`)
+  );
+  await db.query(
+    `insert into public.allowed_emails (email, note) values ('owner@example.test', 'test owner')`
+  );
+  await expectError("the same email cannot be allowlisted twice", /allowed_emails_email_uniq|duplicate/, () =>
+    db.query(`insert into public.allowed_emails (email) values ('owner@example.test')`)
+  );
+
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+  await db.exec(`set request.jwt.claims = '{"sub":"${ids.user}","email":"owner@example.test"}'`);
+  await expectOk("an allowlisted user sees their own row — the door opens", async () => {
+    const r = await db.query<{ n: number }>(`select count(*)::int as n from public.allowed_emails`);
+    if (r.rows[0]!.n !== 1) throw new Error(`expected 1 row, saw ${r.rows[0]!.n}`);
+  });
+  await expectError("a signed-in user cannot allowlist anyone", /violates row-level security|permission denied/, () =>
+    db.query(`insert into public.allowed_emails (email) values ('friend@example.test')`)
+  );
+  await expectError("a signed-in user cannot edit their own row", /no result|permission/i, async () => {
+    const r = await db.query<{ n: number }>(
+      `with u as (update public.allowed_emails set note = 'promoted myself' returning 1)
+       select count(*)::int as n from u`
+    );
+    if (r.rows[0]!.n === 0) throw new Error("permission: update touched no rows (no policy)");
+  });
+
+  await db.exec(`set request.jwt.claim.sub = '${ids.member}'`);
+  await db.exec(`set request.jwt.claims = '{"sub":"${ids.member}","email":"member@example.test"}'`);
+  await expectOk("a signed-in but non-allowlisted user sees nothing — the door stays shut", async () => {
+    const r = await db.query<{ n: number }>(`select count(*)::int as n from public.allowed_emails`);
+    if (r.rows[0]!.n !== 0) throw new Error(`expected 0 rows, saw ${r.rows[0]!.n}`);
+  });
+  await db.exec(`reset role`);
+
+  await expectOk("archiving an allowlist row revokes access without deleting the record", async () => {
+    await db.query(`update public.allowed_emails set archived_at = now() where email = 'owner@example.test'`);
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    await db.exec(`set request.jwt.claims = '{"sub":"${ids.user}","email":"owner@example.test"}'`);
+    const r = await db.query<{ n: number }>(`select count(*)::int as n from public.allowed_emails`);
+    await db.exec(`reset role`);
+    if (r.rows[0]!.n !== 0) throw new Error(`an archived row is still visible (${r.rows[0]!.n})`);
+  });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
   process.exit(failed > 0 ? 1 : 0);

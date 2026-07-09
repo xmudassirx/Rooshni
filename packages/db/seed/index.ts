@@ -30,6 +30,7 @@ const IDS = {
   actorLight: "01980000-0000-7000-8000-000000000012",
   actorMeta: "01980000-0000-7000-8000-000000000013",
   membershipMudassir: "01980000-0000-7000-8000-000000000021",
+  allowedEmailMudassir: "01980000-0000-7000-8000-000000000031",
 } as const;
 
 // Spec 3 §7/§9 — Light's Phase 1 bundle (the AI COO cut down to the surfaces
@@ -253,6 +254,19 @@ async function seedTenant(db: SupabaseClient, ownerUserId: string): Promise<void
       role: "owner",
     },
     "user_id,business_id"
+  );
+
+  // Session 5 — the sign-in allowlist. Only these emails get past sign-in;
+  // Mudassir maps to his existing owner actor through actors.user_id.
+  await upsert(
+    db,
+    "allowed_emails",
+    {
+      id: IDS.allowedEmailMudassir,
+      email: OWNER_EMAIL.toLowerCase(),
+      note: "Founder — owner actor, X Law",
+    },
+    "email"
   );
 
   console.log("Tenant seeded: account Mudassir → business X Law (uk_immigration_law v1).");
