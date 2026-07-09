@@ -8,13 +8,18 @@ import { getInboxCount } from "@/lib/server/queries";
 export const dynamic = "force-dynamic";
 
 export default async function ShellLayout({ children }: { children: ReactNode }) {
-  const [{ business }, inboxCount] = await Promise.all([
+  const [{ business, actor, membershipRole }, inboxCount] = await Promise.all([
     getAppContext(),
     getInboxCount(),
   ]);
 
   return (
-    <AppShell businessName={business.name} inboxCount={inboxCount}>
+    <AppShell
+      businessName={business.name}
+      userName={actor.display_name}
+      userRole={membershipRole}
+      inboxCount={inboxCount}
+    >
       {children}
     </AppShell>
   );

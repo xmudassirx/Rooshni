@@ -7,6 +7,7 @@ import {
   BookMarked,
   Columns3,
   LayoutDashboard,
+  LogOut,
   Mail,
   Menu,
   PenLine,
@@ -154,10 +155,14 @@ function ThemeControl() {
 
 export function AppShell({
   businessName,
+  userName,
+  userRole,
   inboxCount,
   children,
 }: {
   businessName: string;
+  userName: string;
+  userRole: string;
   inboxCount: number;
   children: ReactNode;
 }) {
@@ -224,17 +229,27 @@ export function AppShell({
           ))}
         </nav>
         <div className="flex items-center gap-2.5 border-t border-sidebar-fg/15 px-4.5 py-3.5">
-          <div className="flex size-7.5 items-center justify-center rounded-full bg-gold text-xs font-bold text-white">
-            M
+          <div className="flex size-7.5 shrink-0 items-center justify-center rounded-full bg-gold text-xs font-bold text-white">
+            {userName.charAt(0).toUpperCase()}
           </div>
-          <div>
-            <div className="text-[12.5px] font-semibold text-sidebar-fg-strong">
-              Mudassir
+          <div className="min-w-0">
+            <div className="truncate text-[12.5px] font-semibold text-sidebar-fg-strong">
+              {userName}
             </div>
-            <div className="font-mono text-[9.5px] tracking-wide text-sidebar-fg/50">
-              OWNER · ACCOUNT
+            <div className="font-mono text-[9.5px] tracking-wide text-sidebar-fg/50 uppercase">
+              {userRole} · Account
             </div>
           </div>
+          <form action="/auth/signout" method="post" className="ml-auto">
+            <button
+              type="submit"
+              aria-label="Sign out"
+              title="Sign out"
+              className="rounded-md p-1.5 text-sidebar-fg/60 transition-colors hover:bg-sidebar-fg-strong/10 hover:text-sidebar-fg-strong"
+            >
+              <LogOut className="size-4" />
+            </button>
+          </form>
         </div>
       </aside>
 
