@@ -21,6 +21,18 @@ description: Use whenever writing or extending smoke tests in the check-local ha
 
 Pattern: **seed → attempt forbidden action → expect throw → assert nothing changed.** The error surfacing from Postgres is the passing result.
 
+## Canon and bundled files
+
+- **The canon tests live at `packages/db/scripts/check-local.ts`** — the
+  harness and every existing smoke test are that one file; tests are inline,
+  there is no separate test directory. Read the section neighbouring your
+  session's area before writing (the stage-door and approval-door blocks are
+  the reference refusal tests). If this path moves, this line moves with it.
+- `resources/refusal-test-template.ts` — **read and copy** the four-beat
+  block (seed → attempt forbidden → expect throw → assert unchanged) into
+  `check-local.ts` whenever a session builds an enforcement; then run the
+  whole harness, never the snippet alone.
+
 ## Mandatory coverage per session type
 
 - **New table:** cross-tenant invisibility — a user of business A sees zero rows of business B; plus the no-user-DELETE refusal.

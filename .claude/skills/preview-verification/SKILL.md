@@ -32,6 +32,13 @@ Known gaps: <anything intentionally deferred, with its session or GO-LIVE refere
 
 Never hand over a bare URL. If he has to hunt for what changed, the handover failed.
 
+## Bundled files
+
+- `resources/handover-template.md` — **copy and fill** for every handover,
+  one Screen block per changed screen, pre-handover checkboxes ticked before
+  sending; paste the completed file into the close report. Do not compose
+  handovers freehand — the template is the checklist.
+
 ## After review
 
 - Fix requests before merge are part of this session, on the same branch, re-previewed.
