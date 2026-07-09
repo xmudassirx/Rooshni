@@ -27,6 +27,20 @@ Every Lane B call gets a comment at the site, in the migration itself:
 
 Collect all JUDGMENT marks in the session close report. None enters docs/DECISIONS.md until Mudassir approves.
 
+## Bundled files
+
+- `resources/migration-template.sql` — **read and copy** when creating any
+  new-table migration, before writing DDL freehand: it carries the Spec 1
+  envelope, the RLS policy block, the no-user-DELETE rule and the JUDGMENT
+  mark form, so none is reinvented from memory.
+- `scripts/check_migration.mjs` — **run** on every migration you write,
+  before committing it:
+  `node .claude/skills/migration-discipline/scripts/check_migration.mjs <file.sql>`
+  (no arguments = lint every migration in `packages/db/migrations`). It
+  checks RLS-per-table, user DELETE policies, JUDGMENT mark form, and — via
+  git — that no previously committed migration was edited. It reports and
+  never fixes; a finding is fixed forward, by you.
+
 ## Seeds
 
 - Seeds are idempotent — keyed on an external id (e.g. the Meta lead id), safe to run twice.
