@@ -281,3 +281,27 @@ is enforced in the database; the app being well-behaved is not a control.
     wait. The CLAUDE.md pre-flight ritual is extended to match. The
     skill-hardening session that recorded this decision ran in its own
     granted worktree — the first session under the amended rule.
+
+33. **The founding-exception allowlist in `check_migration.mjs`** — the
+    Session 1 scaffold (0002–0011) predates the same-migration RLS rule;
+    its tables pass the lint only because their RLS is verified present in
+    0012_rls.sql, not assumed. The allowlist is closed: new migrations get
+    the strict rule, no additions. JUDGMENT comment at the site.
+
+34. **Canon test paths added to the smoke-tests skill** — the session
+    prompt assumed SKILL.md already referenced canon tests by path; it did
+    not. Added: the harness and every smoke test live inline in
+    `packages/db/scripts/check-local.ts` (no separate test directory), with
+    the stage-door and approval-door blocks named as the reference refusal
+    tests.
+
+35. **The DECISIONS.md guard in `pre_close_check.mjs`** — a session diff
+    that touches docs/DECISIONS.md fails the close unless
+    `--decisions-approved "<what covers it>"` records the founder approval;
+    the note is echoed into the close-report summary block, so the paper
+    trail shows what authority the write rested on.
+
+36. **A non-clean tree at close is a failure, whatever its origin** —
+    `pre_close_check.mjs` cannot distinguish foreign changes from
+    unfinished session work, so any uncommitted or untracked state fails
+    the close. The books balance only on a fully committed tree.
