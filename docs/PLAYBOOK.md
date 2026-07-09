@@ -119,6 +119,17 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   middleware gates every app route behind session + allowlist, and the
   tenancy wall behind the door stays memberships + RLS.
 
+- The **workflow doors** (Session 6): a workflow definition reaches `active`
+  only with a HUMAN stamp holding `approvals.workflows` (or the owner) —
+  `status` and `approved_by_actor_id` move only through the definition
+  pipeline functions and are revoked from direct update for every API role;
+  a non-draft definition and its steps are immutable (a change of behaviour
+  is a new version); `completed`/`cancelled` runs are terminal; pause,
+  resume and cancel are gated pipeline acts; runs and step executions are
+  created and moved only by the service-only engine functions. The runner
+  NEVER marks a communication `sent` — the send door (decision 16) stays
+  locked; the STUB executor only logs `communication.send_stubbed`.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail
