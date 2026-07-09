@@ -158,3 +158,42 @@ is enforced in the database; the app being well-behaved is not a control.
     the sole user AND (b) Vercel Deployment Protection remains ON for the
     project. Either condition failing voids this decision — sign-in is built
     first, before anything else ships. The go-live trigger is on GO-LIVE.md.
+    **RETIRED — Session 5 (9 July 2026):** real authentication shipped ahead
+    of both conditions failing (Deployment Protection comes OFF production at
+    this session's sign-off). See decision 24.
+
+## Session 5 (9 July 2026) — authentication (pending Mudassir's sign-off)
+
+24. **Decision 23 is retired: the app acts as the signed-in human.**
+    Supabase Auth with Google as the sole provider; every query in the web
+    app runs through a user-scoped, cookie-based client under RLS — the
+    pipeline functions see signed-in callers acting as their own actor
+    (decision 12's rule, now actually exercised from a browser session). The
+    service client remains only where it always belonged: the health check,
+    the seed and future integration/server pipelines. The seeded owner auth
+    user (created by email in Session 1) acquires the Google identity by
+    Supabase's automatic linking on matching verified email, so
+    `actors.user_id` maps the sign-in to the existing Mudassir owner actor —
+    no new actor, no data movement.
+
+25. **The allowlist is the front door; RLS remains the wall.**
+    `allowed_emails` (0018): lower-case unique emails, soft archive, RLS on.
+    A signed-in user can read exactly one fact from it — whether their own
+    live row exists; managing the list has no authenticated policy at all
+    (service-role flow, like actor creation). Middleware on every app route
+    checks session + allowlist and shows everyone else the public holding
+    page as a REWRITE, not a redirect — the URL never changes, so the
+    deployment reads as a quiet site under construction and the app's shape
+    is not advertised. Even a visitor who somehow got past the door holds no
+    membership: RLS shows them zero rows on every table (the standing
+    principle — the middleware is UX, the database is the control).
+
+26. **Auth events on the ledger: sign-ins yes, denials not yet.**
+    `auth.signed_in` (at the OAuth callback) and `auth.signed_out` (before
+    the session is destroyed — a signed-out client can write nothing) are
+    emitted via emitEvent, attributed to the signer's own actor in their own
+    business. A DENIED sign-in writes nothing: events require a business_id
+    and an actor_id, and a stranger belongs to no business — recording
+    denials would need a platform-level system actor and a home business,
+    which is a schema-level call deferred to Mudassir (flagged at this
+    session's hand-off).

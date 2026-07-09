@@ -8,15 +8,15 @@ Add to this list during build; check items off only at go-live.
 - [ ] Upgrade infra off free tiers (master context §3.8): Supabase paid,
       Vercel Pro — Vercel Hobby prohibits commercial use and hard-pauses at
       limits (~$45/mo combined).
-- [ ] **Real authentication — required before go-live, OR EARLIER on the
+- [x] **Real authentication — required before go-live, OR EARLIER on the
       first second user** (introduced Session 4): the moment anyone besides
       Mudassir (colleague, demo viewer, pilot) touches the app, sign-in is
-      built first. Today the web app has no auth surface — the server acts
-      as the business owner's actor via the service client, so anyone with
-      the URL acts as Mudassir (decision 23; valid only while Mudassir is
-      the sole user and Vercel Deployment Protection stays ON). Ship
-      Supabase Auth sign-in and swap the service client for the user-scoped
-      client at whichever trigger comes first.
+      built first. **DONE — Session 5 (9 July 2026), triggered early per
+      this item's own clause** (Deployment Protection comes off production,
+      so "anyone with the URL" stops being only Mudassir): Supabase Auth
+      with Google, the `allowed_emails` front door (0018), middleware on
+      every app route, and the service client swapped for the user-scoped
+      client throughout the web app (decisions 24–26; decision 23 retired).
 - [ ] **Purge seed/demo data** before real leads flow: the fixture Meta leads
       (contacts, enquiries, tasks), Light's demo drafts and threads
       (`01980000-…-0000005xx`), and the events they wrote. Spec 4 §6 measures
