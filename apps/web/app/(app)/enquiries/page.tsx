@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Sparkles } from "lucide-react";
 
 import { PageHead } from "@/components/shell/page-head";
@@ -20,7 +21,10 @@ function Card({ card }: { card: PipelineCard }) {
   const source = sourceLabel(card.source);
 
   return (
-    <div className="glass w-full rounded-lg p-3 text-left transition-colors hover:border-ledger">
+    <Link
+      href={`/enquiries/${card.engagementId}`}
+      className="glass block w-full rounded-lg p-3 text-left transition-colors hover:border-ledger"
+    >
       <div className="text-sm font-bold">{card.name}</div>
       <div className="mt-px mb-1.5 font-mono text-[11px] font-semibold text-ledger">
         {card.visaRoute ?? "Route not yet classified"}
@@ -42,7 +46,7 @@ function Card({ card }: { card: PipelineCard }) {
           <span className="truncate">{card.nextAction.text}</span>
         </div>
       ) : null}
-    </div>
+    </Link>
   );
 }
 
@@ -53,7 +57,7 @@ export default async function EnquiriesPage() {
     <>
       <PageHead
         title="Enquiries"
-        sub="Lead-to-consultation pipeline · read-only this session — stage moves arrive with their controls"
+        sub="Lead-to-consultation pipeline · tap any card for the enquiry's full story — stage moves arrive with their controls"
       />
       <div className="flex snap-x snap-proximity gap-3 overflow-x-auto px-0.5 pt-2 pb-4">
         {stages.map((stage) => (
