@@ -5,6 +5,19 @@ description: Use at the end of every session, without exception, to produce the 
 
 # Session close
 
+## Bundled files
+
+- `scripts/pre_close_check.mjs` — **run** after the session's final commit,
+  before writing the report:
+  `node .claude/skills/session-close/scripts/pre_close_check.mjs [--base <ref>] [--decisions-approved "<what approval covers it>"]`
+  It performs items 1–3 and 6 of the checklist below by machine: re-runs
+  check-local fresh, fails on any dirty or foreign tree state, collects every
+  JUDGMENT: mark in the session diff (base defaults to origin/main), and
+  fails if docs/DECISIONS.md changed without approval noted. Paste its
+  summary block into the report's **State** line. A close report without
+  this script's green summary is unverified; items 4–5 remain yours to
+  check by hand.
+
 ## Before writing the report, verify
 
 1. `npm run check-local` is green **right now** — run it fresh; a stale green is a red.
