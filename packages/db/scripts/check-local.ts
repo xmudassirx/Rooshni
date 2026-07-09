@@ -1,6 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
+import { scaleDurationMs } from "@rooshni/config";
+
+// Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
+// dev scale so wait-step scheduling is deterministic here regardless of the
+// caller's environment.
+process.env.TIME_SCALE = "1440";
 
 /**
  * Local migration validation — no live database required.
@@ -842,6 +848,345 @@ async function main() {
     if (!types.includes("task")) throw new Error(`no task item in the inbox (saw: ${types.join(", ")})`);
   });
 
+  // ---------------------------------------------------------------------
+  // Session 6 — the workflow engine (Spec 4 §2–3): the definition door,
+  // definition/step immutability outside draft, the run state machine,
+  // pause/resume/cancel as gated acts, and compressed-time scheduling.
+  // ---------------------------------------------------------------------
+  console.log("\nSpec 4 — the workflow engine:");
+
+  await expectError(
+    "a workflow definition cannot be born active without a human stamp",
+    /human stamp/,
+    () =>
+      db.query(
+        `insert into public.workflow_definitions (business_id, created_by, key, template_id, status, description_plain)
+         values ($1, $2, 'wf_unstamped', $3, 'active', 'Should never activate.')`,
+        [f.business_id, f.human_id, f.template_id]
+      )
+  );
+
+  await expectError(
+    "an agent cannot hold the workflow stamp (the AI cannot approve automation)",
+    /HUMAN actor/,
+    () =>
+      db.query(
+        `insert into public.workflow_definitions (business_id, created_by, key, template_id, status, description_plain, approved_by_actor_id)
+         values ($1, $2, 'wf_agent_stamp', $3, 'active', 'Agent-stamped.', $4)`,
+        [f.business_id, f.agent_id, f.template_id, f.agent_id]
+      )
+  );
+
+  await expectError(
+    "a human without approvals.workflows cannot activate a definition",
+    /approvals\.workflows/,
+    () =>
+      db.query(
+        `insert into public.workflow_definitions (business_id, created_by, key, template_id, status, description_plain, approved_by_actor_id)
+         values ($1, $2, 'wf_ungranted_stamp', $3, 'active', 'Ungranted human stamp.', $4)`,
+        [f.business_id, f.human_id, f.template_id, h2.human2_id]
+      )
+  );
+
+  let proposedDefId = "";
+  await expectOk("an agent proposes a workflow: it lands in the approval inbox in plain English", async () => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, template_id, trigger, status, description_plain)
+       values ($1, $2, 'wf_agent_proposal', $3, '{"action":"engagement.created"}'::jsonb, 'pending_approval',
+               'When a new enquiry arrives, draft a thank-you email for your approval.') returning id`,
+      [f.business_id, f.agent_id, f.template_id]
+    );
+    proposedDefId = r.rows[0]!.id;
+    const v = await db.query<{ item_type: string; preview: string; drafted_by_type: string }>(
+      `select item_type, preview, drafted_by_type from public.approval_inbox where item_id = $1`,
+      [proposedDefId]
+    );
+    if (v.rows.length !== 1) throw new Error("proposed definition is not in the inbox");
+    if (v.rows[0]!.item_type !== "workflow_definition") throw new Error(`item_type: ${v.rows[0]!.item_type}`);
+    if (!/thank-you email/.test(v.rows[0]!.preview)) throw new Error("description_plain is not the preview");
+    if (v.rows[0]!.drafted_by_type !== "agent") throw new Error("proposer attribution lost");
+  });
+
+  await expectError(
+    "the proposing agent cannot approve its own workflow through the pipeline",
+    /HUMAN actor/,
+    () => db.query(`select public.approve_workflow_definition($1, $2)`, [proposedDefId, f.agent_id])
+  );
+
+  await expectError("rejecting a workflow proposal requires a reason", /reason/, () =>
+    db.query(`select public.reject_workflow_definition($1, $2, '  ')`, [proposedDefId, f.human_id])
+  );
+
+  await expectOk("the owner's stamp activates the proposal and it leaves the inbox", async () => {
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [proposedDefId, f.human_id]);
+    const r = await db.query<{ status: string; approved_by_actor_id: string }>(
+      `select status, approved_by_actor_id from public.workflow_definitions where id = $1`,
+      [proposedDefId]
+    );
+    if (r.rows[0]!.status !== "active") throw new Error(`status is ${r.rows[0]!.status}`);
+    if (r.rows[0]!.approved_by_actor_id !== f.human_id) throw new Error("stamp not recorded");
+    const v = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.approval_inbox where item_id = $1`,
+      [proposedDefId]
+    );
+    if (v.rows[0]!.n !== 0) throw new Error("an activated definition is still in the inbox");
+  });
+
+  await expectError(
+    "definition status never moves by direct update, even for the superuser",
+    /moves only through/,
+    () => db.query(`update public.workflow_definitions set status = 'paused' where id = $1`, [proposedDefId])
+  );
+
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+  await expectError("a signed-in member cannot update definition status directly", /permission denied/, () =>
+    db.query(`update public.workflow_definitions set status = 'paused' where id = $1`, [proposedDefId])
+  );
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+
+  await expectError(
+    "an active definition's behaviour is immutable — a change is a new version",
+    /immutable|new version/,
+    () =>
+      db.query(`update public.workflow_definitions set trigger = '{"action":"contact.created"}'::jsonb where id = $1`, [
+        proposedDefId,
+      ])
+  );
+
+  await expectError("steps cannot be added to a non-draft definition", /immutable|new version/, () =>
+    db.query(
+      `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind)
+       values ($1, $2, $3, 'sneaky_step', 1, 'wait')`,
+      [f.business_id, f.human_id, proposedDefId]
+    )
+  );
+
+  // A runnable definition: draft → steps → submit → approve. Waits carry
+  // REAL-WORLD durations in config; the runner scales them via timeScale().
+  const WAIT_REAL_MS = 2 * 24 * 60 * 60 * 1000; // the spec's T+2d nurture wait
+  const engineDef = await db.query<{ id: string }>(
+    `insert into public.workflow_definitions (business_id, created_by, key, template_id, trigger, status, description_plain)
+     values ($1, $2, 'wf_engine_test', $3, '{"action":"engagement.created"}'::jsonb, 'draft',
+             'Draft an email, wait two days, then close.') returning id`,
+    [f.business_id, f.human_id, f.template_id]
+  );
+  const engineDefId = engineDef.rows[0]!.id;
+  const stepRows = await db.query<{ id: string; key: string }>(
+    `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config, gate_level)
+     values
+       ($1, $2, $3, 'draft_email', 1, 'draft_comm', '{"template":"intro_v1","channel":"email"}'::jsonb, 3),
+       ($1, $2, $3, 'wait_2d', 2, 'wait', '{"wait":{"days":2}}'::jsonb, 0),
+       ($1, $2, $3, 'auto_close', 3, 'close', '{"stage":"unresponsive"}'::jsonb, 2)
+     returning id, key`,
+    [f.business_id, f.human_id, engineDefId]
+  );
+  const stepId = new Map(stepRows.rows.map((r) => [r.key, r.id]));
+
+  await expectError("start_workflow_run refuses a definition that is not active", /active/, () =>
+    db.query(`select public.start_workflow_run($1, $2, $3)`, [engineDefId, engagementId, f.agent_id])
+  );
+
+  await db.query(`select public.submit_workflow_definition($1, $2)`, [engineDefId, f.human_id]);
+  await db.query(`select public.approve_workflow_definition($1, $2)`, [engineDefId, f.human_id]);
+
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+  // Two layers refuse this: execute is granted to service_role alone, and the
+  // function itself rejects any caller carrying a JWT subject.
+  await expectError("engine functions refuse a signed-in session (server only)", /server|permission denied/, () =>
+    db.query(`select public.claim_due_step_runs()`)
+  );
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+
+  const triggerEventId = event.rows[0]!.id;
+  let runId = "";
+  await expectOk("start_workflow_run creates the run and schedules the first step immediately", async () => {
+    const r = await db.query<{ id: string }>(
+      `select public.start_workflow_run($1, $2, $3, $4) as id`,
+      [engineDefId, engagementId, f.agent_id, triggerEventId]
+    );
+    runId = r.rows[0]!.id;
+    const run = await db.query<{ status: string; current_step: string }>(
+      `select status, current_step from public.workflow_runs where id = $1`,
+      [runId]
+    );
+    if (run.rows[0]!.status !== "waiting") throw new Error(`run status ${run.rows[0]!.status}`);
+    if (run.rows[0]!.current_step !== stepId.get("draft_email")) throw new Error("current_step is not step 1");
+    const due = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.step_runs where run_id = $1 and status = 'scheduled' and scheduled_for <= now()`,
+      [runId]
+    );
+    if (due.rows[0]!.n !== 1) throw new Error("first step is not scheduled now");
+  });
+
+  await expectError(
+    "a second live run for the same engagement and definition is refused (cron retries cannot double-start)",
+    /duplicate key|workflow_runs_one_live_uniq/,
+    () => db.query(`select public.start_workflow_run($1, $2, $3)`, [engineDefId, engagementId, f.agent_id])
+  );
+
+  // A second engagement for the trigger-idempotency and gated-acts cases.
+  const engagement2 = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'Second enquiry', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const engagement2Id = engagement2.rows[0]!.id;
+
+  await expectError(
+    "a triggering event is consumed at most once, ever (webhook replays start nothing)",
+    /duplicate key|workflow_runs_trigger_event_uniq/,
+    () => db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [engineDefId, engagement2Id, f.agent_id, triggerEventId])
+  );
+
+  await expectOk("claim → complete schedules the wait step at COMPRESSED time (timers are data × TIME_SCALE)", async () => {
+    const claimed = await db.query<{ id: string; step_id: string }>(
+      `select id, step_id from public.claim_due_step_runs()`
+    );
+    const mine = claimed.rows.find((r) => r.step_id === stepId.get("draft_email"));
+    if (!mine) throw new Error("the due first step was not claimed");
+    const scaledMs = scaleDurationMs(WAIT_REAL_MS); // 2 days @ 1440 → 2 minutes
+    if (Math.round(scaledMs) !== 2 * 60 * 1000) throw new Error(`unexpected scale: ${scaledMs}ms`);
+    const nextAt = new Date(Date.now() + scaledMs).toISOString();
+    const next = await db.query<{ id: string }>(
+      `select public.complete_step_run($1, 'completed', '{"communication_id":null}'::jsonb, $2, $3) as id`,
+      [mine.id, stepId.get("wait_2d"), nextAt]
+    );
+    const sched = await db.query<{ delta: number }>(
+      `select extract(epoch from (scheduled_for - now()))::int as delta from public.step_runs where id = $1`,
+      [next.rows[0]!.id]
+    );
+    // ~120s out, allowing a few seconds of test runtime.
+    if (sched.rows[0]!.delta < 100 || sched.rows[0]!.delta > 125) {
+      throw new Error(`wait step scheduled ${sched.rows[0]!.delta}s out — not the compressed 2 minutes`);
+    }
+    const notDue = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.claim_due_step_runs()`
+    );
+    if (notDue.rows[0]!.n !== 0) throw new Error("a future wait step was claimed early");
+  });
+
+  await expectOk("the timer fires when its moment arrives; the final step completes the run", async () => {
+    const scaledMs = scaleDurationMs(WAIT_REAL_MS);
+    const future = new Date(Date.now() + scaledMs + 5000).toISOString();
+    const claimed = await db.query<{ id: string; step_id: string }>(
+      `select id, step_id from public.claim_due_step_runs($1)`,
+      [future]
+    );
+    const waitStep = claimed.rows.find((r) => r.step_id === stepId.get("wait_2d"));
+    if (!waitStep) throw new Error("the due wait step was not claimed at its compressed moment");
+    await db.query(`select public.complete_step_run($1, 'completed', '{}'::jsonb, $2, $3)`, [
+      waitStep.id,
+      stepId.get("auto_close"),
+      future,
+    ]);
+    const closeClaim = await db.query<{ id: string; step_id: string }>(
+      `select id, step_id from public.claim_due_step_runs($1)`,
+      [future]
+    );
+    const closeStep = closeClaim.rows.find((r) => r.step_id === stepId.get("auto_close"));
+    if (!closeStep) throw new Error("the close step was not claimed");
+    await db.query(`select public.complete_step_run($1, 'completed', '{}'::jsonb)`, [closeStep.id]);
+    const run = await db.query<{ status: string }>(`select status from public.workflow_runs where id = $1`, [runId]);
+    if (run.rows[0]!.status !== "completed") throw new Error(`run status ${run.rows[0]!.status}`);
+  });
+
+  await expectError("a completed run is terminal — it cannot be paused", /live run/, () =>
+    db.query(`select public.pause_workflow_run($1, $2)`, [runId, f.human_id])
+  );
+
+  // Gated acts on a live run (engagement 2 never consumed its own trigger).
+  const runB = await db.query<{ id: string }>(`select public.start_workflow_run($1, $2, $3) as id`, [
+    engineDefId,
+    engagement2Id,
+    f.agent_id,
+  ]);
+  const runBId = runB.rows[0]!.id;
+
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.member}'`);
+  await expectError(
+    "a member without enquiries execute cannot pause a workflow run",
+    /enquiries \(execute\)/,
+    () => db.query(`select public.pause_workflow_run($1, $2)`, [runBId, h2.human2_id])
+  );
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+
+  await expectOk("the owner pauses the run; a paused run's timers do not fire", async () => {
+    await db.query(`select public.pause_workflow_run($1, $2)`, [runBId, f.human_id]);
+    const farFuture = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const claimed = await db.query<{ run_id: string }>(`select run_id from public.claim_due_step_runs($1)`, [farFuture]);
+    if (claimed.rows.some((r) => r.run_id === runBId)) throw new Error("a paused run's step was claimed");
+  });
+
+  await expectError(
+    "a paused run cannot be resurrected by direct update, even by the superuser",
+    /gated acts/,
+    () => db.query(`update public.workflow_runs set status = 'waiting' where id = $1`, [runBId])
+  );
+
+  await expectOk("resume restores the run; cancel is terminal and kills outstanding intents", async () => {
+    await db.query(`select public.resume_workflow_run($1, $2)`, [runBId, f.human_id]);
+    const resumed = await db.query<{ status: string }>(`select status from public.workflow_runs where id = $1`, [runBId]);
+    if (resumed.rows[0]!.status !== "waiting") throw new Error(`resumed status ${resumed.rows[0]!.status}`);
+    await db.query(`select public.cancel_workflow_run($1, $2, $3)`, [runBId, f.human_id, "Demo reset."]);
+    const open = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.step_runs where run_id = $1 and status in ('scheduled','running','awaiting_approval')`,
+      [runBId]
+    );
+    if (open.rows[0]!.n !== 0) throw new Error("cancel left live step intents behind");
+  });
+
+  await expectError("a cancelled run is terminal — it cannot be resumed", /paused run/, () =>
+    db.query(`select public.resume_workflow_run($1, $2)`, [runBId, f.human_id])
+  );
+
+  await expectError(
+    "tasks.workflow_run_id must reference a real run (Spec 1's reserved column is now closed)",
+    /tasks_workflow_run_fkey|foreign key/,
+    () =>
+      db.query(
+        `insert into public.tasks (business_id, created_by, title, assignee_actor_id, workflow_run_id)
+         values ($1, $2, 'Orphan workflow task', $2, '00000000-0000-4000-8000-00000000dead')`,
+        [f.business_id, f.human_id]
+      )
+  );
+
+  await expectError("a message template cannot have an empty body", /message_templates_body_check|check constraint/, () =>
+    db.query(
+      `insert into public.message_templates (business_id, created_by, key, channel, body)
+       values ($1, $2, 'empty_v1', 'email', '   ')`,
+      [f.business_id, f.human_id]
+    )
+  );
+
+  await expectOk("the same template key re-issues as a new version, never a rewrite", async () => {
+    await db.query(
+      `insert into public.message_templates (business_id, created_by, key, channel, subject, body)
+       values ($1, $2, 'intro_v1', 'email', 'Your enquiry', 'Thank you {{first_name}}.')`,
+      [f.business_id, f.human_id]
+    );
+    try {
+      await db.query(
+        `insert into public.message_templates (business_id, created_by, key, channel, subject, body)
+         values ($1, $2, 'intro_v1', 'email', 'Your enquiry', 'Different body, same version.')`,
+        [f.business_id, f.human_id]
+      );
+      throw new Error("duplicate key+version was accepted");
+    } catch (err) {
+      if (!/duplicate key|message_templates_key_version_uniq/.test(String(err))) throw err;
+    }
+    await db.query(
+      `insert into public.message_templates (business_id, created_by, key, channel, subject, body, version)
+       values ($1, $2, 'intro_v1', 'email', 'Your enquiry', 'Warmer second pass, {{first_name}}.', 2)`,
+      [f.business_id, f.human_id]
+    );
+  });
+
   // RLS: tenancy walls
   console.log("\nRow-Level Security:");
   await db.exec(`set role authenticated`);
@@ -860,7 +1205,10 @@ async function main() {
 
   await db.exec(`set request.jwt.claim.sub = '${ids.stranger}'`);
   await expectOk("a stranger sees nothing", async () => {
-    for (const table of ["contacts", "engagements", "events", "businesses", "tasks", "grants", "approval_inbox"]) {
+    for (const table of [
+      "contacts", "engagements", "events", "businesses", "tasks", "grants", "approval_inbox",
+      "workflow_definitions", "workflow_steps", "workflow_runs", "step_runs", "message_templates",
+    ]) {
       const r = await db.query<{ n: number }>(`select count(*)::int as n from public.${table}`);
       if (r.rows[0]!.n !== 0) throw new Error(`${table}: expected 0 rows, saw ${r.rows[0]!.n}`);
     }
