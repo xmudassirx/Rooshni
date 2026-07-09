@@ -159,8 +159,16 @@ is enforced in the database; the app being well-behaved is not a control.
     project. Either condition failing voids this decision — sign-in is built
     first, before anything else ships. The go-live trigger is on GO-LIVE.md.
     **RETIRED — Session 5 (9 July 2026):** real authentication shipped ahead
-    of both conditions failing (Deployment Protection comes OFF production at
-    this session's sign-off). See decision 24.
+    of both conditions failing. See decision 24.
+    **Amendment (Mudassir, Session 5 close-out):** condition (b) was
+    partially void all along — the project's Deployment Protection setting
+    is Vercel's Standard (previews only), so production was never behind
+    Vercel's wall during Sessions 4–5; the owner-actor build was publicly
+    reachable at the production URL until the Session 5 merge closed the
+    exposure window. Discovered during the go-live checks, acknowledged by
+    Mudassir; the setting stays Standard (nothing to flip). This validates
+    the early-auth trigger — the wall assumed by decision 23 has to be the
+    application's own, not the platform's.
 
 ## Session 5 (9 July 2026) — authentication, all approved
 
