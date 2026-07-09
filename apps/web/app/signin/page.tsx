@@ -1,9 +1,17 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { GoogleSignInButton } from "./google-button";
 
 export const dynamic = "force-dynamic";
+
+// Public surface: as quiet as the holding page — no product name anywhere,
+// including the tab title (overrides the root layout's metadata).
+export const metadata: Metadata = {
+  title: "Sign in",
+  description: "This site is under construction.",
+};
 
 /**
  * The sign-in door (Session 5). Google is the only provider. Signing in does
@@ -30,13 +38,10 @@ export default async function SignInPage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-paper px-6 text-center">
-      <div className="font-display text-3xl font-black tracking-tight text-ink">
-        Rooshni
+      <div className="font-display text-xl font-extrabold tracking-tight text-ink">
+        Sign in
       </div>
-      <div className="mt-1.5 font-mono text-[10px] tracking-[.18em] text-ink-faint uppercase">
-        One database · many faces
-      </div>
-      <div className="mt-10">
+      <div className="mt-8">
         <GoogleSignInButton />
       </div>
       <p className="mt-6 max-w-[44ch] text-[12.5px] leading-relaxed text-ink-faint">

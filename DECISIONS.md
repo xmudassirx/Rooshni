@@ -162,7 +162,7 @@ is enforced in the database; the app being well-behaved is not a control.
     of both conditions failing (Deployment Protection comes OFF production at
     this session's sign-off). See decision 24.
 
-## Session 5 (9 July 2026) — authentication (pending Mudassir's sign-off)
+## Session 5 (9 July 2026) — authentication, all approved
 
 24. **Decision 23 is retired: the app acts as the signed-in human.**
     Supabase Auth with Google as the sole provider; every query in the web
@@ -187,13 +187,19 @@ is enforced in the database; the app being well-behaved is not a control.
     is not advertised. Even a visitor who somehow got past the door holds no
     membership: RLS shows them zero rows on every table (the standing
     principle — the middleware is UX, the database is the control).
+    **Founder amendment (sign-off):** the public surface carries no product
+    name and no hint of what sits behind it — wordmark, tagline, tab-title
+    metadata and even the theme localStorage key were scrubbed from the
+    holding and sign-in pages; the discreet sign-in link is the only way in.
 
 26. **Auth events on the ledger: sign-ins yes, denials not yet.**
     `auth.signed_in` (at the OAuth callback) and `auth.signed_out` (before
     the session is destroyed — a signed-out client can write nothing) are
     emitted via emitEvent, attributed to the signer's own actor in their own
     business. A DENIED sign-in writes nothing: events require a business_id
-    and an actor_id, and a stranger belongs to no business — recording
-    denials would need a platform-level system actor and a home business,
-    which is a schema-level call deferred to Mudassir (flagged at this
-    session's hand-off).
+    and an actor_id, and a stranger belongs to no business.
+    **Deferred, not declined (Mudassir, sign-off) — a known gap:** recording
+    denials needs a platform-level system actor, which is real schema
+    surgery, and Supabase's own auth logs give denial visibility for
+    Phase 1. Trigger to revisit: when platform-level events arrive for
+    other reasons (platform admin actions, the agency tier).

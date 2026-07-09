@@ -105,7 +105,7 @@ function ThemeControl() {
       delete document.documentElement.dataset.theme;
     }
     try {
-      localStorage.setItem("rooshni-theme", next);
+      localStorage.setItem("ui-theme", next);
     } catch {
       /* private browsing — the choice simply does not persist */
     }

@@ -28,8 +28,10 @@ export const metadata: Metadata = {
 };
 
 // Applies the saved theme before first paint so a Frost user never sees a
-// flash of Ledger. Ledger is the shipping default.
-const themeBoot = `try{var t=localStorage.getItem("rooshni-theme");if(t==="frost")document.documentElement.dataset.theme=t}catch(e){}`;
+// flash of Ledger. Ledger is the shipping default. The storage key is
+// deliberately generic: this script ships on the public holding page too,
+// and the public surface carries no product name (Session 5 founder rule).
+const themeBoot = `try{var t=localStorage.getItem("ui-theme");if(t==="frost")document.documentElement.dataset.theme=t}catch(e){}`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
