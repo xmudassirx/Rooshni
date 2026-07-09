@@ -23,3 +23,23 @@ Add to this list during build; check items off only at go-live.
       acceptance from the ledger — test rows must not sit in those numbers.
       (Events are append-only for every API role; the purge is a one-off
       superuser act at go-live.)
+- [ ] **Purge workflow demo data** (introduced Session 6): the demo workflow
+      runs and step executions on the two fixture leads, the drafts/tasks the
+      runs produced, and the events from compressed-clock rehearsals and
+      watches. The seeded `meta_lead_to_consultation` definition and message
+      templates are real configuration and STAY.
+- [ ] **Replace the STUB send executor** (introduced Session 6): the runner
+      NEVER marks anything `sent` — after a human stamp it only logs
+      `communication.send_stubbed` on the ledger. The real send pipeline is
+      its own session and must add the mark-as-sent pipeline function behind
+      the locked approval door (decision 16). No real message leaves the
+      system until then — do not go live believing sends are happening.
+- [ ] **Replace the STUB Meta outcome signals** (introduced Session 6):
+      `meta.signal_stubbed` events mark where conversion/junk feedback would
+      fire (Spec 4 §4 step 10, 24h cooling). Real wiring = Meta Conversions
+      API contract session + wiring session, Marketing API v25.0+.
+- [ ] **Set `CRON_SECRET` in Vercel** (all environments) and configure a
+      Vercel Cron for `GET /api/workflows/tick` (introduced Session 6). The
+      endpoint fails closed (503) until the secret exists. Minute-level cron
+      cadence needs Vercel Pro (already on this list); until the cron runs,
+      production workflows do not tick.
