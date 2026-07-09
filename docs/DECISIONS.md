@@ -211,3 +211,25 @@ is enforced in the database; the app being well-behaved is not a control.
     surgery, and Supabase's own auth logs give denial visibility for
     Phase 1. Trigger to revisit: when platform-level events arrive for
     other reasons (platform admin actions, the agency tier).
+
+27. **Sign-out is local-scope** (production finding from the founder's
+    proof circuit, fixed and re-proven at close). supabase-js `signOut()`
+    defaults to GLOBAL scope — one sign-out revokes every session the user
+    holds on every device, which surfaced as "sessions never persist":
+    each sign-out anywhere silently killed the founder's other sessions
+    server-side. Sign-out now confines itself to the browser performing it
+    (`scope: "local"`). Proven by A/B experiment against production: a
+    second session's refresh survives the first session's sign-out
+    (previously `refresh_token_not_found`). Founder re-test: session
+    persists across a full browser restart with no re-authentication.
+
+28. **The middleware heals stray OAuth codes** (production finding, fixed
+    and re-proven at close). When a redirect misses Supabase's allowlist,
+    Supabase falls back to the Site URL and strands the one-time `?code=`
+    on whatever page that names — the non-allowlisted tester's "bounced
+    back to /signin". A session-less request carrying `?code=` anywhere
+    but the callback is now forwarded to the exchange, so sign-in
+    completes wherever the code lands; the callback's own no-code, error
+    and denied paths all end at the holding page. Site URL confirmed by
+    Mudassir as the production root. Founder re-test: the non-allowlisted
+    account lands on the holding page.
