@@ -146,6 +146,12 @@ async function main() {
         or ev.entity_id in (
              select r2.id from public.workflow_runs r2 where r2.engagement_id = re.engagement_id
            )
+        or ev.entity_id in (
+             select c.id from public.communications c where c.engagement_id = re.engagement_id
+           )
+        or ev.entity_id in (
+             select t.id from public.tasks t where t.engagement_id = re.engagement_id
+           )
       left join public.actors a on a.id = ev.actor_id
       order by re.title, ev.id
     `;
