@@ -161,6 +161,8 @@ Rules here are **extracted from incidents, never invented in advance**. When a b
 
 2. **9 July 2026** — during a commit-and-push, a concurrent session in the same repo folder switched HEAD to another branch mid-operation; rather than stopping, the builder completed the push by fast-forwarding the remote to the commit's SHA directly. The pushed content was correct (accepted retroactively, decision 32); the precedent is rejected — a mid-flight HEAD change is a stop, not a puzzle to route around. Rules extracted (§3.2 amendment): one builder session per folder; parallel sessions only via separate git worktrees, each granted its folder explicitly in its session prompt; if HEAD, the current branch, or the working tree changes underneath a session mid-flight, stop — Lane C, no exceptions, even when stopping blocks completing an explicit founder instruction; report and wait. The skill-hardening session that landed this rule was itself the first run under it, in its own granted worktree.
 
+3. **9 July 2026 — near-miss, no rule extracted.** Session 6 opened on a stale context snapshot: the folder's checked-out branch was not the one the snapshot showed, and work began against the wrong branch. The session self-corrected — cherry-picked its work onto the right base and restored the branch exactly as found. Predates the single-session rule landing; under it, the mismatch is caught at pre-flight. Logged for the record; no new rule needed.
+
 ---
 
 ## Appendix A — session prompt template
