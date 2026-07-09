@@ -222,6 +222,10 @@ interface ActorEmbed {
  * The most recent slice of the ledger, newest first. When `filter` is given,
  * only entries about that entity — matched on the entity columns or on the
  * payload's `<entity>_id` reference — are returned.
+ *
+ * JUDGMENT: capped at the most recent 300 entries — search and pagination are
+ * their own session; an uncapped query over an append-only table only gets
+ * slower forever.
  */
 export async function getRecordEvents(filter?: {
   entityType: RecordEntityType;

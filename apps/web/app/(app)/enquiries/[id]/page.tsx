@@ -30,6 +30,10 @@ type TimelineItem =
   | { kind: "stage"; at: string; move: EnquiryStageMove; label: string }
   | { kind: "comm"; at: string; comm: EnquiryComm };
 
+// JUDGMENT: the ledger's communication.* entries and the opening stage_history
+// row are not repeated as timeline rows — the message cards (with their stamp
+// and rejection detail) and engagement.created already tell those moments, and
+// a timeline that says everything twice reads as noise, not truth.
 function buildTimeline(detail: EnquiryDetail): TimelineItem[] {
   const stageLabels = new Map(detail.stages.map((s) => [s.id, s.label]));
   const items: TimelineItem[] = [];
@@ -136,6 +140,10 @@ function CommCard({ comm, clientName }: { comm: EnquiryComm; clientName: string 
             {comm.rejection.reason}”
           </div>
         ) : null}
+        {/* JUDGMENT: the mockup shows Approve/Refine controls here; this session
+            is read-only screens only, so a pending draft links across to the
+            Approval Inbox — approving from the timeline is the same act on the
+            same row and arrives with a write-path session. */}
         {pending ? (
           <div className="mt-2.5 border-t border-dashed border-rule pt-2">
             <Link
@@ -227,7 +235,10 @@ export default async function EnquiryDetailPage({
   const client = detail.participants.find((p) => p.role === "client") ?? null;
   const others = detail.participants.filter((p) => p.role !== "client");
   const currentStage = detail.stages.find((s) => s.id === detail.stageId) ?? null;
-  // The rail runs to the won terminal; a lost-type terminal shows as a red cell.
+  // JUDGMENT: the mockup's rail shows only the happy path to Instructed. The
+  // lost-type terminals (Closed-lost, Unresponsive, Disqualified) join the rail
+  // as a single red cell only when the enquiry actually sits in one — red is
+  // the human-stamp register, and a dead enquiry died by someone's decision.
   const railStages = detail.stages.filter((s) => !s.isTerminal || s.terminalOutcome === "won");
   const offRail = currentStage && !railStages.some((s) => s.id === currentStage.id);
   const timeline = buildTimeline(detail);
@@ -252,6 +263,9 @@ export default async function EnquiryDetailPage({
             <h1 className="font-display text-[22px] font-extrabold tracking-tight">
               {client?.name ?? detail.title}
             </h1>
+            {/* JUDGMENT: the mockup shows "ENQUIRY #0114" but the schema has no
+                sequence number and adding one is Session 6's fence — the first
+                block of the uuid stands in as the reference for now. */}
             <div className="mt-0.5 font-mono text-xs font-semibold text-ledger uppercase">
               {detail.visaRoute ?? "Route not yet classified"} · Enquiry{" "}
               {detail.id.slice(0, 8)}

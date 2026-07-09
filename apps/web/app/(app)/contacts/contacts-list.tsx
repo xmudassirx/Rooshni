@@ -7,9 +7,12 @@ import type { ContactListRow } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
 
 /*
- * Signed amendment 4: simple/advanced toggle, simple by default. Simple is
- * the book — who they are and whether work is open. Advanced adds every
- * channel with its per-channel consent, sources and relationships.
+ * Signed amendment 4: simple/advanced toggle, simple by default.
+ *
+ * JUDGMENT: the amendment names the toggle but not what each view carries.
+ * Simple is the book — who they are and whether work is open. Advanced adds
+ * every channel with its per-channel consent, relationships and source (the
+ * mockup's full row). Re-cutting the split is a wording change, not structure.
  */
 
 function channelLabel(channel: string): string {

@@ -16,8 +16,11 @@ export const dynamic = "force-dynamic";
  * by law: the table refuses UPDATE and DELETE structurally, so this screen
  * could not edit history even if it tried.
  *
- * Accepts an optional deep-link filter (?entity_type=engagement&entity_id=…)
- * so the detail pages can point at one thread of the story.
+ * JUDGMENT: the deep-link entity filter (?entity_type=engagement&entity_id=…)
+ * goes beyond the mockup's actor pills — it lets the enquiry and contact
+ * detail pages point at one thread of the story, which the session's
+ * definition of done ("follow one lead's whole story") asks for. Read-only,
+ * validated, and removable without trace if unwanted.
  */
 export default async function RecordPage({
   searchParams,
