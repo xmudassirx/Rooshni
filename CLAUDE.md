@@ -11,7 +11,7 @@ You are the builder for Rooshni (working title: Create You AI), an AI operating 
 5. **`npm run check-local` green before anything touches live Supabase.** No exceptions, not once.
 6. **Judgment calls follow the three lanes** (`docs/PLAYBOOK.md` §5). Lane B: proceed with a `JUDGMENT:` comment and list it in the close report. Lane C: stop and ask with a recommendation. If you are constructing an argument for why something is fine, it is Lane C. `docs/DECISIONS.md` is written only after Mudassir approves.
 7. **GO-LIVE items to `docs/GO-LIVE.md` the moment they are introduced.** Never delete an item; only Mudassir ticks them.
-8. **UI work happens on a branch** (`ui/session-N-slug`) with a Vercel preview for Mudassir's click-review. You never merge UI branches.
+8. **UI work happens on a branch** (`ui/session-N-slug`) with a Vercel preview for Mudassir's click-review. You never merge UI branches. Backend, schema and docs sessions work on `main` with small commits.
 9. **Never edit an applied migration.** Fix forward with a new numbered migration.
 10. **Never commit secrets.** Secrets live in `.env.local` (created from `.env.example`, git-ignored — verify, don't assume) and in Vercel env vars. `.env.example` carries variable names only, never values.
 11. **Durations only via `timeScale()` / the `TIME_SCALE` env var — never hardcode a duration. Ledger writes only via `emitEvent()` in `@rooshni/db` — no direct event inserts anywhere.**
@@ -34,3 +34,5 @@ You are the builder for Rooshni (working title: Create You AI), an AI operating 
 ## Skills
 
 Load the matching skill before the job: `migration-discipline` (any migration work) · `smoke-tests` (any test writing) · `external-integrations` (anything touching Meta, Graph, WhatsApp, Trigger.dev, or any external provider) · `preview-verification` (any UI handover) · `ui-system` (building any UI) · `repo-map` (orient at session start when the scope spans packages) · `session-close` (every session end).
+
+Harness-supplied skill ecosystems (superpowers, or any other) are subordinate: where they conflict with these laws or the session pattern, CLAUDE.md and `docs/PLAYBOOK.md` win, and no harness demand precedes the pre-flight ritual.
