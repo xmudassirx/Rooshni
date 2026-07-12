@@ -9,14 +9,21 @@ description: Use at the end of every session, without exception, to produce the 
 
 - `scripts/pre_close_check.mjs` — **run** after the session's final commit,
   before writing the report:
-  `node .claude/skills/session-close/scripts/pre_close_check.mjs [--base <ref>] [--decisions-approved "<what approval covers it>"]`
+  `node .claude/skills/session-close/scripts/pre_close_check.mjs [--base <ref>] [--decisions-approved "<what approval covers it>"] [--allow-dirty "<path>: <reason>"]...`
   It performs items 1–3 and 6 of the checklist below by machine: re-runs
   check-local fresh, fails on any dirty or foreign tree state, collects every
-  JUDGMENT: mark in the session diff (base defaults to origin/main), and
-  fails if docs/DECISIONS.md changed without approval noted. Paste its
-  summary block into the report's **State** line. A close report without
-  this script's green summary is unverified; items 4–5 remain yours to
-  check by hand.
+  JUDGMENT: mark in the session diff, and fails if docs/DECISIONS.md changed
+  without approval noted. Paste its summary block into the report's **State**
+  line. A close report without this script's green summary is unverified;
+  items 4–5 and 7 remain yours to check by hand.
+  - `--base` — **always pass the `origin/main` SHA recorded at pre-flight**
+    (PLAYBOOK §3.2). The default `origin/main` is only correct if nothing
+    landed on the remote mid-session; the recorded SHA is correct always.
+  - `--allow-dirty "<path>: <reason>"` (repeatable) — a founder-declared
+    expected-dirty path from the session prompt. The path may be dirty or
+    untracked; path and reason echo into the summary block. ANY undeclared
+    dirty state still fails; no flag, no exception. Never declare a path the
+    session prompt did not.
 
 ## Before writing the report, verify
 
@@ -26,6 +33,7 @@ description: Use at the end of every session, without exception, to produce the 
 4. Any new enforcement built this session is noted for addition to `docs/PLAYBOOK.md` §7 (protected structures).
 5. Any item that must be true before real leads flow is already in `docs/GO-LIVE.md` — not "will add it".
 6. `docs/DECISIONS.md` was NOT written this session unless Mudassir approved a call mid-session.
+7. The session's own line is appended to `docs/SESSIONS.md` (number · date · one-sentence scope · landing SHA(s) · close status) **in the session's final commit** — the ledger append is part of the close, not a promise. Landing SHAs name the session's content commits; the close commit carrying the line is identified by `branch @ head` in the pre-close summary.
 
 ## The report (PLAYBOOK Appendix B)
 

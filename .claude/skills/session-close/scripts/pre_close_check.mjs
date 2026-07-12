@@ -3,12 +3,17 @@
 // final commit, from anywhere inside the repo/worktree being closed:
 //
 //   node .claude/skills/session-close/scripts/pre_close_check.mjs \
-//        [--base <ref>] [--decisions-approved "<who/what approved it>"]
+//        [--base <ref>] [--decisions-approved "<who/what approved it>"] \
+//        [--allow-dirty "<path>: <reason>"]...
 //
 // It verifies, in order:
 //   1. `npm run check-local` is green RIGHT NOW — run fresh, not remembered
 //   2. git status is clean — at close, an uncommitted or untracked file is
-//      either unfinished session work or a foreign change; both are failures
+//      either unfinished session work or a foreign change; both are failures.
+//      Exception: a path declared with --allow-dirty (repeatable) may be
+//      dirty or untracked — founder-declared in the session prompt, echoed
+//      into the summary with its reason. ANY other dirty state still fails;
+//      no flag, no exception (the --decisions-approved design).
 //   3. every JUDGMENT: mark added in the session diff (merge-base with
 //      --base, default origin/main, to HEAD) is collected and listed for
 //      the close report
@@ -26,8 +31,19 @@ const flag = (name) => {
   const i = args.indexOf(name);
   return i === -1 ? undefined : args[i + 1];
 };
+const flags = (name) =>
+  args.flatMap((a, i) => (a === name && args[i + 1] !== undefined ? [args[i + 1]] : []));
 const base = flag("--base") ?? "origin/main";
 const decisionsApproved = flag("--decisions-approved");
+// JUDGMENT: the ruled form is "<path>: <reason>"; a value with no colon is
+// tolerated as a bare path and echoed as "(no reason given)" rather than
+// rejected — the gate's job is refusing undeclared state, not lexing.
+const allowDirty = flags("--allow-dirty").map((v) => {
+  const i = v.indexOf(":");
+  return i === -1
+    ? { path: v.trim(), reason: "(no reason given)" }
+    : { path: v.slice(0, i).trim(), reason: v.slice(i + 1).trim() || "(no reason given)" };
+});
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   cwd: import.meta.dirname,
@@ -58,12 +74,24 @@ if (run.status !== 0) {
   process.stdout.write(harnessOut); // the evidence, in full, when it fails
 }
 
-// --- 2. clean tree ----------------------------------------------------------
+// --- 2. clean tree (up to founder-declared --allow-dirty paths) --------------
 const porcelain = git("status", "--porcelain");
-if (porcelain) {
+const statusPath = (line) => {
+  // porcelain v1: "XY path" or "XY old -> new"; quoted when exotic
+  let p = line.slice(3);
+  const arrow = p.indexOf(" -> ");
+  if (arrow !== -1) p = p.slice(arrow + 4);
+  if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+  return p;
+};
+const dirtyLines = porcelain ? porcelain.split("\n") : [];
+const undeclaredDirty = dirtyLines.filter(
+  (l) => !allowDirty.some((a) => a.path === statusPath(l))
+);
+if (undeclaredDirty.length) {
   failures.push(
-    "git status is not clean — uncommitted session work or foreign changes:\n" +
-      porcelain.split("\n").map((l) => `        ${l}`).join("\n")
+    "git status is not clean — uncommitted session work or foreign changes (undeclared):\n" +
+      undeclaredDirty.map((l) => `        ${l}`).join("\n")
   );
 }
 
@@ -102,7 +130,16 @@ const branch = git("rev-parse", "--abbrev-ref", "HEAD");
 const head = git("rev-parse", "--short", "HEAD");
 console.log("\n--- pre-close summary (paste into the close report) ---------------");
 console.log(`check-local:    ${checkLocal}`);
-console.log(`git status:     ${porcelain ? "DIRTY" : "clean"}`);
+console.log(
+  `git status:     ${
+    dirtyLines.length === 0
+      ? "clean"
+      : undeclaredDirty.length === 0
+        ? `clean up to ${dirtyLines.length} declared dirty path(s)`
+        : "DIRTY (undeclared state present)"
+  }`
+);
+for (const a of allowDirty) console.log(`  allow-dirty:  ${a.path} — ${a.reason}`);
 console.log(`branch:         ${branch} @ ${head}   (session diff: ${base} → HEAD, ${changedFiles.length} file(s))`);
 console.log(
   `JUDGMENT marks: ${judgments.length ? "" : "none in the session diff"}`
