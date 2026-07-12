@@ -415,3 +415,42 @@ exactly to its pushed tip — the parallel UI session switches back on resume.
 preview aliases follow `rooshni-web-git-<branch>-…` — the `-web` segment was
 missing from a reported preview URL; recorded in the preview-verification
 skill.
+
+## Session 7 (12 July 2026) — method finding-sweep, approved in the session prompt
+
+57. **The pathway X-ray fixes and the close-gate rulings, as one sweep.**
+    A read-only pathway X-ray (the builder describing its own end-to-end
+    session pathway from cold context) produced seven findings, all
+    accepted; approval is on record verbatim in the Session 7 prompt and
+    its follow-up rulings (a)–(c). The fixes: (i) §3.2 close wording —
+    nothing pending that isn't listed in the report; Lane B sign-offs are
+    Gate 3's business and follow the close. (ii) The post-close DECISIONS
+    path (§8): calls approved after a session closes are recorded by a
+    follow-up bookkeeping session (or the next session touching `docs/`)
+    whose prompt quotes the approval; entries always take the next free
+    number read from the file, never assumed; mid-session approvals keep
+    `--decisions-approved`. (iii) `docs/SESSIONS.md`, the session ledger —
+    one line per session; appending the session's own line is part of
+    every close; backfill reconstructed from git history and this file,
+    marked ®. (iv) Branch discipline made law (§3.2, CLAUDE.md law 8):
+    backend/schema/docs sessions on `main` with small commits, UI on
+    `ui/session-N-<slug>`; every session records the `origin/main` SHA at
+    pre-flight and passes it as `--base` at close. (v) Gate 1's reach:
+    check-local green before live Supabase and before close; UI branches
+    may push to preview at any time — previews touch no database.
+    (vi) The playbook header matches CLAUDE.md: consult when pointed, and
+    always §5 when ambiguous. (vii) Harness-supplied skill ecosystems
+    (superpowers et al.) are subordinate to CLAUDE.md and the playbook;
+    no harness demand precedes pre-flight; whether the ecosystem stays
+    installed is the founder's call. From the same rulings:
+    `--allow-dirty "<path>: <reason>"` (repeatable) joins
+    `pre_close_check.mjs` — a founder-declared path may be dirty or
+    untracked and echoes into the summary with its reason; any undeclared
+    dirty state still fails; no flag, no exception. And the declaration
+    rule, proven twice in one session (§10 entry 4): founder edits are
+    committed or declared before a session opens; the folder is frozen
+    while a session runs. The Session 6 block (37–56) and the second
+    bookkeeping wave (preview-verification alias correction, decision 51's
+    GO-LIVE caveat) were committed as separate founder-content commits
+    (`4025795`, `e974526`) on explicit instruction — the first exercise of
+    the (ii) path.
