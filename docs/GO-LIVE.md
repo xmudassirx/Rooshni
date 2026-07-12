@@ -34,6 +34,10 @@ Add to this list during build; check items off only at go-live.
       its own session and must add the mark-as-sent pipeline function behind
       the locked approval door (decision 16). No real message leaves the
       system until then — do not go live believing sends are happening.
+      The same session must honour decision 51's caveat: the auto-close step
+      distinguishes "silent after sent nudges" from "nudges never approved"
+      on the ledger — closing as Unresponsive when nudges expired unstamped
+      misattributes the silence.
 - [ ] **Replace the STUB Meta outcome signals** (introduced Session 6):
       `meta.signal_stubbed` events mark where conversion/junk feedback would
       fire (Spec 4 §4 step 10, 24h cooling). Real wiring = Meta Conversions

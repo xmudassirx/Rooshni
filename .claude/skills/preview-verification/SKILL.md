@@ -8,7 +8,7 @@ description: Use for every UI session — building screens, changing layout, the
 ## Branch and deploy
 
 1. All UI work on a branch named `ui/session-N-<slug>` (e.g. `ui/session-4-shell`). Never on main.
-2. Push the branch; Vercel produces a preview deployment. The preview URL is the deliverable — code that isn't clickable doesn't exist for review purposes.
+2. Push the branch; Vercel produces a preview deployment. The preview URL is the deliverable — code that isn't clickable doesn't exist for review purposes. Branch aliases follow `rooshni-web-git-<branch>-…` — the project segment is `rooshni-web`, not `rooshni` (founder correction, Session 6 close). Copy the URL from the Vercel deployment, never compose it by hand.
 3. **You never merge.** Mudassir's click-review is the merge gate, and he performs the merge.
 
 ## Fidelity rules before handover
