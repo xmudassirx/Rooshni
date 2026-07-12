@@ -1,10 +1,20 @@
-import { Placeholder } from "@/components/shell/page-head";
+import { PageHead } from "@/components/shell/page-head";
+import { getContacts } from "@/lib/server/queries";
 
-export default function ContactsPage() {
+import { ContactsList } from "./contacts-list";
+
+export const dynamic = "force-dynamic";
+
+export default async function ContactsPage() {
+  const contacts = await getContacts();
+
   return (
-    <Placeholder icon="◉" title="Contacts">
-      People and organisations in one book — simple and advanced views, with
-      consent per channel and GDPR at the door.
-    </Placeholder>
+    <>
+      <PageHead
+        title="Contacts"
+        sub="People and organisations in one book — channels and consents per person, GDPR at the door"
+      />
+      <ContactsList contacts={contacts} />
+    </>
   );
 }
