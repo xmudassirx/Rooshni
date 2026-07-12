@@ -176,3 +176,37 @@ Facebook lead → shared contacts table → orchestrator triggers nurture sequen
 - "AI CEO" was renamed **AI COO** deliberately: the human keeps judgment; the whole trust architecture depends on that promise. Structurally enforced: the send pipeline physically refuses outbound comms without a human approver (Spec 1, decision 7).
 - The architecture absorbed every stress test (voice, generation, funnels, model choice, industries, notes, personal use, agencies, email marketing, practice management) without restructuring — only extending. That's why it's locked.
 - Two recurring principles that answered multiple questions independently: **the thread must never be cut** (email, matters, conversations) and **the platform fee gates structure while credits capture scale** (pricing, agencies).
+
+## Addendum — decisions landed 8–9 July 2026 (build ops chat)
+
+INFRASTRUCTURE (all live):
+- Supabase: project "Rooshni", region eu-west-2 London (UK data residency is a selling point vs GHL); new-style API keys (publishable/secret), auto-expose OFF, automatic RLS ON. Multi-region = separate deployments per region at Phase 4; never one global DB.
+- GitHub: private repo xmudassirx/Rooshni — the repo is the memory; specs live in docs/.
+- Vercel: project rooshni-web, root apps/web, Standard Protection (production domain OPEN, previews walled — production was never behind Vercel's wall; recorded as decision 23 amendment).
+- Azure: app registration "Rooshni", Graph delegated Mail.Send/Mail.ReadWrite/Calendars.ReadWrite/offline_access/User.Read, admin consent granted, 730-day secret (move to cert-based auth on Phase 2 pre-flight list).
+- Meta: X Law business VERIFIED; Marketing API + WhatsApp use cases on; App Review submission waits for a working demo (mid-Phase 1); build on Marketing API v25.0+ only; Tech Provider "Access verification" required at Phase 2.
+- Google Cloud: OAuth client for Supabase Auth Google sign-in (published consent screen, basic scopes).
+
+ARCHITECTURE AMENDMENTS:
+- Phase 1 email + calendar = Microsoft Graph (X Law is M365), NOT Gmail; provider-agnostic connector interface from day one; Google Workspace = second provider, Phase 2 (Barakah).
+- Auth arrived early (its own trigger clause: first second user / public reachability): Supabase Auth + Google, allowed_emails allowlist, middleware on all routes, nameless holding page, quiet-surface rule (product name appears nowhere in publicly served HTML; the vercel.app subdomain is the accepted exception until a custom domain).
+- Domain: deferred with product naming (Phase 2 decision); rooshni.barakahx.com pattern approved if needed sooner; OAuth redirects use wildcard branch-alias pattern.
+
+BUILD METHOD (now also encoded in docs/PLAYBOOK.md + CLAUDE.md + skills):
+- Numbered sessions, fresh context each; scope + definition of done + rules block per session.
+- Repo is the memory: DECISIONS.md (judgment calls recorded only after founder sign-off), GO-LIVE.md (accumulating checklist), protected-structures list.
+- check-local (PGlite, refusal-first smoke tests) green before anything touches live.
+- UI sessions on branches with Vercel preview; founder click-review is the merge gate; backend sessions on main. Branch protection on main goes on before real leads (GO-LIVE item).
+- Long sessions batch judgment calls (proceed on spec-faithful reading, present all at end); stop mid-run only at locked doors or credentials.
+- Model strategy post-Fable (12 Jul): Opus 4.8 for structural sessions (schema, engine, connectors, locked doors); Sonnet 5 for contained sessions (UI over existing APIs, docs, seeds). Playbook exists to move sessions from the first column to the second.
+- Three parallel chats, one cabinet: Build Ops / Design (mockup pass 2) / Playbook. Chats never read each other; anything decided must land in project knowledge or the repo to exist.
+
+PRODUCT DECISIONS:
+- Ledger is the default theme; "The Record" is the UI label for the events ledger.
+- The mockup-review six (editable inbox drafts + manual attach + hand-back; Conversations drag divider; reply toggle client-direct vs brief-Light; Contacts simple/advanced + separate linked detail pages; The Record rename; tabbed Settings) — statuses as of 9 Jul: 4/5/6 built, 1/2/3 pending their sessions.
+- Inbox layout: stacked full-width cards (mockup pass 1 authority), master-detail rejected.
+- UI never renders an unearned tick: unchecked pre-flight categories show as Pending, never green.
+- One engagement type "enquiry" with visa_route as a declared custom field; visa routes are attributes, not lifecycles; "matter" is a future separate type.
+- Human-friendly sequential enquiry references (#0114 style): schema backlog, near-term session.
+
+BUILD STATE (end 9 Jul): migrations 0001–0019 live; Sessions 1–6 closed + parallel UI session merged pending; 107 smoke tests green; auth live on production; workflow engine + MVP workflow rehearsed end-to-end at TIME_SCALE=1440 with STUB send/Meta executors. Remaining before real leads: send pipeline (Graph + WhatsApp behind the locked door), real Meta lead webhook, Vercel cron + CRON_SECRET, plus GO-LIVE checklist (TIME_SCALE=1, purge demo data, branch protection, real sends replace STUBs, infra off free tiers).
