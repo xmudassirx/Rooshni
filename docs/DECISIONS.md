@@ -305,3 +305,113 @@ is enforced in the database; the app being well-behaved is not a control.
     `pre_close_check.mjs` cannot distinguish foreign changes from
     unfinished session work, so any uncommitted or untracked state fails
     the close. The books balance only on a fully committed tree.
+
+## Session 6 (12 July 2026) — the workflow engine and the MVP workflow, all approved
+
+Founder watch on the live compressed clock: PASS — intro drafts held for the
+stamp without the run hanging, stub-send and call task on approval, skips
+with reasons, nurture at exactly +2/+5/+9, auto-close to Unresponsive, both
+stories reconstructed from events alone by `npm run verify`.
+
+37. **`workflow_steps.sort_order`** — Spec 4 §3 names the column `order`, a
+    reserved SQL keyword. Renamed per the decision 1 precedent; meaning
+    unchanged.
+
+38. **`workflow_definitions.approved_by_actor_id`** — Spec 4 §2.4 makes
+    activating a definition a gated act; the human stamp needs a column to
+    live on (the decision 4/17 class of addition). Status and the stamp are
+    revoked from direct update for every API role.
+
+39. **New tool `approvals.workflows` (level 3, approvals category)** —
+    decision 8 fixed the Phase 1 registry; §2.4 creates the need. Stays
+    structurally unholdable by non-humans (0014 trigger).
+
+40. **A definition is immutable once it leaves draft; its steps freeze with
+    it** — a change of behaviour is a new version (the grants precedent,
+    decision 11: re-issue, never rewrite).
+
+41. **The table is `step_runs`, per Spec 4 §3** — the session prompt said
+    "step_executions"; the spec's name won ("as specced").
+
+42. **Run pause/resume/cancel gate on `enquiries` (execute) or the owner** —
+    the spec names the acts but not their gate; enquiries execute is the
+    Level 2 tool every enquiry mutation consumes. **Caveat (Mudassir):**
+    approved for Phase 1 — flag a proper `workflows.control` tool for the
+    Phase 2 registry review, alongside the message-templates tool (53).
+
+43. **Two idempotency keys on runs** — at most one live run per
+    (definition, engagement); a triggering event is consumed at most once,
+    ever. Cron retries and webhook replays start nothing.
+
+44. **The 5-minute claim lease is not TIME_SCALE data** — it is
+    infrastructure crash-recovery time (how long a claimed step may sit
+    `running` before a later tick reclaims it), not a workflow timer.
+
+45. **Pending workflow definitions join the `approval_inbox` union** —
+    decision 20 anticipated new arms; `description_plain` is the
+    plain-English preview §2.4 requires at the gate.
+
+46. **The Workflow engine actor** (actor_type `workflow`, a Spec 1 type
+    unused until now) holds `enquiries` execute — honest ledger
+    attribution: Light drafts, the engine schedules, skips, moves and
+    closes.
+
+47. **The Session 1 stand-in call task is retired** — the run's
+    `create_task` step (Spec 4 §4 step 2) owns it, with `workflow_run_id`
+    set. Existing fixture tasks stay on the go-live purge list.
+
+48. **Nurture waits anchor sequentially after the intro stamp** — gaps of
+    2/3/4 days produce the spec's T+2/5/9; the 3-day close wait lands at
+    ≈T+12 (spec's "total sequence ≈ 12 days").
+
+49. **"2 business hours" runs as plain hours in Phase 1** — no
+    business-hours calendar exists. **Caveat (Mudassir):** all §4 timers
+    remain provisional pending the two-week lead log; the log amends
+    numbers, not structure.
+
+50. **The WhatsApp nudge falls back to email when no consented WhatsApp
+    channel is on file** — §4 step 4's "(if consented)" applied to step 8.
+    Exercised live: both fixture leads hold phone+email consent only; the
+    fallback fired and the drafts passed pre-flight.
+
+51. **The intro blocks the run for the stamp; nurture nudges do not** —
+    silence auto-closes even with nudges unstamped (proven live: t5/t9
+    expired unstamped, close still fired). **Caveat (Mudassir, verbatim):**
+    "closing as Unresponsive when nudges expired unstamped misattributes
+    the silence — at the send-pipeline session, the close step must
+    distinguish 'silent after sent nudges' from 'nudges never approved' on
+    the ledger."
+
+52. **Unobservable step conditions skip ON THE LEDGER** — steps 3–7 exist
+    as data; conditions Phase 1 cannot observe resolve false and
+    `workflow.step_skipped` records why. A run never hangs on machinery
+    that does not exist yet, and never acts silently.
+
+53. **`message_templates` writes are RLS-only in Phase 1** — Spec 4 §3 says
+    editing a template is a Level 2 change, but no Phase 1 tool exists for
+    it (the decision 13 precedent). Flagged for the Phase 2 registry review
+    with 42's `workflows.control`.
+
+54. **`CRON_SECRET` and the public tick path** — /api/workflows/tick sits
+    outside the session middleware because a cron holds no session; it
+    fails closed (503 with no secret configured, exact bearer match
+    otherwise) and every act a tick performs remains gated in the database.
+    The variable name lives in `.env.example`; the value is Mudassir's.
+
+55. **Demo-reset semantics** — live runs cancelled through the gated
+    pipeline, stale drafts soft-archived, workflow tasks cancelled, stage
+    moves through the stage door; every act evented, nothing deleted.
+
+56. **Definition rejection mirrors the comms pipeline** — a reason is
+    required and the proposal returns to draft; refusing the stamp is
+    exercising stamp authority (decision 18).
+
+**Incidents, accepted at sign-off:** (a) the working copy was on
+`ui/screens-record-detail` when the session opened (stale context snapshot);
+the engine commit was cherry-picked to main and the UI branch restored
+exactly to its pushed tip — the parallel UI session switches back on resume.
+(b) PLAYBOOK §7 gained the workflow doors at close per §7's own rule
+(commit 77e69ba), reviewed and approved. **Correction (Mudassir):** Vercel
+preview aliases follow `rooshni-web-git-<branch>-…` — the `-web` segment was
+missing from a reported preview URL; recorded in the preview-verification
+skill.
