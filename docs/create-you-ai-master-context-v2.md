@@ -200,6 +200,7 @@ BUILD METHOD (now also encoded in docs/PLAYBOOK.md + CLAUDE.md + skills):
 - Long sessions batch judgment calls (proceed on spec-faithful reading, present all at end); stop mid-run only at locked doors or credentials.
 - Model strategy post-Fable (12 Jul): Opus 4.8 for structural sessions (schema, engine, connectors, locked doors); Sonnet 5 for contained sessions (UI over existing APIs, docs, seeds). Playbook exists to move sessions from the first column to the second.
 - Three parallel chats, one cabinet: Build Ops / Design (mockup pass 2) / Playbook. Chats never read each other; anything decided must land in project knowledge or the repo to exist.
+-Build-order amendment (12 Jul): full-face UI completion precedes integration wiring — Session 7 = all remaining screens on Fable (design-before-wiring at full scale); Session 8 = send pipeline/webhook/cron on Opus 4.8. Rationale: Fable's edge is holistic product judgment; integration is contract-shaped work the playbook hardens for cheaper models.
 
 PRODUCT DECISIONS:
 - Ledger is the default theme; "The Record" is the UI label for the events ledger.
