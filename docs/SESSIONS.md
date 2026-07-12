@@ -28,3 +28,4 @@ numbering of method work and carry no number.
 | — | 9 Jul 2026 | Method: playbook v1.0 install + verification close-out (incident 1) | `99bd2f2`…`35a24b0` | closed; signed (DECISIONS 29–31) ® |
 | 6 | 9 Jul 2026 (signed 12 Jul) | Spec 4 workflow engine — definition door, run state machine, MVP workflow as data, tick entry points | `99d9a74`…`77e69ba`; near-miss log `5ee4178` | closed; signed (DECISIONS 37–56) ® |
 | — | 9 Jul 2026 | Method: skill hardening, incident-2 tightening — ran in its own granted worktree | `7bbe683`…`8b03faa` | closed; signed (DECISIONS 32–36) ® |
+| 7 | 12 Jul 2026 | Method: finding-sweep — pathway X-ray fixes (CLAUDE.md, PLAYBOOK), this ledger created, `--allow-dirty` close gate | `4025795`…`44049f3` | closed; approved in-prompt (DECISION 57) |
