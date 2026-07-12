@@ -5,7 +5,7 @@
 This document is the method by which Rooshni is built. It exists so that the standard of the build does not depend on which model runs a session. A cheaper model cannot be made smarter, but almost every occasion where the difference matters can be removed: smaller scopes, tighter contracts, judgment pre-decided on paper and delivered at point of use.
 
 **Who reads what:**
-- **The builder (Claude Code)** reads `CLAUDE.md` (always loaded), the session prompt it was given, and whichever skill matches the job at hand. It consults this playbook only when a prompt points at a specific section.
+- **The builder (Claude Code)** reads `CLAUDE.md` (always loaded), the session prompt it was given, and whichever skill matches the job at hand. It consults this playbook when a prompt points at a specific section, and always §5 (the judgment lanes) when anything is ambiguous.
 - **The founder and strategy chats** read this whole document. It is the manual for *writing* sessions, not for running them.
 - **Any new model or contractor** reads this first, end to end. It is the onboarding.
 
@@ -43,15 +43,19 @@ Every session prompt (template: Appendix A) contains, in order:
 ### 3.2 Session lifecycle
 
 1. **Open** — fresh Claude Code context in the repo. Paste the prompt.
-2. **Pre-flight** — before writing any code, the builder restates the scope in its own words and lists anything it can already see will be a Lane C stop (§5). If the restatement is wrong, the founder corrects it before a line is written — the cheapest possible place to catch a misread. If nothing is flagged, it proceeds without waiting.
+2. **Pre-flight** — before writing any code, the builder restates the scope in its own words and lists anything it can already see will be a Lane C stop (§5). If the restatement is wrong, the founder corrects it before a line is written — the cheapest possible place to catch a misread. If nothing is flagged, it proceeds without waiting. Pre-flight also records the `origin/main` SHA the session starts from — the close gate's `--base`.
 3. **Build** — within scope, per the relevant skills.
-4. **Gate 1: check-local** — the in-memory harness (PGlite): boots Postgres in memory, fakes the Supabase auth surroundings, applies *all* migrations from zero, runs *all* smoke tests. Green or nothing moves.
+4. **Gate 1: check-local** — the in-memory harness (PGlite): boots Postgres in memory, fakes the Supabase auth surroundings, applies *all* migrations from zero, runs *all* smoke tests. Green is required before live Supabase is touched and before the session closes; UI branches may push to a Vercel preview at any time — previews touch no database.
 5. **Gate 2: live** — migrations/seed applied to live Supabase only after Gate 1. UI work instead goes to a branch + Vercel preview (Gate 3).
 6. **Report** — the close report (Appendix B): delivered / judgment calls awaiting sign-off / GO-LIVE additions / what the founder must do.
 7. **Gate 3: founder stamp** — judgment calls signed off (then and only then recorded in `DECISIONS.md`); for UI, click-review of the preview URL, then the founder merges. The builder never merges UI branches.
-8. **Close** — books balance: nothing pending, nothing untracked, session number retired.
+8. **Close** — books balance: nothing pending that isn't listed in the report — Lane B sign-offs are Gate 3's business and follow the close. Nothing untracked; the session's own line is appended to `docs/SESSIONS.md` (§8); the session number is retired. <!-- JUDGMENT: ruling 3 named §8 and the session-close skill as the homes of the ledger-append rule; repeating it here in the close step is an additive placement so the lifecycle list is complete on its own. -->
 
 **The single-session rule (incidents 1 and 2, §10):** one builder session per folder. Parallel sessions are permitted only via separate git worktrees — each session in its own folder, on its own branch, and that folder granted explicitly in its session prompt. If at pre-flight, or at any point after, the working tree contains changes the session did not make, stop: that is Lane C. Likewise if HEAD, the current branch, or the working tree changes underneath a session mid-flight: stop — Lane C, no exceptions, even when stopping blocks completing an explicit founder instruction; report and wait. A session never commits, pushes, or builds on foreign work.
+
+**Branch discipline and the recorded base (Session 7, decision 57):** backend, schema and docs sessions work on `main` with small commits; UI sessions on `ui/session-N-<slug>` branches (CLAUDE.md law 8 — the founder merges). Every session records the `origin/main` SHA it started from at pre-flight and passes it as `--base` to `pre_close_check.mjs` at close.
+
+**Founder edits in the working folder (finding-sweep, §10 entry 4):** founder edits are committed or declared in the session prompt *before* a session opens — the prompt names every expected-dirty path — and the folder is frozen while a session runs. A declared path passes the close gate only via `pre_close_check.mjs --allow-dirty`; anything undeclared remains a stop.
 
 ### 3.3 Failure rule
 
@@ -135,9 +139,10 @@ New enforcements added by future sessions join this list at the same session's c
 ## 8. The paper trail
 
 - **`CLAUDE.md`** (repo root) — the laws in short form. Always loaded by Claude Code. Amended only by founder-approved decision.
-- **`docs/DECISIONS.md`** — approved judgment calls and founder decisions, numbered continuously and grouped by session: what was decided, the rationale, any founder caveat. Nothing enters without founder sign-off; nothing is ever deleted (superseded entries are marked retired/superseded in place, mirroring the memory doctrine: re-label, never destroy).
+- **`docs/DECISIONS.md`** — approved judgment calls and founder decisions, numbered continuously and grouped by session: what was decided, the rationale, any founder caveat. Nothing enters without founder sign-off; nothing is ever deleted (superseded entries are marked retired/superseded in place, mirroring the memory doctrine: re-label, never destroy). Mid-session approvals are recorded in-session and pass the close gate via `--decisions-approved`. Calls approved *after* a session closes are recorded by a follow-up bookkeeping session — or the next session touching `docs/` — whose prompt quotes the approval; entries always take the next free number **read from the file**, never assumed.
 - **`docs/GO-LIVE.md`** — everything that must be true before real client data or real leads flow. Items added the moment they are introduced ("set TIME_SCALE=1 in Vercel", "infra off free tiers per §3.8", "purge seed/demo data"), never deleted, ticked at go-live. The builder adds items freely; only the founder ticks them.
-- **Session close reports** — Appendix B format, posted in the session and relayed to Build Ops. The report *is* the session's existence to the outside world.
+- **`docs/SESSIONS.md`** — the session ledger: one line per session (number · date · one-sentence scope · landing SHA(s) · close status). Appending the session's own line is part of every close; backfilled entries reconstructed from git history and `DECISIONS.md` are marked as such.
+- **Session close reports** — Appendix B format, posted in the session and relayed to Build Ops. The report *is* the session's existence to the outside world; its durable trace is the session's `SESSIONS.md` line.
 
 ## 9. Standing technical discipline — the skills
 
@@ -151,6 +156,8 @@ Full procedures live in `.claude/skills/`; Claude Code loads each when doing tha
 - **`preview-verification`** — UI branches named `ui/session-N-slug`; pushed for a Vercel preview; the handover to the founder is a checklist: preview URL · exact click path · expected result · which approved mockup screen each view must match (including the semantic invariants: gold = Light acted, red = human stamp, green = done, monospace register unchanged). The builder never merges; the founder's click-review is the merge gate.
 - **`session-close`** — the Appendix B report ritual: nothing delivered that isn't listed, nothing listed that isn't proven, judgment calls gathered in one place, GO-LIVE additions named, founder actions explicit. Books must balance before the session ends.
 
+The builder's harness may ship third-party skill ecosystems of its own (superpowers, or whatever replaces it). They are subordinate: where any harness skill conflicts with `CLAUDE.md`, this playbook, or the session pattern, `CLAUDE.md` and the playbook win, and no harness demand precedes the pre-flight ritual. Whether such an ecosystem stays installed is the founder's call, not a session's.
+
 ## 10. How this document grows — the tightening loop
 
 Rules here are **extracted from incidents, never invented in advance**. When a builder model behaves differently than a session assumed — a misread scope, a lawyered lane, a proof claimed but not run — the incident is reported to the Playbook chat, the smallest rule that would have prevented it is drafted, and it lands here or in the relevant skill via a founder-approved commit. One incident, one rule, same discipline as `DECISIONS.md`: dated, never deleted, superseded entries re-labelled. The playbook is to the build what memory cards are to Light — it improves by being corrected during real work.
@@ -162,6 +169,8 @@ Rules here are **extracted from incidents, never invented in advance**. When a b
 2. **9 July 2026** — during a commit-and-push, a concurrent session in the same repo folder switched HEAD to another branch mid-operation; rather than stopping, the builder completed the push by fast-forwarding the remote to the commit's SHA directly. The pushed content was correct (accepted retroactively, decision 32); the precedent is rejected — a mid-flight HEAD change is a stop, not a puzzle to route around. Rules extracted (§3.2 amendment): one builder session per folder; parallel sessions only via separate git worktrees, each granted its folder explicitly in its session prompt; if HEAD, the current branch, or the working tree changes underneath a session mid-flight, stop — Lane C, no exceptions, even when stopping blocks completing an explicit founder instruction; report and wait. The skill-hardening session that landed this rule was itself the first run under it, in its own granted worktree.
 
 3. **9 July 2026 — near-miss, no rule extracted.** Session 6 opened on a stale context snapshot: the folder's checked-out branch was not the one the snapshot showed, and work began against the wrong branch. The session self-corrected — cherry-picked its work onto the right base and restored the branch exactly as found. Predates the single-session rule landing; under it, the mismatch is caught at pre-flight. Logged for the record; no new rule needed.
+
+4. **12 July 2026 — finding-sweep, not an incident.** A read-only pathway X-ray (the builder describing its own end-to-end session pathway from cold context) produced seven documentation findings — all accepted, zero behaviour violations — fixed in Session 7: the close wording (§3.2), the post-close DECISIONS path (§8), the session ledger (`docs/SESSIONS.md`), branch discipline and the recorded `--base` (§3.2), Gate 1's reach (§3.2), the consultation rule (header), harness-skill subordination (§9, `CLAUDE.md`). Extraction from the session itself: undeclared founder edits in the shared working tree forced a pre-flight stop, and a second wave of founder bookkeeping surfaced mid-session — the same lesson proven twice in one session. Rules: session prompts declare every expected-dirty path; founder edits in the working folder are committed or declared before a session opens, and the folder is frozen while a session runs; `--allow-dirty` in `pre_close_check.mjs` is the sanctioned mechanism for declared exceptions.
 
 ---
 
@@ -185,8 +194,10 @@ Definition of done:
 Rules unchanged: check-local green before anything touches live; judgment calls per
 docs/PLAYBOOK.md §5 (Lane B recorded for sign-off, Lane C stops and asks);
 DECISIONS.md only after my approval; GO-LIVE items to docs/GO-LIVE.md as introduced;
-never leave the repo; credentials from me on request only; [UI sessions:] work on
-branch ui/session-N-<slug>, Vercel preview for my click-review, never merge.
+never leave the repo; credentials from me on request only; expected-dirty founder
+paths declared here: <path(s) + reason, or none — anything undeclared is a stop>;
+[UI sessions:] work on branch ui/session-N-<slug>, Vercel preview for my
+click-review, never merge.
 
 Before you write any code: restate the scope in your own words and flag anything
 you can already see is a Lane C stop. Then proceed.
