@@ -75,7 +75,13 @@ if (run.status !== 0) {
 }
 
 // --- 2. clean tree (up to founder-declared --allow-dirty paths) --------------
-const porcelain = git("status", "--porcelain");
+// Raw, untrimmed: the XY status prefix is positional, and the git() helper's
+// trim() would eat a significant leading space on the FIRST line (" M path"),
+// shifting slice(3) off the path.
+const porcelain = execFileSync("git", ["status", "--porcelain"], {
+  cwd: repoRoot,
+  encoding: "utf8",
+});
 const statusPath = (line) => {
   // porcelain v1: "XY path" or "XY old -> new"; quoted when exotic
   let p = line.slice(3);
@@ -84,7 +90,7 @@ const statusPath = (line) => {
   if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
   return p;
 };
-const dirtyLines = porcelain ? porcelain.split("\n") : [];
+const dirtyLines = porcelain.split("\n").filter((l) => l.length > 0);
 const undeclaredDirty = dirtyLines.filter(
   (l) => !allowDirty.some((a) => a.path === statusPath(l))
 );
