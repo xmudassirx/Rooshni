@@ -496,3 +496,63 @@ skill.
     Phase 3+ screens inside it are marked SIGNED EXCEPTION and are not
     build targets. Rationale: mockups beyond the next phase are fiction
     that hardens into accidental commitments.
+
+## Session 8 (16 July 2026) — full-face UI, approved in the fix-round prompt (Part 3)
+
+64. **One-door appearance** — the top-bar Aa control is removed; Settings →
+    Appearance is the only appearance door (an amendment overriding the
+    mockup's pixels). Conversations keeps its contextual phone/standard
+    header toggle as the quick switch. Rationale: the one-door pattern,
+    same law as connections-once (decision 58).
+
+65. **Billing & usage stays a sidebar item, owner-gated** — the placement
+    question (sidebar vs Settings tab) is closed; the DESIGN PROPOSAL chip
+    removed. Rationale: founder click-review verdict.
+
+66. **Green-as-chrome sweep** — the pass-1 screens (Enquiries board, The
+    Record, contact detail) move to decision 61: accent drives chrome;
+    green returns to done-semantics only. No other changes to those
+    screens. Rationale: one colour law, no grandfathered screens.
+
+67. **The Feedback nav gate keys on ownership** until a `feedback` tool row
+    is registered (a migration, its own session); the GO-LIVE item carries
+    the re-key. Rationale: grant-gating needs a registered tool to grant.
+
+68. **Memory renders the honest empty store** — Spec 2's `memory_cards`
+    table is unbuilt; the surface shows its full UI over an empty grid and
+    the import stub, per the session's data-wiring rule ("empty state,
+    defer"). Rationale: the UI never shows an unearned card.
+
+69. **Untimed tasks are `due_at` at day-start plus `attributes.all_day =
+    true`.** WATCH-ITEM: future SLA/vigilance logic must not read an
+    all_day task as "overdue since 00:00" — the flag, not the timestamp,
+    is the truth about timing. Rationale: the schema holds only due_at;
+    the fill is additive and reversible.
+
+70. **Tasks gains week-navigation arrows** — the static mockup draws one
+    fixed week; the arrows and the month grid's tap-through are the two
+    routes to other weeks. Rationale: an interaction the mockup could not
+    draw, not a structural change.
+
+71. **Finance and Client portal render present-but-disabled** nav entries
+    with PHASE 3 chips. Rationale: the mockup's sidebar carries them, but
+    live nav to SIGNED EXCEPTION screens would be an unearned affordance.
+
+72. **Human avatars take the accent** — prism|gold is Light's channel only;
+    the mockup's gold user-avatar is pass-1 residue. Rationale:
+    AMENDMENTS-PASS3 (decision 61) outranks mockup pixels.
+
+73. **`[{type:"paragraph"|"check", text, done}]` is the canonical
+    note-block vocabulary** — import and MCP surfaces will emit it.
+    Rationale: content_items.body was specced as "structured blocks" with
+    no vocabulary; this one is portable and additive.
+
+74. **Task and note mutations write directly to their ungated tables**
+    under member RLS, with every act on The Record via `emitEvent()`.
+    Rationale: tasks and notes are deliberately ungated primitives; the
+    ledger path is the law that matters and it is honoured.
+
+75. **Decision 15 (auto-close logic) is re-pinned to the integration
+    session** — timers ship provisional and are tuned from live ledger
+    data after go-live. Rationale: tuning against real behaviour beats
+    guessing before any lead has flowed.
