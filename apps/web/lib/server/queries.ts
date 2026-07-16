@@ -813,6 +813,116 @@ export async function getAgentActor(): Promise<{ id: string; name: string } | nu
   return data ? { id: data.id, name: data.display_name } : null;
 }
 
+// --- Website ---------------------------------------------------------------------
+
+export interface WebsitePageRow {
+  id: string;
+  title: string;
+  slug: string;
+  contentType: string;
+  state: string;
+  version: number;
+  updatedAt: string;
+  draftedByLight: boolean;
+}
+
+/** Everything published or teachable that is NOT a note — the site's pages. */
+export async function getWebsitePages(): Promise<WebsitePageRow[]> {
+  const { db, business } = await getAppContext();
+  const { data, error } = await db
+    .from("content_items")
+    .select("id, title, slug, content_type, state, version, updated_at, created_by, actors!content_items_created_by_fkey(actor_type)")
+    .eq("business_id", business.id)
+    .neq("content_type", "note")
+    .is("archived_at", null)
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(`content_items query failed: ${error.message}`);
+  return (data ?? []).map((r) => {
+    const creator = r.actors as unknown as { actor_type: ActorType } | null;
+    return {
+      id: r.id,
+      title: r.title,
+      slug: r.slug,
+      contentType: r.content_type,
+      state: r.state,
+      version: r.version,
+      updatedAt: r.updated_at,
+      draftedByLight: creator?.actor_type === "agent",
+    };
+  });
+}
+
+export interface WebsitePageDetail extends WebsitePageRow {
+  blocks: NoteBlock[];
+  visibility: string;
+  publishedAt: string | null;
+  publishedByName: string | null;
+}
+
+export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetail | null> {
+  if (!isUuid(id)) return null;
+  const { db, business } = await getAppContext();
+  const { data: r, error } = await db
+    .from("content_items")
+    .select(
+      "id, title, slug, content_type, state, version, updated_at, visibility, body, published_at, published_by_actor_id, created_by, actors!content_items_created_by_fkey(actor_type)"
+    )
+    .eq("id", id)
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (error) throw new Error(`content_items lookup failed: ${error.message}`);
+  if (!r) return null;
+
+  const { data: publisher } = r.published_by_actor_id
+    ? await db.from("actors").select("display_name").eq("id", r.published_by_actor_id).maybeSingle()
+    : { data: null };
+
+  const creator = r.actors as unknown as { actor_type: ActorType } | null;
+  const raw = Array.isArray(r.body) ? (r.body as unknown[]) : [];
+  return {
+    id: r.id,
+    title: r.title,
+    slug: r.slug,
+    contentType: r.content_type,
+    state: r.state,
+    version: r.version,
+    updatedAt: r.updated_at,
+    visibility: r.visibility,
+    publishedAt: r.published_at,
+    publishedByName: (publisher?.display_name as string | undefined) ?? null,
+    draftedByLight: creator?.actor_type === "agent",
+    blocks: raw.flatMap((b): NoteBlock[] => {
+      const block = b as Record<string, unknown>;
+      if (typeof block.text === "string") return [{ type: "paragraph", text: block.text }];
+      return [];
+    }),
+  };
+}
+
+export interface DomainRow {
+  hostname: string;
+  surface: string;
+  verificationStatus: string;
+  sslStatus: string;
+}
+
+export async function getDomains(): Promise<DomainRow[]> {
+  const { db, business } = await getAppContext();
+  const { data, error } = await db
+    .from("domains")
+    .select("hostname, surface, verification_status, ssl_status")
+    .eq("business_id", business.id)
+    .is("archived_at", null);
+  if (error) throw new Error(`domains query failed: ${error.message}`);
+  return (data ?? []).map((d) => ({
+    hostname: d.hostname,
+    surface: d.surface,
+    verificationStatus: d.verification_status,
+    sslStatus: d.ssl_status,
+  }));
+}
+
 // --- Automation ------------------------------------------------------------------
 
 export interface WorkflowStepRow {

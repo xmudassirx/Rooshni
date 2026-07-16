@@ -1,9 +1,16 @@
-import { Placeholder } from "@/components/shell/page-head";
+import { PageHead } from "@/components/shell/page-head";
 
-export default function Page() {
+import { TemplatesActions, TemplatesClient } from "./templates-client";
+
+export default function WebsiteTemplatesPage() {
   return (
-    <Placeholder icon="◈" title="Website · Templates" chip="Later in Session 8">
-      The shell-wide templates gallery — being built later in this session.
-    </Placeholder>
+    <>
+      <PageHead
+        title="Website"
+        sub="Templates — shell-wide gallery: every business sees these, yours and the marketplace's"
+        actions={<TemplatesActions />}
+      />
+      <TemplatesClient />
+    </>
   );
 }

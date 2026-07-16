@@ -1,9 +1,20 @@
-import { Placeholder } from "@/components/shell/page-head";
+import { PageHead } from "@/components/shell/page-head";
+import { getWebsitePages } from "@/lib/server/queries";
 
-export default function Page() {
+import { WebsiteClient } from "./website-client";
+
+export const dynamic = "force-dynamic";
+
+export default async function WebsitePage() {
+  const pages = await getWebsitePages();
+
   return (
-    <Placeholder icon="◈" title="Website · Pages" chip="Later in Session 8">
-      The pages list with scores and states — being built later in this session.
-    </Placeholder>
+    <>
+      <PageHead
+        title="Website"
+        sub="Site, funnels, blog and forms — one surface, every publish your stamp"
+      />
+      <WebsiteClient pages={pages} />
+    </>
   );
 }
