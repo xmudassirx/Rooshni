@@ -38,7 +38,7 @@ Turborepo monorepo, npm workspaces (`apps/*`, `packages/*`), Node ≥ 20. Root s
 | Seeds & provider fixtures | `packages/db/seed/` |
 | Tests | `packages/db/scripts/check-local.ts` (the harness IS the test suite) |
 | Specs | `docs/phase0-spec1..4-*.md`, `docs/create-you-ai-master-context-v2.md` |
-| Design authority | `docs/mockup-pass1-shell-pipeline-case.html` + signed amendments (listed in `ui-system`) |
+| Design authority | `docs/design/mockup-pass1-shell-pipeline-case.html` + signed amendments (listed in `ui-system`) |
 | Decisions / go-live | `docs/DECISIONS.md` · `docs/GO-LIVE.md` |
 | Env vars | root `.env.example` (names only) → `.env.local` (git-ignored); `apps/web/next.config.ts` loads the repo-root file in dev |
 
