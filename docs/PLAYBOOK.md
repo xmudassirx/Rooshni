@@ -172,6 +172,10 @@ Rules here are **extracted from incidents, never invented in advance**. When a b
 
 4. **12 July 2026 — finding-sweep, not an incident.** A read-only pathway X-ray (the builder describing its own end-to-end session pathway from cold context) produced seven documentation findings — all accepted, zero behaviour violations — fixed in Session 7: the close wording (§3.2), the post-close DECISIONS path (§8), the session ledger (`docs/SESSIONS.md`), branch discipline and the recorded `--base` (§3.2), Gate 1's reach (§3.2), the consultation rule (header), harness-skill subordination (§9, `CLAUDE.md`). Extraction from the session itself: undeclared founder edits in the shared working tree forced a pre-flight stop, and a second wave of founder bookkeeping surfaced mid-session — the same lesson proven twice in one session. Rules: session prompts declare every expected-dirty path; founder edits in the working folder are committed or declared before a session opens, and the folder is frozen while a session runs; `--allow-dirty` in `pre_close_check.mjs` is the sanctioned mechanism for declared exceptions.
 
+5. **15 July 2026 — design pass 3, the frost cream-leak.** The Frost theme did not override `paper`/`paper-deep`/`rule`, so it silently inherited another theme's cream tint. Rule extracted: **theme variables must be complete per theme** — every theme defines its own full variable set; a theme that doesn't override `paper`/`paper-deep`/`rule` inherits another theme's tint, and that is a defect, not a default.
+
+6. **15 July 2026 — design pass 3, the prism-vs-frost ordering.** Equal-specificity theme rules resolve by source order, and a master override block placed mid-sheet lost to a later theme block. Rule extracted: **master override blocks go at the stylesheet END** — equal-specificity theme rules win by order, so the override that must always win is written last.
+
 ---
 
 ## Appendix A — session prompt template
