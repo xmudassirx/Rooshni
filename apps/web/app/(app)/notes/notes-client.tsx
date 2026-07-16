@@ -214,7 +214,7 @@ export function NotesClient({ data }: { data: NotesData }) {
                     <span className={cn(b.done && "text-ink-faint line-through")}>{b.text}</span>
                   </button>
                 ) : (
-                  <p key={i} className="mb-3 text-[13.5px] leading-relaxed">
+                  <p key={i} className="mb-3 max-w-[75ch] text-[13.5px] leading-relaxed">
                     {b.text}
                   </p>
                 )

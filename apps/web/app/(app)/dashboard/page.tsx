@@ -142,7 +142,7 @@ export default async function DashboardPage() {
         <div className="light-head mb-2 font-mono text-[10.5px] font-semibold tracking-[.14em] uppercase">
           ✦ Morning digest
         </div>
-        <div className="text-[14.5px] leading-relaxed">
+        <div className="max-w-[75ch] text-[14.5px] leading-relaxed">
           Light hasn&rsquo;t watched a night here yet — the narrated digest
           arrives with the monitors session. Until then, the vigilance list and
           the tiles below read straight from live rows:{" "}
@@ -195,7 +195,7 @@ export default async function DashboardPage() {
       ) : null}
 
       {/* Curated tiles */}
-      <div className="mt-4 grid grid-cols-1 gap-3 min-[680px]:grid-cols-2">
+      <div className="mt-4 grid grid-cols-1 gap-3 min-[680px]:grid-cols-2 min-[1600px]:grid-cols-4">
         <Tile href="/inbox" head="Stamps owed">
           <div className="font-display text-3xl leading-none font-black">
             {inbox.length}

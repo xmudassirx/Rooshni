@@ -77,7 +77,7 @@ export default async function WebsitePageDetail({
           <div className="min-h-60 px-1 py-4.5 text-sm leading-[1.75]">
             {page.blocks.length ? (
               page.blocks.map((b, i) => (
-                <p key={i} className="mb-2.5">
+                <p key={i} className="mb-2.5 max-w-[75ch]">
                   {b.text}
                 </p>
               ))

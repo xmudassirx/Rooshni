@@ -36,7 +36,7 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 }
 
 function EmptyRows({ children }: { children: React.ReactNode }) {
-  return <p className="px-5 py-6 text-[13px] text-ink-soft">{children}</p>;
+  return <p className="max-w-[75ch] px-5 py-6 text-[13px] text-ink-soft">{children}</p>;
 }
 
 function CfgRow({

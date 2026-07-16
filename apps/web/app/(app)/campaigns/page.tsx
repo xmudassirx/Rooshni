@@ -41,7 +41,7 @@ export default function CampaignsPage() {
       />
 
       <Panel title="Segments · saved views over contacts — no lists to sync, ever">
-        <p className="px-5 py-6 text-[13px] text-ink-soft">
+        <p className="max-w-[75ch] px-5 py-6 text-[13px] text-ink-soft">
           No segments saved yet. A segment is a stored search — enquiry stage,
           consent, tags — whose membership recomputes at SEND time: revoke
           consent at 09:59 and the 10:00 send skips you. Light will propose
@@ -50,7 +50,7 @@ export default function CampaignsPage() {
       </Panel>
 
       <Panel title="Saved blocks · build once, every campaign wears them — same model as the website's headers">
-        <p className="px-5 py-6 text-[13px] text-ink-soft">
+        <p className="max-w-[75ch] px-5 py-6 text-[13px] text-ink-soft">
           No blocks yet. The header, the footer with its locked unsubscribe line
           and the &ldquo;Was this useful?&rdquo; feedback module, and the
           book-a-consultation CTA all live here — and any block built inside a

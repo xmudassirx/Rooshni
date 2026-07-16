@@ -409,7 +409,10 @@ export function AppShell({
               Appearance is the only appearance door. */}
           <AskBar />
         </header>
-        <main className="w-full max-w-[1220px] p-5 max-[880px]:p-3.5">{children}</main>
+        {/* Founder amendment (fix round 3): the shell is fluid — containers
+            stretch, prose doesn't. The mockup's fixed canvas width is
+            overridden; content fills the viewport minus the sidebar. */}
+        <main className="w-full p-5 max-[880px]:p-3.5">{children}</main>
       </div>
     </div>
     </AskLightProvider>

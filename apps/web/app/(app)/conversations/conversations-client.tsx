@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { Paperclip, Search } from "lucide-react";
 
@@ -40,6 +40,30 @@ function initials(name: string): string {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+/*
+ * The per-user default view (Settings → Appearance). Fix round 3: the
+ * default is read as PART OF THE RENDER via useSyncExternalStore — during
+ * hydration React swaps to the client snapshot synchronously before paint,
+ * so there is no effect racing the first paint and no state initialiser for
+ * the SSR default to win. The header toggle is a session-local override on
+ * top (v2: the quick switch, not the default).
+ */
+function subscribeConvView(onChange: () => void): () => void {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+}
+
+function readConvViewDefault(): "phone" | "standard" {
+  try {
+    return document.documentElement.dataset.convview === "standard" ||
+      localStorage.getItem("ui-convview") === "standard"
+      ? "standard"
+      : "phone";
+  } catch {
+    return "phone";
+  }
 }
 
 function stateChipClass(tone: "gold" | "you" | "done"): string {
@@ -119,30 +143,20 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
   const [selectedId, setSelectedId] = useState<string | null>(threads[0]?.id ?? null);
   const [filter, setFilter] = useState<"all" | "you" | "light">("all");
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"phone" | "standard">("phone");
+  const defaultView = useSyncExternalStore(
+    subscribeConvView,
+    readConvViewDefault,
+    () => "phone" as const
+  );
+  const [viewOverride, setViewOverride] = useState<"phone" | "standard" | null>(null);
+  const view = viewOverride ?? defaultView;
+  const setView = setViewOverride;
   const [mode, setMode] = useState<"direct" | "light">("direct");
   const [railOpen, setRailOpen] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [listWidth, setListWidth] = useState(330);
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const splitRef = useRef<HTMLDivElement>(null);
-
-  // The per-user default view lives in Settings → Appearance; the header
-  // toggle here is the quick switch (v2 copy, verbatim). The boot script
-  // stamps data-convview before first paint, and this layout effect reads it
-  // BEFORE the browser paints — no flash of the phone default (fix round 2).
-  useLayoutEffect(() => {
-    try {
-      if (
-        document.documentElement.dataset.convview === "standard" ||
-        localStorage.getItem("ui-convview") === "standard"
-      ) {
-        setView("standard");
-      }
-    } catch {
-      /* stays phone */
-    }
-  }, []);
 
   // v2's draggable divider — clamp 250–520px, exactly its bounds.
   function startDrag(e: React.PointerEvent<HTMLDivElement>) {
