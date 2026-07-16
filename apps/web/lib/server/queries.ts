@@ -813,6 +813,137 @@ export async function getAgentActor(): Promise<{ id: string; name: string } | nu
   return data ? { id: data.id, name: data.display_name } : null;
 }
 
+// --- Team & Access -------------------------------------------------------------------
+
+export interface TeamMember {
+  actorId: string;
+  name: string;
+  kind: "human" | "agent";
+  role: string | null;
+  grantCount: number;
+}
+
+export async function getTeam(): Promise<TeamMember[]> {
+  const { db, business } = await getAppContext();
+
+  const [members, actors, grants] = await Promise.all([
+    db
+      .from("memberships")
+      .select("user_id, role")
+      .eq("business_id", business.id)
+      .is("archived_at", null),
+    db
+      .from("actors")
+      .select("id, display_name, actor_type, user_id")
+      .is("archived_at", null)
+      .in("actor_type", ["human", "agent"]),
+    db
+      .from("grants")
+      .select("grantee_actor_id")
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .is("revoked_at", null),
+  ]);
+  for (const [label, result] of [
+    ["memberships", members],
+    ["actors", actors],
+    ["grants", grants],
+  ] as const) {
+    if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
+  }
+
+  const grantCounts = new Map<string, number>();
+  for (const g of grants.data ?? []) {
+    grantCounts.set(g.grantee_actor_id, (grantCounts.get(g.grantee_actor_id) ?? 0) + 1);
+  }
+  const roleByUser = new Map((members.data ?? []).map((m) => [m.user_id, m.role as string]));
+
+  return (actors.data ?? [])
+    .filter((a) => a.actor_type === "agent" || (a.user_id && roleByUser.has(a.user_id)))
+    .map((a) => ({
+      actorId: a.id,
+      name: a.display_name,
+      kind: a.actor_type as "human" | "agent",
+      role: a.user_id ? (roleByUser.get(a.user_id) ?? null) : null,
+      grantCount: grantCounts.get(a.id) ?? 0,
+    }));
+}
+
+export interface GrantRow {
+  tool: string;
+  access: "view" | "draft" | "execute";
+  scopeLevel: string;
+  duration: string;
+  via: string;
+}
+
+export interface MemberDetail {
+  actorId: string;
+  name: string;
+  kind: "human" | "agent";
+  role: string | null;
+  grants: GrantRow[];
+  tools: { key: string; label: string; category: string }[];
+}
+
+export async function getMemberDetail(actorId: string): Promise<MemberDetail | null> {
+  if (!isUuid(actorId)) return null;
+  const { db, business } = await getAppContext();
+
+  const { data: actor, error: actorError } = await db
+    .from("actors")
+    .select("id, display_name, actor_type, user_id")
+    .eq("id", actorId)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (actorError) throw new Error(`actor lookup failed: ${actorError.message}`);
+  if (!actor || (actor.actor_type !== "human" && actor.actor_type !== "agent")) return null;
+
+  const [grants, tools, membership] = await Promise.all([
+    db
+      .from("grants")
+      .select("tool, access, scope, duration, via")
+      .eq("business_id", business.id)
+      .eq("grantee_actor_id", actorId)
+      .is("archived_at", null)
+      .is("revoked_at", null),
+    db.from("tools").select("key, label, category").is("archived_at", null).order("key"),
+    actor.user_id
+      ? db
+          .from("memberships")
+          .select("role")
+          .eq("business_id", business.id)
+          .eq("user_id", actor.user_id)
+          .is("archived_at", null)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  if (grants.error) throw new Error(`grants query failed: ${grants.error.message}`);
+  if (tools.error) throw new Error(`tools query failed: ${tools.error.message}`);
+
+  return {
+    actorId: actor.id,
+    name: actor.display_name,
+    kind: actor.actor_type as "human" | "agent",
+    role: (membership.data?.role as string | undefined) ?? null,
+    grants: (grants.data ?? []).map((g) => {
+      const scope = (g.scope ?? {}) as Record<string, unknown>;
+      return {
+        tool: g.tool,
+        access: g.access as GrantRow["access"],
+        scopeLevel: typeof scope.level === "string" ? scope.level : "business",
+        duration: g.duration,
+        via: g.via,
+      };
+    }),
+    tools: (tools.data ?? []).map((t) => ({
+      key: t.key,
+      label: t.label,
+      category: t.category,
+    })),
+  };
+}
+
 // --- Billing & usage ---------------------------------------------------------------
 
 export interface CreditUsage {

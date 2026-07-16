@@ -1,19 +1,18 @@
 import { PageHead } from "@/components/shell/page-head";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { TeamTab } from "./team-tab";
+
 // Founder amendment (mockup review): Settings is tabbed — General, Team &
 // Access, Appearance, Integrations. Structure only this session; each tab's
-// content arrives with its own feature.
+// content arrives with its own feature. Session 8 fills Team & Access only —
+// the door to the member pages and the Amal role page (view-member,
+// view-agentrole need a way in; everything else here is untouched).
 const TABS = [
   {
     value: "general",
     label: "General",
     body: "Business name, timezone, locale and vocabulary — arrives with the settings session.",
-  },
-  {
-    value: "team",
-    label: "Team & Access",
-    body: "Humans and AI, one permission system: members, presets and the grant matrix. No grant on a tool = no tab in their sidebar.",
   },
   {
     value: "appearance",
@@ -30,15 +29,20 @@ const TABS = [
 export default function SettingsPage() {
   return (
     <>
-      <PageHead title="Settings" sub="Structure only this session — each tab fills in with its feature" />
+      <PageHead title="Settings" sub="Each tab fills in with its feature — Team & Access is live" />
       <Tabs defaultValue="general">
         <TabsList>
-          {TABS.map((t) => (
+          <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="team">Team &amp; Access</TabsTrigger>
+          {TABS.slice(1).map((t) => (
             <TabsTrigger key={t.value} value={t.value}>
               {t.label}
             </TabsTrigger>
           ))}
         </TabsList>
+        <TabsContent value="team">
+          <TeamTab />
+        </TabsContent>
         {TABS.map((t) => (
           <TabsContent key={t.value} value={t.value}>
             <div className="glass rounded-xl border-dashed p-6">
