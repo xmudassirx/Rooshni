@@ -1,6 +1,6 @@
 # Phase 1 lead log — baseline (CLOSED, founder-ruled 16 July 2026)
 
-Source: GHL deals export (`export_deals_31.csv`), 50 Facebook leads, 8–15 July 2026.
+Source: Brevo deals export (`export_deals_31.csv`), 50 Facebook leads, 8–15 July 2026.
 Founder ruling: the log closes on this export; the "before" is measured from these
 numbers plus one founder gut estimate. Live post-go-live metrics measure the "after".
 
@@ -22,7 +22,7 @@ numbers plus one founder gut estimate. Live post-go-live metrics measure the "af
 
 Daily arrivals: {'08-07-2026': 7, '09-07-2026': 3, '10-07-2026': 6, '13-07-2026': 22, '15-07-2026': 12}
 
-## The manual pipeline — 12 stages (GHL, as operated)
+## The manual pipeline — 12 stages (Brevo, as operated)
 New · 24 hour Follow up · 2-5 Days Follow up · Follow up (After 6 PM) ·
 International Number · Pending Qualification · Qualified · Meeting scheduled ·
 In negotiation · Dead Lead · Won · Lost
@@ -34,7 +34,7 @@ brain. Barakah retires all four: timers are workflow data (Spec 4), junk and
 international-number handling is triage with a reason on The Record. The true
 semantic pipeline is: New -> Pending Qualification -> Qualified -> Meeting
 scheduled -> In negotiation -> Won / Lost / Dead. The Session 8 Meta wiring maps
-inbound leads to THIS set, not GHL's twelve (engagement.stage, decision 60).
+inbound leads to THIS set, not Brevo's twelve (engagement.stage, decision 60).
 
 ## What this baseline proves
 1. The manual system cannot measure its own follow-up effort (empty tracking columns on all 50 rows).
