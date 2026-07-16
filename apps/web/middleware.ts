@@ -22,7 +22,20 @@ import { createServerClient } from "@supabase/ssr";
 // FAILS CLOSED behind CRON_SECRET (exact bearer match, 503 when unset) and
 // every act a tick performs stays gated in the database — the sign-in door
 // for humans is unchanged.
-const PUBLIC_PATHS = ["/construction", "/signin", "/auth", "/api/health", "/api/workflows/tick"];
+// /signup and its API are public because a signer has no session yet
+// (decision 79 — signup lives outside the shell); /api/stripe/webhook is
+// public because Stripe holds no session — it FAILS CLOSED on signature
+// verification, and activation stays a service-role database door.
+const PUBLIC_PATHS = [
+  "/construction",
+  "/signin",
+  "/auth",
+  "/signup",
+  "/api/signup",
+  "/api/stripe/webhook",
+  "/api/health",
+  "/api/workflows/tick",
+];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some(
