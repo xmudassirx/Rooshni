@@ -556,3 +556,12 @@ skill.
     session** — timers ship provisional and are tuned from live ledger
     data after go-live. Rationale: tuning against real behaviour beats
     guessing before any lead has flowed.
+
+76. **The shell is fluid — containers stretch, prose doesn't** (fix round 3,
+    overriding the mockup's fixed canvas width). The main content area has
+    no maximum width: data surfaces reflow and stretch (boards widen their
+    columns, grids gain columns, tables and panes grow), while long-form
+    copy caps at a readable ~75ch measure inside stretching panels. Modals
+    and the ask composer keep their intrinsic widths; the Light page and
+    the generated workflow canvas column keep theirs (Lane B, noted at
+    handover). Rationale: wide screens get more content, never longer lines.
