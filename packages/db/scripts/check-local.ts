@@ -1,7 +1,9 @@
+import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { scaleDurationMs } from "@rooshni/config";
+import { verifyStripeSignature } from "../src/stripe";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -1275,6 +1277,273 @@ async function main() {
     const r = await db.query<{ n: number }>(`select count(*)::int as n from public.allowed_emails`);
     await db.exec(`reset role`);
     if (r.rows[0]!.n !== 0) throw new Error(`an archived row is still visible (${r.rows[0]!.n})`);
+  });
+
+  // ---------------------------------------------------------------------
+  console.log("\nSession 9 — onboarding foundations:");
+
+  // --- Stripe webhook signature (DoD ③'s core) — pure TS, no credential ---
+  const whSecret = "whsec_smoke_test_secret";
+  const whBody = JSON.stringify({ id: "evt_smoke_1", type: "checkout.session.completed" });
+  const whNowMs = Date.now();
+  const whTs = Math.floor(whNowMs / 1000);
+  const signAt = (ts: number, body: string) =>
+    createHmac("sha256", whSecret).update(`${ts}.${body}`).digest("hex");
+
+  await expectOk("a correctly signed Stripe webhook body verifies", async () => {
+    const r = verifyStripeSignature({
+      payload: whBody, header: `t=${whTs},v1=${signAt(whTs, whBody)}`, secret: whSecret, nowMs: whNowMs,
+    });
+    if (!r.ok) throw new Error(r.reason);
+  });
+  await expectOk("a tampered webhook body is refused", async () => {
+    const r = verifyStripeSignature({
+      payload: whBody + " ", header: `t=${whTs},v1=${signAt(whTs, whBody)}`, secret: whSecret, nowMs: whNowMs,
+    });
+    if (r.ok) throw new Error("a tampered body verified");
+  });
+  await expectOk("a stale signature timestamp is refused (replay window)", async () => {
+    const stale = whTs - 3600;
+    const r = verifyStripeSignature({
+      payload: whBody, header: `t=${stale},v1=${signAt(stale, whBody)}`, secret: whSecret, nowMs: whNowMs,
+    });
+    if (r.ok) throw new Error("a signature an hour old verified");
+  });
+  await expectOk("a missing Stripe-Signature header is refused", async () => {
+    const r = verifyStripeSignature({ payload: whBody, header: null, secret: whSecret, nowMs: whNowMs });
+    if (r.ok) throw new Error("no header verified");
+  });
+
+  // --- stripe_events: idempotency on the provider's id --------------------
+  await db.query(
+    `insert into public.stripe_events (stripe_event_id, type, payload) values ('evt_smoke_1', 'checkout.session.completed', '{}')`
+  );
+  await expectError(
+    "replaying the same Stripe event id changes nothing (webhook idempotency)",
+    /stripe_events_stripe_event_id_uniq|duplicate/,
+    () =>
+      db.query(
+        `insert into public.stripe_events (stripe_event_id, type, payload) values ('evt_smoke_1', 'checkout.session.completed', '{}')`
+      )
+  );
+  await expectOk("raw provider payloads are invisible to signed-in users", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    const r = await db.query<{ n: number }>(`select count(*)::int as n from public.stripe_events`);
+    await db.exec(`reset role`);
+    if (r.rows[0]!.n !== 0) throw new Error(`a signed-in user read ${r.rows[0]!.n} provider payload(s)`);
+  });
+
+  // --- the activation door -------------------------------------------------
+  const ownerUserId = "00000000-0000-4000-8000-000000000009";
+  await db.query(`insert into auth.users (id, email) values ($1, 'aisha@jurists.test')`, [ownerUserId]);
+  const signup = await db.query<{ id: string }>(
+    `insert into public.accounts (name, billing_status, signup_business_name, signup_email, signup_phone, signup_website_url)
+     values ('Aisha Test', 'pre_active', 'Jurists', 'aisha@jurists.test', '+441610000000', 'https://jurists.test')
+     returning id`
+  );
+  const signupId = signup.rows[0]!.id;
+
+  await expectError(
+    "a signed-in user cannot open the activation door (service-role only)",
+    /permission denied/,
+    async () => {
+      await db.exec(`set role authenticated`);
+      try {
+        await db.query(`select public.activate_signup($1, $2, 'cus_x', 'sub_x')`, [signupId, ownerUserId]);
+      } finally {
+        await db.exec(`reset role`);
+      }
+    }
+  );
+
+  let activation: {
+    business_id: string; owner_actor_id: string; light_actor_id: string; stripe_actor_id: string;
+  };
+  await expectOk("payment activates the account: business, actors, membership, allowlist, grants, First Light rows — one act", async () => {
+    const r = await db.query<{ out: typeof activation & { already_active: boolean } }>(
+      `select public.activate_signup($1, $2, 'cus_smoke_1', 'sub_smoke_1') as out`,
+      [signupId, ownerUserId]
+    );
+    activation = r.rows[0]!.out;
+    if ((r.rows[0]!.out as { already_active: boolean }).already_active) throw new Error("fresh signup reported already_active");
+
+    const checks = await db.query<{ label: string; n: number }>(
+      `select 'business' as label, count(*)::int as n from public.businesses where account_id = $1 and website_url = 'https://jurists.test'
+       union all select 'actors', count(*)::int from public.actors where account_id = $1
+       union all select 'membership', count(*)::int from public.memberships where user_id = $2 and role = 'owner'
+       union all select 'allowlist', count(*)::int from public.allowed_emails where email = 'aisha@jurists.test' and archived_at is null
+       union all select 'grants', count(*)::int from public.grants g join public.businesses b on b.id = g.business_id where b.account_id = $1
+       union all select 'tasks', count(*)::int from public.tasks t join public.businesses b on b.id = t.business_id where b.account_id = $1 and (t.attributes ->> 'first_light')::boolean
+       union all select 'predicates', count(*)::int from public.first_light_predicates p join public.businesses b on b.id = p.business_id where b.account_id = $1
+       union all select 'optional', count(*)::int from public.first_light_predicates p join public.businesses b on b.id = p.business_id where b.account_id = $1 and p.optional`,
+      [signupId, ownerUserId]
+    );
+    const expected: Record<string, number> = {
+      business: 1, actors: 3, membership: 1, allowlist: 1, grants: 3, tasks: 8, predicates: 8, optional: 1,
+    };
+    for (const row of checks.rows) {
+      if (row.n !== expected[row.label]) {
+        throw new Error(`${row.label}: expected ${expected[row.label]}, got ${row.n}`);
+      }
+    }
+    const acc = await db.query<{ billing_status: string; plan: string; activated_at: string | null }>(
+      `select billing_status, plan, activated_at from public.accounts where id = $1`, [signupId]
+    );
+    const a = acc.rows[0]!;
+    if (a.billing_status !== "active" || a.plan !== "pilot_firm" || !a.activated_at) {
+      throw new Error(`account not activated: ${JSON.stringify(a)}`);
+    }
+  });
+
+  await expectOk("activation is idempotent — a replayed webhook re-creates nothing", async () => {
+    const r = await db.query<{ out: { already_active: boolean } }>(
+      `select public.activate_signup($1, $2, 'cus_smoke_1', 'sub_smoke_1') as out`,
+      [signupId, ownerUserId]
+    );
+    if (!r.rows[0]!.out.already_active) throw new Error("second activation did not report already_active");
+    const n = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.tasks t join public.businesses b on b.id = t.business_id where b.account_id = $1`,
+      [signupId]
+    );
+    if (n.rows[0]!.n !== 8) throw new Error(`task rows after replay: ${n.rows[0]!.n}`);
+  });
+
+  // The grant set applied at activation is real enforcement, not decoration:
+  // Light passes the 0015 Level 2 gate; the ungranted Stripe actor is refused.
+  await expectOk("Light's activation grant lets it create further tasks (the 0015 gate consumes it)", async () => {
+    await db.query(
+      `insert into public.tasks (business_id, created_by, title, status, assignee_actor_id)
+       values ($1, $2, 'Light follow-up', 'open', $3)`,
+      [activation!.business_id, activation!.light_actor_id, activation!.owner_actor_id]
+    );
+  });
+  await expectError(
+    "the ungranted Stripe actor cannot create tasks — activation granted exactly what was ruled",
+    /enquiries \(execute\)/,
+    () =>
+      db.query(
+        `insert into public.tasks (business_id, created_by, title, status, assignee_actor_id)
+         values ($1, $2, 'Stripe should not do this', 'open', $3)`,
+        [activation!.business_id, activation!.stripe_actor_id, activation!.owner_actor_id]
+      )
+  );
+
+  await expectError(
+    "the deletion door refuses an activated account",
+    /not a pre-active signup/,
+    () => db.query(`select public.delete_unpaid_signup($1)`, [signupId])
+  );
+  await expectOk("the refused deletion left the activated account untouched", async () => {
+    const r = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.accounts where id = $1 and billing_status = 'active'`,
+      [signupId]
+    );
+    if (r.rows[0]!.n !== 1) throw new Error("the activated account is gone or changed");
+  });
+
+  // --- the deletion door, permitted path ----------------------------------
+  const unpaid = await db.query<{ id: string }>(
+    `insert into public.accounts (name, billing_status, signup_business_name, signup_email)
+     values ('Ghost Signup', 'pre_active', 'Ghost Ltd', 'ghost@example.test') returning id`
+  );
+  await expectOk("the 30-day sweep hard-deletes a pre-active signup", async () => {
+    const r = await db.query<{ ok: boolean }>(`select public.delete_unpaid_signup($1) as ok`, [
+      unpaid.rows[0]!.id,
+    ]);
+    if (!r.rows[0]!.ok) throw new Error("deletion door returned false");
+    const n = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.accounts where id = $1`,
+      [unpaid.rows[0]!.id]
+    );
+    if (n.rows[0]!.n !== 0) throw new Error("the pre-active row survived");
+  });
+
+  // --- platform-scope events (decision 26's revisit trigger, ruled) --------
+  await expectOk("account.deleted_unpaid lands at platform scope (null business, platform actor)", async () => {
+    await db.query(
+      `insert into public.events (business_id, actor_id, action, entity_type, entity_id, payload)
+       values (null, 'b0000000-0000-4000-8000-000000000001', 'account.deleted_unpaid', 'account', $1, '{}')`,
+      [unpaid.rows[0]!.id]
+    );
+  });
+  await expectError(
+    "platform scope is lawful ONLY for the account.* namespace",
+    /events_platform_scope_account_namespace/,
+    () =>
+      db.query(
+        `insert into public.events (business_id, actor_id, action)
+         values (null, 'b0000000-0000-4000-8000-000000000001', 'contact.created')`
+      )
+  );
+  await expectOk("platform-scope events are invisible to every signed-in user", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    await db.exec(`set request.jwt.claims = '{"sub":"${ids.user}","email":"owner@example.test"}'`);
+    const r = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.events where business_id is null`
+    );
+    await db.exec(`reset role`);
+    if (r.rows[0]!.n !== 0) throw new Error(`a tenant read ${r.rows[0]!.n} platform event(s)`);
+  });
+
+  // --- first_light_predicates: earned ticks only ---------------------------
+  const predicate = await db.query<{ id: string }>(
+    `select id from public.first_light_predicates where business_id = $1 and predicate_key = 'sending_domain_verified'`,
+    [activation!.business_id]
+  );
+  await expectError(
+    "a predicate cannot flip without its ledger event (an uneventful tick is impossible)",
+    /first_light_predicates_flip_is_evented/,
+    () =>
+      db.query(`update public.first_light_predicates set satisfied_at = now() where id = $1`, [
+        predicate.rows[0]!.id,
+      ])
+  );
+  await expectOk("the refused flip left the predicate unsatisfied", async () => {
+    const r = await db.query<{ satisfied_at: string | null }>(
+      `select satisfied_at from public.first_light_predicates where id = $1`,
+      [predicate.rows[0]!.id]
+    );
+    if (r.rows[0]!.satisfied_at !== null) throw new Error("the predicate flipped despite the refusal");
+  });
+  await expectOk("a flip paired with its event succeeds (the earned tick)", async () => {
+    const evt = await db.query<{ id: string }>(
+      `insert into public.events (business_id, actor_id, action, entity_type, entity_id)
+       values ($1, $2, 'first_light.predicate_satisfied', 'first_light_predicate', $3) returning id`,
+      [activation!.business_id, activation!.light_actor_id, predicate.rows[0]!.id]
+    );
+    await db.query(
+      `update public.first_light_predicates set satisfied_at = now(), satisfied_event_id = $2 where id = $1`,
+      [predicate.rows[0]!.id, evt.rows[0]!.id]
+    );
+  });
+  await expectOk("the new owner sees their eight First Light predicates; a stranger sees none", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ownerUserId}'`);
+    await db.exec(`set request.jwt.claims = '{"sub":"${ownerUserId}","email":"aisha@jurists.test"}'`);
+    const own = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.first_light_predicates`
+    );
+    await db.exec(`set request.jwt.claim.sub = '${ids.stranger}'`);
+    await db.exec(`set request.jwt.claims = '{"sub":"${ids.stranger}","email":"stranger@example.test"}'`);
+    const stranger = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.first_light_predicates`
+    );
+    await db.exec(`reset role`);
+    if (own.rows[0]!.n !== 8) throw new Error(`owner sees ${own.rows[0]!.n} predicates, expected 8`);
+    if (stranger.rows[0]!.n !== 0) throw new Error(`a stranger sees ${stranger.rows[0]!.n} predicates`);
+  });
+  await expectOk("a signed-in user cannot self-report a tick (no write policy)", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ownerUserId}'`);
+    await db.exec(`set request.jwt.claims = '{"sub":"${ownerUserId}","email":"aisha@jurists.test"}'`);
+    const r = await db.query<{ n: number }>(
+      `with u as (update public.first_light_predicates set satisfied_at = now(), satisfied_event_id = null returning 1)
+       select count(*)::int as n from u`
+    );
+    await db.exec(`reset role`);
+    if (r.rows[0]!.n !== 0) throw new Error(`a browser flipped ${r.rows[0]!.n} tick(s)`);
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
