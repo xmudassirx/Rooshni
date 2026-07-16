@@ -150,6 +150,19 @@ export async function getInbox(): Promise<ApprovalInboxRow[]> {
   return (data ?? []) as ApprovalInboxRow[];
 }
 
+/** Open tasks for the sidebar badge — an earned count or nothing. */
+export async function getOpenTaskCount(): Promise<number> {
+  const { db, business } = await getAppContext();
+  const { count, error } = await db
+    .from("tasks")
+    .select("*", { count: "exact", head: true })
+    .eq("business_id", business.id)
+    .eq("status", "open")
+    .is("archived_at", null);
+  if (error) throw new Error(`tasks count failed: ${error.message}`);
+  return count ?? 0;
+}
+
 export async function getInboxCount(): Promise<number> {
   const { db, business } = await getAppContext();
   const { count, error } = await db

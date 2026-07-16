@@ -1,21 +1,26 @@
 @import "tailwindcss";
 
 /*
- * Rooshni theming — Ledger (shipping default) and Frost, per
- * docs/design/mockup-pass1-shell-pipeline-case.html (the design authority).
+ * Rooshni theming — design pass 3 (docs/design/master-mockup-v2.html,
+ * docs/design/AMENDMENTS-PASS3.md, decisions 61–62).
  *
- * Status colour semantics are law in every theme:
- *   gold  = Light acted · red = human stamp required · green = done.
+ * COLOUR TAXONOMY LAW (decision 61):
+ *   ACCENT     = chrome & kinds (active states, primary buttons, table
+ *                headers, focus rings, data bars, kind chips) — follows the
+ *                user's accent choice; blue by default.
+ *   PRISM|GOLD = Light's channel only (acts, chips, response mesh, avatars)
+ *                — prism by default, user-selectable.
+ *   GREEN (--ledger) = done/published and RED (--stamp) = stamp/overdue
+ *                NEVER move, in any theme.
+ *
+ * Themes (decision 62): Frost is the shipping default — absence of
+ * [data-theme] IS Frost, and Frost defines its own paper/paper-deep/rule
+ * (no cream leakage). Ledger is the solid paper-and-ink alternative.
+ * The monospace register face never changes in any theme.
  */
 
 :root {
-  /* Ledger palette — paper, ink and the register green. */
-  --paper: #fbf9f3;
-  --panel: #ffffff;
-  --paper-deep: #f2eee2;
-  --ink: #202b38;
-  --ink-soft: #5a6371;
-  --ink-faint: #8b94a1;
+  /* Semantic colours — law in every theme. */
   --ledger: #2e6b4f;
   --ledger-tint: #e7efe9;
   --ledger-line: #c7d8cd;
@@ -23,35 +28,54 @@
   --stamp-tint: #f9ece9;
   --gold: #b07c1f;
   --gold-tint: #f7eeda;
-  --rule: #ddd6c4;
+  --gold-line: #e5d2a4;
   --amber: #c08a1e;
 
-  /* Surfaces the shell components consume; Frost overrides these. */
-  --sidebar: var(--ink);
-  --sidebar-fg: #edeae0;
-  --sidebar-fg-strong: #fbf9f3;
-  --panel-border: var(--rule);
-  --shadow-panel: 0 1px 2px rgba(32, 43, 56, 0.06), 0 4px 14px rgba(32, 43, 56, 0.05);
+  /* Accent — chrome & kinds. Blue default; [data-accent] overrides. */
+  --accent: #3e6fbf;
+  --accent-tint: #e8eff9;
 
-  /* Ledger headlines are set in Bitter; Frost switches to the sans. */
-  --font-display: var(--font-bitter);
-}
-
-[data-theme="frost"] {
-  --paper: #f1f0f6;
+  /* Frost palette — the default theme's own neutrals (decision 62). */
+  --paper: #f7f8fb;
   --panel: rgba(255, 255, 255, 0.66);
-  --paper-deep: rgba(255, 255, 255, 0.4);
-  --ledger-tint: #e3ede7;
-  --stamp-tint: #f9e9e6;
-  --gold-tint: #f6eedb;
-  --rule: rgba(37, 48, 62, 0.14);
+  --paper-deep: #eceff4;
+  --ink: #202b38;
+  --ink-soft: #5a6371;
+  --ink-faint: #8b94a1;
+  --rule: #dee3eb;
+
+  /* Surfaces the shell components consume; themed below. */
   --sidebar: rgba(255, 255, 255, 0.55);
   --sidebar-fg: rgba(37, 48, 62, 0.85);
   --sidebar-fg-strong: #1e2530;
   --panel-border: rgba(255, 255, 255, 0.75);
   --shadow-panel: 0 8px 30px rgba(30, 37, 48, 0.08);
+
+  /* Frost headlines are set in the sans; Ledger switches to Bitter. */
   --font-display: var(--font-public-sans);
 }
+
+[data-theme="ledger"] {
+  --paper: #fbf9f3;
+  --panel: #ffffff;
+  --paper-deep: #f2eee2;
+  --rule: #ddd6c4;
+  --sidebar: var(--ink);
+  --sidebar-fg: #edeae0;
+  --sidebar-fg-strong: #fbf9f3;
+  --panel-border: var(--rule);
+  --shadow-panel: 0 1px 2px rgba(32, 43, 56, 0.06), 0 4px 14px rgba(32, 43, 56, 0.05);
+  --font-display: var(--font-bitter);
+}
+
+/* Seven accents (AMENDMENTS-PASS3 law 5). Blue is the default above. */
+[data-accent="green"] { --accent: #2e6b4f; --accent-tint: #e7efe9; }
+[data-accent="cool"] { --accent: #3e5a78; --accent-tint: #e9eff6; }
+[data-accent="warm"] { --accent: #a65e2e; --accent-tint: #f6ebe2; }
+[data-accent="blue"] { --accent: #3e6fbf; --accent-tint: #e8eff9; }
+[data-accent="violet"] { --accent: #6c4fb8; --accent-tint: #eee9f8; }
+[data-accent="rose"] { --accent: #b04a6e; --accent-tint: #f8e9ef; }
+[data-accent="amber"] { --accent: #b07c1f; --accent-tint: #f7eeda; }
 
 @theme inline {
   --color-paper: var(--paper);
@@ -67,8 +91,11 @@
   --color-stamp-tint: var(--stamp-tint);
   --color-gold: var(--gold);
   --color-gold-tint: var(--gold-tint);
+  --color-gold-line: var(--gold-line);
   --color-rule: var(--rule);
   --color-amber: var(--amber);
+  --color-accent: var(--accent);
+  --color-accent-tint: var(--accent-tint);
   --color-sidebar: var(--sidebar);
   --color-sidebar-fg: var(--sidebar-fg);
   --color-sidebar-fg-strong: var(--sidebar-fg-strong);
@@ -88,7 +115,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-[data-theme="frost"] body {
+/* Frost is the default: the gradient wash renders unless Ledger is chosen. */
+html:not([data-theme="ledger"]) body {
   background:
     radial-gradient(900px 600px at 85% -10%, rgba(244, 214, 183, 0.55), transparent 60%),
     radial-gradient(800px 700px at -10% 30%, rgba(196, 214, 242, 0.6), transparent 55%),
@@ -97,22 +125,100 @@ body {
   background-attachment: fixed;
 }
 
-/* Glass surfaces: Ledger renders them solid; Frost blurs what is behind. */
+/* Glass surfaces: Frost blurs what is behind; Ledger renders them solid. */
 .glass {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   box-shadow: var(--shadow-panel);
 }
 
-[data-theme="frost"] .glass {
+html:not([data-theme="ledger"]) .glass {
   backdrop-filter: blur(22px) saturate(1.3);
   -webkit-backdrop-filter: blur(22px) saturate(1.3);
 }
 
-[data-theme="frost"] .sidebar-glass {
+html:not([data-theme="ledger"]) .sidebar-glass {
   backdrop-filter: blur(26px) saturate(1.5);
   -webkit-backdrop-filter: blur(26px) saturate(1.5);
   border-right: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+/*
+ * Light's channel (decision 61): gold by default; prism — the living
+ * gradient — when [data-lightac="prism"] is set (the shipping default,
+ * applied by the boot script). These classes are the ONLY place prism may
+ * appear; chrome takes the accent, done stays green, the stamp stays red.
+ */
+@keyframes prismshift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.light-text { color: var(--gold); }
+
+.light-spark { color: var(--gold); text-shadow: 0 0 7px rgba(176, 124, 31, 0.55); }
+[data-theme="ledger"] .sidebar-glass .light-spark { color: #e7bc5f; text-shadow: none; }
+
+.light-btn {
+  background: var(--gold);
+  border: 1px solid var(--gold);
+  color: #fff;
+}
+.light-btn:hover { filter: brightness(1.06); }
+
+.light-btn-soft {
+  background: var(--gold-tint);
+  border: 1px dashed var(--gold);
+  color: var(--gold);
+}
+.light-btn-soft:hover { background: var(--gold); color: #fff; border-style: solid; }
+
+.light-chip {
+  background: var(--gold-tint);
+  border: 1px solid var(--gold-line);
+  color: var(--gold);
+}
+
+.light-panel {
+  background: var(--gold-tint);
+  border: 1.5px solid var(--gold);
+}
+
+.light-head { color: var(--gold); }
+
+.light-avatar { background: var(--gold); color: #fff; }
+
+[data-lightac="prism"] .light-text,
+[data-lightac="prism"] .light-spark,
+[data-lightac="prism"] .light-head {
+  background: linear-gradient(115deg, #f0a93b, #e8563f 30%, #b44fd8 55%, #3f8cff 80%, #2e9e6b);
+  background-size: 220% 220%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: prismshift 6s ease infinite;
+  text-shadow: none;
+}
+
+[data-lightac="prism"] .light-btn,
+[data-lightac="prism"] .light-btn-soft,
+[data-lightac="prism"] .light-chip,
+[data-lightac="prism"] .light-avatar {
+  background: linear-gradient(115deg, #f0a93b, #e8563f 30%, #b44fd8 55%, #3f8cff 80%, #2e9e6b);
+  background-size: 220% 220%;
+  animation: prismshift 6s ease infinite;
+  color: #fff;
+  border: 1px solid transparent;
+  border-style: solid;
+}
+[data-lightac="prism"] .light-btn:hover,
+[data-lightac="prism"] .light-btn-soft:hover { filter: brightness(1.08); color: #fff; }
+
+[data-lightac="prism"] .light-panel {
+  background: linear-gradient(120deg, rgba(240, 169, 59, 0.13), rgba(232, 86, 63, 0.09) 30%, rgba(180, 79, 216, 0.1) 55%, rgba(63, 140, 255, 0.13) 80%, rgba(46, 158, 107, 0.1));
+  background-size: 300% 300%;
+  animation: prismshift 9s ease infinite;
+  border-color: rgba(180, 79, 216, 0.4);
 }
 
 @media (prefers-reduced-motion: reduce) {

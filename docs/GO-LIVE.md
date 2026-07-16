@@ -47,3 +47,9 @@ Add to this list during build; check items off only at go-live.
       endpoint fails closed (503) until the secret exists. Minute-level cron
       cadence needs Vercel Pro (already on this list); until the cron runs,
       production workflows do not tick.
+- [ ] **Register the `feedback` tool and re-key the Feedback nav gate**
+      (introduced Session 8): the Feedback surface is grant-gated by design,
+      but no `feedback` row exists in the tool registry and adding one is a
+      migration. Until that session, `apps/web/app/(app)/layout.tsx` gates the
+      nav item on ownership. The proper gate is a grant on a registered
+      `feedback` tool — do not go live with the ownership shortcut.

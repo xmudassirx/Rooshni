@@ -5,14 +5,17 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-lg text-[13px] font-semibold whitespace-nowrap transition-transform active:scale-[.98] disabled:pointer-events-none disabled:opacity-50 outline-none focus-visible:ring-2 focus-visible:ring-ledger/40 [&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
+  // Decision 61: primary buttons and focus rings are chrome — they take the
+  // accent. The stamp stays red; Light's buttons ride Light's channel.
+  "inline-flex items-center justify-center gap-2 rounded-lg text-[13px] font-semibold whitespace-nowrap transition-transform active:scale-[.98] disabled:pointer-events-none disabled:opacity-50 outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "glass text-ink hover:border-ledger",
-        primary: "bg-ledger text-white border border-ledger shadow-panel hover:opacity-95",
+        default: "glass text-ink hover:border-accent",
+        primary: "bg-accent text-white border border-accent shadow-panel hover:opacity-95",
         approve: "bg-stamp text-white border border-stamp shadow-panel hover:opacity-95",
-        gold: "bg-gold text-white border border-gold shadow-panel hover:opacity-95",
+        gold: "light-btn shadow-panel",
+        goldSoft: "light-btn-soft shadow-panel",
         ghost: "text-ink-soft hover:text-ink hover:bg-paper-deep",
       },
       size: {
