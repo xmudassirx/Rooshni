@@ -18,14 +18,16 @@ export function PageHead({
   );
 }
 
-/** Placeholder for surfaces that arrive in a later session. */
+/** Placeholder for surfaces that arrive in a later session (or later group). */
 export function Placeholder({
   icon,
   title,
+  chip = "A later session",
   children,
 }: {
   icon: ReactNode;
   title: string;
+  chip?: string;
   children: ReactNode;
 }) {
   return (
@@ -33,8 +35,8 @@ export function Placeholder({
       <div className="mb-2.5 text-3xl">{icon}</div>
       <h2 className="mb-2 font-display text-xl font-extrabold">{title}</h2>
       <p className="mx-auto max-w-[42ch] text-sm text-ink-soft">{children}</p>
-      <span className="mt-3 inline-block rounded-md border border-ledger-line bg-ledger-tint px-3 py-1 font-mono text-[11px] font-semibold tracking-wide text-ledger uppercase">
-        A later session
+      <span className="mt-3 inline-block rounded-md border border-accent bg-accent-tint px-3 py-1 font-mono text-[11px] font-semibold tracking-wide text-accent uppercase">
+        {chip}
       </span>
     </div>
   );

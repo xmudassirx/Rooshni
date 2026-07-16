@@ -1,5 +1,6 @@
 import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
+import { scaleDurationMs } from "@rooshni/config";
 import { getAppContext } from "./context";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -207,6 +208,182 @@ export async function getCommunicationDetail(
     contactName: contact?.display_name ?? null,
     scheduledFor: data.scheduled_for,
   };
+}
+
+// --- Dashboard ---------------------------------------------------------------
+
+const HOUR_MS = 3_600_000; // unit conversion only — SLAs themselves are data
+
+export interface StuckEnquiry {
+  id: string;
+  title: string;
+  stageLabel: string;
+  stageEnteredAt: string;
+  slaHours: number;
+}
+
+export interface TodayItem {
+  id: string;
+  title: string;
+  dueAt: string | null;
+  /** Assigned to an agent actor — rendered on Light's channel. */
+  byLight: boolean;
+}
+
+export interface DashboardData {
+  /** Engagements created since local midnight. */
+  newToday: number;
+  todaySchedule: TodayItem[];
+  /**
+   * Stage-SLA breaches (stage_definitions.sla_hours, scaled by TIME_SCALE —
+   * timers are data). `null` means TIME_SCALE is unset in this environment
+   * and the monitor honestly cannot run.
+   */
+  stuck: StuckEnquiry[] | null;
+  /** Metered credits on the ledger this calendar month. */
+  creditsThisMonth: number;
+  meteredEventsThisMonth: number;
+}
+
+export async function getDashboard(): Promise<DashboardData> {
+  const { db, business } = await getAppContext();
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date(startOfToday);
+  endOfToday.setDate(endOfToday.getDate() + 1);
+  const startOfMonth = new Date(startOfToday);
+  startOfMonth.setDate(1);
+
+  const [newRows, taskRows, slaRows, costRows] = await Promise.all([
+    db
+      .from("engagements")
+      .select("*", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .gte("created_at", startOfToday.toISOString()),
+    db
+      .from("tasks")
+      .select("id, title, due_at, actors!tasks_assignee_actor_id_fkey(actor_type)")
+      .eq("business_id", business.id)
+      .eq("status", "open")
+      .is("archived_at", null)
+      .lt("due_at", endOfToday.toISOString())
+      .order("due_at", { ascending: true })
+      .limit(6),
+    db
+      .from("engagements")
+      .select("id, title, stage_entered_at, stage_definitions!inner(label, sla_hours, is_terminal)")
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .not("stage_definitions.sla_hours", "is", null),
+    db
+      .from("events")
+      .select("cost")
+      .eq("business_id", business.id)
+      .gte("occurred_at", startOfMonth.toISOString())
+      .not("cost", "is", null),
+  ]);
+  for (const [label, result] of [
+    ["engagements (new today)", newRows],
+    ["tasks (today)", taskRows],
+    ["engagements (stage SLA)", slaRows],
+    ["events (cost)", costRows],
+  ] as const) {
+    if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
+  }
+
+  // The stage-SLA monitor only runs when TIME_SCALE exists — timers are data
+  // multiplied by TIME_SCALE, and the law forbids guessing a value.
+  let stuck: StuckEnquiry[] | null = null;
+  try {
+    const now = Date.now();
+    stuck = (slaRows.data ?? []).flatMap((row) => {
+      const stage = row.stage_definitions as unknown as {
+        label: string;
+        sla_hours: number | null;
+        is_terminal: boolean;
+      } | null;
+      if (!stage || stage.is_terminal || stage.sla_hours === null) return [];
+      const deadline =
+        new Date(row.stage_entered_at).getTime() +
+        scaleDurationMs(Number(stage.sla_hours) * HOUR_MS);
+      if (now <= deadline) return [];
+      return [
+        {
+          id: row.id,
+          title: row.title,
+          stageLabel: stage.label,
+          stageEnteredAt: row.stage_entered_at,
+          slaHours: Number(stage.sla_hours),
+        },
+      ];
+    });
+  } catch {
+    stuck = null;
+  }
+
+  let credits = 0;
+  let metered = 0;
+  for (const row of costRows.data ?? []) {
+    const cost = row.cost as EventRow["cost"];
+    if (typeof cost?.credits === "number") {
+      credits += cost.credits;
+      metered += 1;
+    } else if (cost) {
+      metered += 1;
+    }
+  }
+
+  return {
+    newToday: newRows.count ?? 0,
+    todaySchedule: (taskRows.data ?? []).map((t) => {
+      const assignee = t.actors as unknown as { actor_type: ActorType } | null;
+      return {
+        id: t.id,
+        title: t.title,
+        dueAt: t.due_at,
+        byLight: assignee?.actor_type === "agent",
+      };
+    }),
+    stuck,
+    creditsThisMonth: credits,
+    meteredEventsThisMonth: metered,
+  };
+}
+
+// --- Light (the front door) ---------------------------------------------------
+
+export interface LightAccessRow {
+  name: string;
+  role: string;
+}
+
+/** Humans who can talk to Light — memberships joined to their human actors. */
+export async function getLightAccess(): Promise<LightAccessRow[]> {
+  const { db, business } = await getAppContext();
+  const [members, humans] = await Promise.all([
+    db
+      .from("memberships")
+      .select("user_id, role")
+      .eq("business_id", business.id)
+      .is("archived_at", null),
+    db
+      .from("actors")
+      .select("user_id, display_name")
+      .eq("actor_type", "human")
+      .is("archived_at", null)
+      .not("user_id", "is", null),
+  ]);
+  if (members.error) throw new Error(`memberships query failed: ${members.error.message}`);
+  if (humans.error) throw new Error(`actors query failed: ${humans.error.message}`);
+  const nameByUser = new Map(
+    (humans.data ?? []).map((a) => [a.user_id as string, a.display_name as string])
+  );
+  return (members.data ?? []).map((m) => ({
+    name: nameByUser.get(m.user_id) ?? "Unnamed member",
+    role: m.role,
+  }));
 }
 
 // --- The Record (read-only screen over the events ledger) -------------------
