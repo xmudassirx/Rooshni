@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { Paperclip, Search } from "lucide-react";
 
@@ -171,6 +171,7 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
   const [listWidth, setListWidth] = useState(330);
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const splitRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
 
   // v2's draggable divider — clamp 250–520px, exactly its bounds.
   function startDrag(e: React.PointerEvent<HTMLDivElement>) {
@@ -205,6 +206,16 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
   }, [threads, filter, query]);
 
   const selected = threads.find((t) => t.id === selectedId) ?? visible[0] ?? null;
+
+  // v2 pickT()/setView(): a thread opens scrolled to the LATEST message;
+  // scrolling up reveals the earliest in full (fix round 4 addendum).
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [selected?.id, view]);
 
   const awaitingCount = threads.filter((t) => t.awaitingYou).length;
   const lightCount = threads.filter((t) => t.lightHandling || t.hasPendingDraft).length;
@@ -458,9 +469,10 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
                         </>
                       ) : null}
                       <div
+                        ref={messagesRef}
                         className={cn(
                           "flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto",
-                          view === "phone" ? "px-2.5 pt-2 pb-3.5" : "gap-2.5 px-5 pt-4 pb-4.5"
+                          view === "phone" ? "px-2.5 pt-2.5 pb-3.5" : "gap-2.5 px-5 pt-4 pb-4.5"
                         )}
                       >
                         {selected.messages.map((m) => (

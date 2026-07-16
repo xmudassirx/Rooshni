@@ -62,6 +62,12 @@ const INBOX_DEMO = {
   threadLead2: "01980000-0000-7000-8000-000000000503",
   commApproved: "01980000-0000-7000-8000-000000000504",
   commRejected: "01980000-0000-7000-8000-000000000505",
+  // Session 8 fix round 4 addendum: one client-authored inbound reply, so the
+  // author-side alignment law (decision 78) is falsifiable by click.
+  // JUDGMENT: 507–520 are left clear — the Session 6 live rehearsals minted
+  // 506 by hand, so sequential "next" ids are not safe assumptions; 521
+  // verified free in live before use.
+  commInboundReply: "01980000-0000-7000-8000-000000000521",
 } as const;
 
 // Spec 1 §6 — the X Law pipeline (provisional pending the two-week lead log).
@@ -640,6 +646,81 @@ async function seedApprovalInboxDemo(db: SupabaseClient): Promise<void> {
   }
 }
 
+/**
+ * Session 8 (fix round 4 addendum) — ONE client-authored inbound reply on
+ * lead 2's thread, so a two-sided chat exists and the author-side alignment
+ * law can be verified by click. Timestamped between the thread's second and
+ * third outbound touches where three exist (the live rehearsal nudges);
+ * otherwise a minute after the last outbound. Ingested by the Meta
+ * integration actor — authorship is the DIRECTION plus the contact, as with
+ * every inbound. Seed data: purges at go-live with the rest.
+ */
+async function seedInboundReply(db: SupabaseClient): Promise<void> {
+  const { data: existing, error: lookupError } = await db
+    .from("communications")
+    .select("id")
+    .eq("id", INBOX_DEMO.commInboundReply)
+    .maybeSingle();
+  if (lookupError) throw new Error(`inbound reply lookup failed: ${lookupError.message}`);
+  if (existing) {
+    console.log("Inbound reply already seeded — skipped.");
+    return;
+  }
+
+  const lead2 = metaLeadFixtures[1]!.lead.id;
+  const lead = await findLeadEngagement(db, lead2);
+
+  const { data: outbound, error: outboundError } = await db
+    .from("communications")
+    .select("id, occurred_at")
+    .eq("thread_id", INBOX_DEMO.threadLead2)
+    .eq("direction", "outbound")
+    .order("occurred_at", { ascending: true });
+  if (outboundError) throw new Error(`outbound lookup failed: ${outboundError.message}`);
+  if (!outbound?.length) {
+    throw new Error("Lead 2's thread has no outbound messages — seed order broken.");
+  }
+
+  // The nudges are the run-produced touches (uuidv7 ids from the Session 6
+  // rehearsals), not the fixed-id inbox demo comms. Land between the second
+  // and third nudge; fall back to a minute after the last outbound.
+  const nudges = outbound.filter((c) => !String(c.id).startsWith("01980000-"));
+  const second = nudges[1];
+  const third = nudges[2];
+  const occurredAt =
+    second && third
+      ? new Date(
+          (new Date(second.occurred_at).getTime() + new Date(third.occurred_at).getTime()) / 2
+        )
+      : new Date(new Date(outbound[outbound.length - 1]!.occurred_at).getTime() + 60_000);
+
+  const { error } = await db.from("communications").insert({
+    id: INBOX_DEMO.commInboundReply,
+    business_id: IDS.business,
+    created_by: IDS.actorMeta,
+    thread_id: INBOX_DEMO.threadLead2,
+    contact_id: lead.contactId,
+    engagement_id: lead.engagementId,
+    channel: "email",
+    direction: "inbound",
+    status: "received",
+    body: "Wa alaikum assalam, yes — tomorrow after 2pm works",
+    body_format: "plain",
+    occurred_at: occurredAt.toISOString(),
+  });
+  if (error) throw new Error(`inbound reply insert failed: ${error.message}`);
+
+  await emitEvent(db, {
+    business_id: IDS.business,
+    actor_id: IDS.actorMeta,
+    action: "communication.received",
+    entity_type: "communication",
+    entity_id: INBOX_DEMO.commInboundReply,
+    payload: { channel: "email", engagement_id: lead.engagementId, direction: "inbound" },
+  });
+  console.log("Inbound reply seeded on lead 2's thread — the chat now has two sides.");
+}
+
 // ---------------------------------------------------------------------------
 // Session 6 — Spec 4 §4: the MVP lead workflow, defined entirely as DATA.
 // ---------------------------------------------------------------------------
@@ -901,6 +982,7 @@ async function main() {
   }
 
   await seedApprovalInboxDemo(db);
+  await seedInboundReply(db);
   await seedWorkflow(db);
 
   console.log("\nSeed complete. Run `npm run verify --workspace=@rooshni/db` to inspect the ledger.");
