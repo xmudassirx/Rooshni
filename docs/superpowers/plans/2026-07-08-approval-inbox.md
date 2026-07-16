@@ -4,7 +4,7 @@
 
 **Architecture:** One migration (`0017_approval_inbox.sql`) following the Session 2 stage-door precedent (DECISIONS.md 12): `communications.status`, `approved_by_actor_id` and the new rejection columns are closed to direct UPDATE for every API role; the single paths are `public.submit_communication()`, `public.approve_communication()` and `public.reject_communication()` — security definer, caller-identity checked, with every existing trigger (human stamp, grants, and the new pre-flight) still firing inside. `public.approval_inbox` is a `security_invoker` view — RLS of the underlying tables decides visibility; the inbox is a view, not a place things live. Events are emitted by the TS layer (`@rooshni/db` helpers) through `emitEvent()` only — no DB-trigger event writes, per CLAUDE.md.
 
-**Design reference:** `docs/mockup-pass1-shell-pipeline-case.html`, Approval Inbox screen — pre-flight line (consent/standards/compliance ticks), Blocked state with a fix action, drafted-by gold tag, openable preview.
+**Design reference:** `docs/design/mockup-pass1-shell-pipeline-case.html`, Approval Inbox screen — pre-flight line (consent/standards/compliance ticks), Blocked state with a fix action, drafted-by gold tag, openable preview.
 
 ## Global constraints (unchanged)
 

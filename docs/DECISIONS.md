@@ -454,3 +454,45 @@ skill.
     GO-LIVE caveat) were committed as separate founder-content commits
     (`4025795`, `e974526`) on explicit instruction — the first exercise of
     the (ii) path.
+
+## Design Pass 3 close-out (15 July 2026) — signed by Mudassir, docs/design/AMENDMENTS-PASS3.md
+
+58. **Connections live ONCE, in Settings → Integrations** — providers are
+    actors with grants (media models connect over MCP); surfaces keep only
+    behaviour preferences (a small Preferences panel), never per-surface
+    settings tabs. Rationale: one door for credentials keeps grants the
+    single permission truth — a settings tab per surface is a side door.
+
+59. **Video storage law: never our bytes** — provider CDN via signed URL;
+    poster + provenance (provider, prompt, cost) in the library only; Meta
+    hosts published copies; images → R2 (zero egress); unpinned assets
+    expire after 30 days. Supabase stores rows, not media. Rationale: video
+    bytes are cost and liability with no product value — the row is the
+    truth, the bytes are the provider's problem.
+
+60. **Stage sync: stages ARE `engagement.stage`** — one vocabulary across
+    pipeline, contact, conversations, workflows, portal; a stage move is one
+    proposed change, stamped once, reflected everywhere, and may trigger
+    due-at-stage invoices and portal updates in the same act. Rationale:
+    one database, many faces — a second stage vocabulary anywhere is a
+    parallel store.
+
+61. **Colour taxonomy law** — ACCENT = chrome & kinds (active states,
+    primary buttons, table headers, focus rings, data bars, kind chips) and
+    follows the user's accent; PRISM|GOLD = Light's channel only (acts,
+    chips, response mesh, avatars), user-selectable in Appearance, prism
+    default; GREEN = done/published and RED = stamp/overdue NEVER move, any
+    theme. Rationale: colour is semantics — the user may restyle chrome,
+    never the meaning of Light's hand, the stamp, or done.
+
+62. **Themes: default = Frost + blue accent + prism Light** — Frost defines
+    its own paper/paper-deep/rule variables (no cream leakage); Mono theme =
+    white/black luxury; seven accents; semantic colours invariant.
+    Rationale: a theme is complete or it is broken — partial variable sets
+    leak another theme's tint (the frost cream-leak incident).
+
+63. **Mock one phase ahead of build, never more; signed exceptions only** —
+    master mockup v2 is the design authority for all Phase 2 surfaces;
+    Phase 3+ screens inside it are marked SIGNED EXCEPTION and are not
+    build targets. Rationale: mockups beyond the next phase are fiction
+    that hardens into accidental commitments.

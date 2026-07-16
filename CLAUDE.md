@@ -25,6 +25,12 @@ You are the builder for Rooshni (working title: Create You AI), an AI operating 
 - **British English in all user-facing strings.**
 - Semantic UI invariants: gold = Light acted, red = human stamp, green = done; the monospace register face never changes.
 
+## UI conventions
+
+- **Colour taxonomy law (design pass 3, decision 61):** ACCENT = chrome & kinds (active states, primary buttons, table headers, focus rings, data bars, kind chips) and follows the user's accent. PRISM|GOLD = Light's channel only (acts, chips, response mesh, avatars) — user-selectable in Appearance, prism default. GREEN = done/published and RED = stamp/overdue NEVER move, any theme.
+- **Default theme = Frost + blue accent + prism Light.** Frost defines its own paper/paper-deep/rule variables — no cream leakage. Design tokens unchanged.
+- **Session 7+ UI work must match `docs/design/master-mockup-v2.html` for any screen it touches.** Phase 3 screens marked SIGNED EXCEPTION in the mockup are out of scope — not build targets.
+
 ## Rituals
 
 - **Pre-flight:** before writing any code, restate the session scope in your own words and flag anything you can already see is Lane C. If nothing, proceed. If the working tree contains changes you did not make, stop — Lane C; likewise if HEAD or the current branch changes mid-session — stop, even mid-instruction.

@@ -5,7 +5,9 @@ description: Use when building any UI in apps/web — the theme/token architectu
 
 # UI system (as implemented after Sessions 4–5)
 
-Design authority: `docs/mockup-pass1-shell-pipeline-case.html` plus the signed amendments below. Structure deviating from either is Lane C.
+Design authority: `docs/design/master-mockup-v2.html` + `docs/design/AMENDMENTS-PASS3.md` (plus the signed amendments below). Structure deviating from either is Lane C. `docs/design/mockup-pass1-shell-pipeline-case.html` and `docs/design/master-mockup-v1.html` are historical reference only.
+
+Precedence on conflict: AMENDMENTS-PASS3 > in-file amendments > mockup pixels. If a conflict is found, flag it — don't silently pick.
 
 ## Tokens and themes
 
