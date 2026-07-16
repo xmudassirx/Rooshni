@@ -74,6 +74,8 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
   const [modal, setModal] = useState(false);
   const [lightBrief, setLightBrief] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [perPage, setPerPage] = useState(10);
+  const [page, setPage] = useState(1);
 
   const counts = useMemo(() => {
     const map = new Map<string, number>();
@@ -92,6 +94,10 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
       ),
     [pages, filter, query]
   );
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / perPage));
+  const current = Math.min(page, pageCount);
+  const slice = visible.slice((current - 1) * perPage, current * perPage);
 
   return (
     <>
@@ -144,7 +150,7 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
           <span className="max-[760px]:hidden">Traffic 30d</span>
         </div>
         {visible.length ? (
-          visible.map((p) => (
+          slice.map((p) => (
             <Link
               key={p.id}
               href={`/website/${p.id}`}
@@ -180,9 +186,62 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
             ) : null}
           </div>
         )}
+        {/* v2 pagefoot: rows-per-page, the range, and page buttons. */}
         <div className="flex flex-wrap items-center gap-4 border-t border-rule px-4 py-2.5">
+          <label className="flex items-center gap-2 font-mono text-[10.5px] tracking-wide text-ink-faint uppercase">
+            Rows per page
+            <select
+              value={perPage}
+              onChange={(e) => {
+                setPerPage(Number(e.target.value));
+                setPage(1);
+              }}
+              className="rounded-md border border-rule bg-panel px-1.5 py-0.5 font-mono text-[11px] text-ink"
+            >
+              {[10, 20, 50].map((n) => (
+                <option key={n}>{n}</option>
+              ))}
+            </select>
+          </label>
           <span className="font-mono text-[10.5px] tracking-wide text-ink-faint uppercase">
-            {visible.length} of {pages.length} page{pages.length === 1 ? "" : "s"}
+            {visible.length
+              ? `${(current - 1) * perPage + 1}–${Math.min(current * perPage, visible.length)} of ${visible.length}`
+              : "0 pages match"}
+          </span>
+          <span className="ml-auto inline-flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Previous page"
+              disabled={current <= 1}
+              onClick={() => setPage(current - 1)}
+              className="glass h-7 min-w-7 rounded-md font-mono text-xs text-ink-soft disabled:opacity-35"
+            >
+              ‹
+            </button>
+            {Array.from({ length: pageCount }).map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setPage(i + 1)}
+                className={cn(
+                  "h-7 min-w-7 rounded-md border font-mono text-xs",
+                  current === i + 1
+                    ? "border-ink bg-ink text-paper"
+                    : "glass text-ink-soft"
+                )}
+              >
+                {i + 1}
+              </button>
+            ))}
+            <button
+              type="button"
+              aria-label="Next page"
+              disabled={current >= pageCount}
+              onClick={() => setPage(current + 1)}
+              className="glass h-7 min-w-7 rounded-md font-mono text-xs text-ink-soft disabled:opacity-35"
+            >
+              ›
+            </button>
           </span>
         </div>
       </div>
@@ -260,10 +319,22 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
             {lightBrief ? (
               <div className="px-5 pt-1 pb-2">
                 <textarea
+                  autoFocus
                   placeholder="e.g. “A page about spouse visa costs and our fees, people keep asking on the phone…”"
                   className="min-h-27 w-full resize-none rounded-2xl border-[1.5px] border-rule bg-paper px-4 py-3.5 text-[15px] leading-relaxed text-ink outline-none focus:border-gold"
                 />
-                <div className="flex py-2">
+                <div className="flex items-center py-2">
+                  <button
+                    type="button"
+                    title="Speak"
+                    aria-label="Speak"
+                    className="flex size-10.5 items-center justify-center rounded-xl text-ink hover:bg-paper-deep"
+                    onClick={() =>
+                      setNotice("Voice input arrives with Light's chat session — nothing is listening yet.")
+                    }
+                  >
+                    🎙
+                  </button>
                   <button
                     type="button"
                     aria-label="Send to Light"

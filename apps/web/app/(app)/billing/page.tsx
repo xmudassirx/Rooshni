@@ -7,8 +7,8 @@ export const dynamic = "force-dynamic";
  * view-billing, master mockup v2: own the context, rent the intelligence.
  * Credit lines are REAL — every metered action is an event on The Record and
  * this page sums them. Plans, caps and platform invoices have no store yet;
- * those panels say so. The mockup's DESIGN PROPOSAL chip (placement:
- * sidebar vs Settings tab) is carried for the founder's click-review verdict.
+ * those panels say so. Placement is settled by founder ruling (fix round):
+ * a sidebar item, owner-gated.
  */
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
@@ -34,17 +34,11 @@ export default async function BillingPage() {
 
   return (
     <>
+      {/* Founder ruling (fix round): Billing stays a sidebar item, owner-gated
+          — the placement question is closed and the proposal chip removed. */}
       <PageHead
         title="Billing & usage"
         sub="Own the context, rent the intelligence — and see exactly what the rent buys"
-        actions={
-          <span
-            className="cursor-help self-center rounded border border-dashed border-stamp bg-stamp-tint px-2 py-0.5 font-mono text-[9.5px] font-bold tracking-[.1em] text-stamp uppercase"
-            title="Design proposal: the final home may be a Settings tab rather than a sidebar item — flagged for your click-review verdict."
-          >
-            Design proposal: placement
-          </span>
-        }
       />
 
       <div className="mb-4 grid grid-cols-3 gap-3 max-[860px]:grid-cols-1">

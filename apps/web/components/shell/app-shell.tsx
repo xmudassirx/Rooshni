@@ -28,7 +28,22 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { AskLightProvider, useAskLight } from "@/components/shell/ask-light";
 import { cn } from "@/lib/utils";
+
+function AskBar() {
+  const { openAsk } = useAskLight();
+  return (
+    <button
+      type="button"
+      onClick={() => openAsk()}
+      className="glass ml-auto flex min-w-36 cursor-pointer items-center gap-2 rounded-full px-3.5 py-1.5 text-[13px] text-ink-faint max-[880px]:min-w-0 max-[880px]:flex-1"
+    >
+      <span className="light-spark text-[14px] leading-none">✦</span>
+      Ask Light anything…
+    </button>
+  );
+}
 
 interface NavChild {
   href: string;
@@ -165,152 +180,6 @@ const crumbLabels: Record<string, string> = {
   "/settings": "Settings",
 };
 
-const ACCENTS = [
-  { key: "blue", colour: "#3e6fbf" },
-  { key: "green", colour: "#2e6b4f" },
-  { key: "cool", colour: "#3e5a78" },
-  { key: "warm", colour: "#a65e2e" },
-  { key: "violet", colour: "#6c4fb8" },
-  { key: "rose", colour: "#b04a6e" },
-  { key: "amber", colour: "#b07c1f" },
-] as const;
-
-type AccentKey = (typeof ACCENTS)[number]["key"];
-
-function AppearanceControl() {
-  const [theme, setTheme] = useState<"ledger" | "frost">("frost");
-  const [accent, setAccent] = useState<AccentKey>("blue");
-  const [light, setLight] = useState<"prism" | "gold">("prism");
-  const [open, setOpen] = useState(false);
-  const popRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const d = document.documentElement.dataset;
-    setTheme(d.theme === "ledger" ? "ledger" : "frost");
-    if (ACCENTS.some((a) => a.key === d.accent)) setAccent(d.accent as AccentKey);
-    setLight(d.lightac === "gold" ? "gold" : "prism");
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (!popRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [open]);
-
-  function persist(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value);
-    } catch {
-      /* private browsing — the choice simply does not persist */
-    }
-  }
-
-  function applyTheme(next: "ledger" | "frost") {
-    setTheme(next);
-    // Frost is the default: absence of the attribute IS Frost (decision 62).
-    if (next === "ledger") {
-      document.documentElement.dataset.theme = "ledger";
-    } else {
-      delete document.documentElement.dataset.theme;
-    }
-    persist("ui-theme", next);
-  }
-
-  function applyAccent(next: AccentKey) {
-    setAccent(next);
-    document.documentElement.dataset.accent = next;
-    persist("ui-accent", next);
-  }
-
-  function applyLight(next: "prism" | "gold") {
-    setLight(next);
-    document.documentElement.dataset.lightac = next;
-    persist("ui-light", next);
-  }
-
-  const rowLabel =
-    "w-13 shrink-0 font-mono text-[9.5px] font-semibold tracking-[.14em] text-ink-faint uppercase";
-
-  return (
-    <div className="relative" ref={popRef}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="glass rounded-lg px-3 py-1.5 text-[13px] font-semibold text-ink hover:border-accent"
-        aria-label="Appearance"
-      >
-        Aa
-      </button>
-      {open && (
-        <div className="glass absolute top-[calc(100%+8px)] right-0 z-60 w-66 rounded-xl p-3">
-          <div className="flex items-center gap-2.5 px-0.5 py-1.5">
-            <span className={rowLabel}>Theme</span>
-            <div className="flex flex-wrap rounded-lg border border-rule bg-paper-deep p-0.5">
-              {(["frost", "ledger"] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => applyTheme(t)}
-                  className={cn(
-                    "rounded-md px-2.5 py-1 font-mono text-[10.5px] font-semibold tracking-wide uppercase",
-                    theme === t ? "bg-ink text-paper" : "text-ink-soft"
-                  )}
-                >
-                  {t === "ledger" ? "Ledger" : "Frost"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 px-0.5 py-1.5">
-            <span className={rowLabel}>Accent</span>
-            <span className="flex items-center gap-1.5">
-              {ACCENTS.map((a) => (
-                <button
-                  key={a.key}
-                  type="button"
-                  onClick={() => applyAccent(a.key)}
-                  aria-label={`${a.key} accent`}
-                  style={{ background: a.colour }}
-                  className={cn(
-                    "size-4 rounded-full border-2 border-transparent shadow-[0_0_0_1px_rgba(32,43,56,.15)]",
-                    accent === a.key && "border-white shadow-[0_0_0_2px_var(--accent)]"
-                  )}
-                />
-              ))}
-            </span>
-          </div>
-          <div className="flex items-center gap-2.5 px-0.5 py-1.5">
-            <span className={rowLabel}>Light</span>
-            <div className="flex flex-wrap rounded-lg border border-rule bg-paper-deep p-0.5">
-              {(["prism", "gold"] as const).map((l) => (
-                <button
-                  key={l}
-                  type="button"
-                  onClick={() => applyLight(l)}
-                  className={cn(
-                    "rounded-md px-2.5 py-1 font-mono text-[10.5px] font-semibold tracking-wide uppercase",
-                    light === l ? "bg-ink text-paper" : "text-ink-soft"
-                  )}
-                >
-                  {l === "prism" ? "Prism" : "Gold"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <p className="mt-2 border-t border-dashed border-rule pt-2.5 text-[11px] leading-snug text-ink-soft">
-            The accent restyles chrome only. Gold or prism always means Light
-            acted; red always means your stamp; green always means done — in
-            every theme.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function NavEntry({
   item,
   pathname,
@@ -446,6 +315,7 @@ export function AppShell({
     "Enquiries";
 
   return (
+    <AskLightProvider>
     <div className="flex min-h-screen">
       <aside
         className={cn(
@@ -534,17 +404,14 @@ export function AppShell({
           <span className="font-mono text-[11.5px] tracking-wide text-ink-faint">
             <b className="font-semibold text-ink">{businessName}</b> / {crumb}
           </span>
-          <Link
-            href="/light"
-            className="glass ml-auto flex min-w-36 items-center gap-2 rounded-full px-3.5 py-1.5 text-[13px] text-ink-faint max-[880px]:min-w-0 max-[880px]:flex-1"
-          >
-            <span className="light-spark text-[14px] leading-none">✦</span>
-            Ask Light anything…
-          </Link>
-          <AppearanceControl />
+          {/* v2 openAsk(): the ask bar opens the MODAL — it never navigates.
+              Founder amendment (fix round): the Aa control is gone; Settings →
+              Appearance is the only appearance door. */}
+          <AskBar />
         </header>
         <main className="w-full max-w-[1220px] p-5 max-[880px]:p-3.5">{children}</main>
       </div>
     </div>
+    </AskLightProvider>
   );
 }

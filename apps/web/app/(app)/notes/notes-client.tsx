@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 
+import { useAskLight } from "@/components/shell/ask-light";
 import { Button } from "@/components/ui/button";
 import { formatWhen } from "@/lib/format";
 import type { NoteItem, NotesData } from "@/lib/server/queries";
@@ -34,6 +35,7 @@ export function NotesClient({ data }: { data: NotesData }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const { openAsk } = useAskLight();
 
   const inboxIds = useMemo(
     () => new Set(notes.filter((n) => !n.links.some((l) => l.confirmed)).map((n) => n.id)),
@@ -277,8 +279,10 @@ export function NotesClient({ data }: { data: NotesData }) {
                 <Button
                   size="sm"
                   onClick={() =>
-                    setNotice(
-                      "Corrections cascade through Light — its chat wiring is a later session; nothing was changed."
+                    // v2 wiring: this button opens the Ask Light modal with a
+                    // correction prefilled — corrections cascade, never delete.
+                    openAsk(
+                      `Earlier I linked the note "${selected.title}" to the wrong enquiry — fix it.`
                     )
                   }
                 >
@@ -325,6 +329,7 @@ export function NotesClient({ data }: { data: NotesData }) {
                 : "Quick capture · a private note lands in your Inbox, unlinked"}
             </div>
             <textarea
+              autoFocus
               value={captureText}
               onChange={(e) => setCaptureText(e.target.value)}
               placeholder="e.g. “Note from the call — he's waiting on his CoS date from the sponsor, chase Thursday…”"

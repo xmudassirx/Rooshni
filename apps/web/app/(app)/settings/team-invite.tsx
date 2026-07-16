@@ -46,6 +46,7 @@ export function InviteButton() {
             </div>
             <div className="px-6 pt-3 pb-1">
               <input
+                autoFocus
                 type="email"
                 placeholder="name@firm.co.uk"
                 className="w-full rounded-xl border-[1.5px] border-rule bg-paper px-3.5 py-2.5 text-[14px] text-ink outline-none focus:border-accent"

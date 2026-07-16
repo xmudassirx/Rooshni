@@ -28,7 +28,11 @@ const KIND_FILTERS = ["All kinds", "Facts", "Preferences", "Standards", "Methods
 export function MemoryClient({ businessName }: { businessName: string }) {
   const [proposals, setProposals] = useState<StubProposal[]>([]);
   const [importOpen, setImportOpen] = useState(false);
-  const [pasteText, setPasteText] = useState("");
+  // v2 ships the paste box prefilled with a sample — editable input material
+  // for the stub, never displayed as data.
+  const [pasteText, setPasteText] = useState(
+    "Prefers concise answers without preamble. Runs an immigration law firm in Manchester. Interested in AI tools for business automation. Writes in British English."
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [scope, setScope] = useState(0);
   const [kind, setKind] = useState(0);

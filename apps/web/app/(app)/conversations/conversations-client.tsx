@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Paperclip, Search } from "lucide-react";
 
@@ -123,7 +123,36 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
   const [mode, setMode] = useState<"direct" | "light">("direct");
   const [railOpen, setRailOpen] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
+  const [listWidth, setListWidth] = useState(330);
   const boxRef = useRef<HTMLTextAreaElement>(null);
+  const splitRef = useRef<HTMLDivElement>(null);
+
+  // The per-user default view lives in Settings → Appearance; the header
+  // toggle here is the quick switch (v2 copy, verbatim).
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("ui-convview") === "standard") setView("standard");
+    } catch {
+      /* stays phone */
+    }
+  }, []);
+
+  // v2's draggable divider — clamp 250–520px, exactly its bounds.
+  function startDrag(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      const rect = splitRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setListWidth(Math.min(520, Math.max(250, ev.clientX - rect.left)));
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -159,9 +188,15 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
 
   return (
     <div className="flex min-h-[480px] flex-col" style={{ height: "calc(100vh - 132px)" }}>
-      <div className="glass flex min-h-0 flex-1 overflow-hidden rounded-xl max-[900px]:flex-col">
+      <div
+        ref={splitRef}
+        className="glass flex min-h-0 flex-1 overflow-hidden rounded-xl max-[900px]:flex-col"
+      >
         {/* Thread list */}
-        <div className="flex min-h-0 w-[330px] shrink-0 flex-col border-r border-rule max-[900px]:max-h-[38vh] max-[900px]:w-full max-[900px]:border-r-0 max-[900px]:border-b">
+        <div
+          style={{ width: listWidth }}
+          className="flex min-h-0 shrink-0 flex-col max-[900px]:max-h-[38vh] max-[900px]:!w-full max-[900px]:border-b max-[900px]:border-rule"
+        >
           <div className="border-b border-rule px-3.5 pt-3 pb-2.5">
             <label className="mb-2.5 flex items-center gap-2 rounded-lg border border-rule bg-paper px-2.5 py-1.5 text-[13px] text-ink-faint">
               <Search className="size-3.5" />
@@ -259,6 +294,17 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
           </div>
         </div>
 
+        {/* v2 divider — drag to resize the thread list */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          title="Drag to resize"
+          onPointerDown={startDrag}
+          className="flex w-2 shrink-0 cursor-col-resize items-center justify-center border-x border-rule bg-paper-deep text-[13px] text-ink-faint hover:bg-gold-tint max-[900px]:hidden"
+        >
+          ⋮
+        </div>
+
         {/* Right pane */}
         {selected ? (
           <div className="flex min-w-0 flex-1 flex-col bg-paper">
@@ -295,6 +341,46 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
                   </button>
                 ))}
               </div>
+              {/* v2 quick actions. Star and read-state need per-user columns
+                  that do not exist — those two render disabled, stated on
+                  hover. Log-a-call and archive answer with the mockup's own
+                  explanations until their writes land. */}
+              <span
+                title="Starred threads are a personal pin, per user — the column arrives with its session"
+                className="glass flex size-7.5 cursor-not-allowed items-center justify-center rounded-md text-[13px] text-ink-faint/50"
+              >
+                ★
+              </span>
+              <span
+                title="Read-state is per user — the column arrives with its session"
+                className="glass flex size-7.5 cursor-not-allowed items-center justify-center rounded-md text-[13px] text-ink-faint/50"
+              >
+                ✉
+              </span>
+              <button
+                type="button"
+                title="Log a call"
+                className="glass size-7.5 rounded-md text-[13px] text-ink-soft"
+                onClick={() =>
+                  setNotice(
+                    "Logs a communications row — channel: call, duration, outcome. The write arrives with the telephony session; click-to-call with recording is Phase 2."
+                  )
+                }
+              >
+                ☏
+              </button>
+              <button
+                type="button"
+                title="Archive thread"
+                className="glass size-7.5 rounded-md text-[13px] text-ink-soft"
+                onClick={() =>
+                  setNotice(
+                    "Archived — hidden from the list, never deleted; every message stays on The Record (archived_at). The write arrives with its session. There is no delete button on correspondence, by design."
+                  )
+                }
+              >
+                ⌫
+              </button>
               <button
                 type="button"
                 onClick={() => setRailOpen((v) => !v)}

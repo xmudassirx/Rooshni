@@ -68,7 +68,8 @@ export default async function ContactDetailPage({
             <div
               className={cn(
                 "mt-0.5 font-mono text-xs font-semibold uppercase",
-                junk ? "text-stamp" : "text-ledger"
+                // Decision 61 sweep: an active status line is chrome, not "done".
+                junk ? "text-stamp" : "text-accent"
               )}
             >
               {contact.type} · {contact.status.replace(/_/g, " ")} · {contact.locale}
@@ -80,7 +81,7 @@ export default async function ContactDetailPage({
             ) : null}
             <Link
               href={`/record?entity_type=contact&entity_id=${contact.id}`}
-              className="font-mono text-[11px] font-semibold tracking-wide text-ledger uppercase hover:underline"
+              className="font-mono text-[11px] font-semibold tracking-wide text-accent uppercase hover:underline"
             >
               View on the Record →
             </Link>
@@ -184,10 +185,10 @@ export default async function ContactDetailPage({
                 <Link
                   key={`${enquiry.id}-${enquiry.role}`}
                   href={`/enquiries/${enquiry.id}`}
-                  className="glass block rounded-lg px-3 py-2.5 transition-colors hover:border-ledger"
+                  className="glass block rounded-lg px-3 py-2.5 transition-colors hover:border-accent"
                 >
                   <div className="text-[13px] font-bold">{enquiry.title}</div>
-                  <div className="mt-px font-mono text-[10.5px] font-semibold text-ledger">
+                  <div className="mt-px font-mono text-[10.5px] font-semibold text-accent">
                     {enquiry.visaRoute ?? "Route not yet classified"}
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -223,7 +224,7 @@ export default async function ContactDetailPage({
                 <Link
                   key={`${rel.contactId}-${rel.relationship}-${rel.direction}`}
                   href={`/contacts/${rel.contactId}`}
-                  className="glass flex flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 transition-colors hover:border-ledger"
+                  className="glass flex flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 transition-colors hover:border-accent"
                 >
                   <span className="text-[13px] font-bold">{rel.name}</span>
                   <span className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">

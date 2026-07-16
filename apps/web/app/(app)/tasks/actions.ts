@@ -27,10 +27,13 @@ export async function saveTaskAction(
   const dueAtISO = String(formData.get("dueAtISO") ?? "");
   const allDay = formData.get("allDay") === "true";
   const engagementId = String(formData.get("engagementId") ?? "");
+  // "✦ Hand to Light" on an unsaved task creates it assigned to the agent.
+  const assigneeAgentId = String(formData.get("assigneeAgentId") ?? "");
 
   if (!title) return { error: "Name the task first." };
   if (!dueAtISO) return { error: "Every task has a day — pick one." };
   if (engagementId && !isUuid(engagementId)) return { error: "That enquiry link is not valid." };
+  if (assigneeAgentId && !isUuid(assigneeAgentId)) return { error: "That hand-off is not valid." };
 
   const { db, business, actor } = await getAppContext();
 
@@ -69,7 +72,7 @@ export async function saveTaskAction(
           ...row,
           business_id: business.id,
           created_by: actor.id,
-          assignee_actor_id: actor.id,
+          assignee_actor_id: assigneeAgentId || actor.id,
         })
         .select("id")
         .single();
@@ -77,10 +80,15 @@ export async function saveTaskAction(
       await emitEvent(db, {
         business_id: business.id,
         actor_id: actor.id,
-        action: "task.created",
+        action: assigneeAgentId ? "task.handed_to_light" : "task.created",
         entity_type: "task",
         entity_id: data.id,
-        payload: { title, all_day: allDay, engagement_id: engagementId || null },
+        payload: {
+          title,
+          all_day: allDay,
+          engagement_id: engagementId || null,
+          ...(assigneeAgentId ? { assignee_actor_id: assigneeAgentId } : {}),
+        },
       });
     }
   } catch (err) {

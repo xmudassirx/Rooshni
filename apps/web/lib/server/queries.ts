@@ -813,6 +813,51 @@ export async function getAgentActor(): Promise<{ id: string; name: string } | nu
   return data ? { id: data.id, name: data.display_name } : null;
 }
 
+// --- Settings → General ---------------------------------------------------------------
+
+export interface BusinessConfig {
+  name: string;
+  timezone: string;
+  locale: string;
+  /** businesses.settings — free-form config; keys may simply not exist yet. */
+  settings: Record<string, unknown>;
+  template: { vertical: string; version: number; noGoRules: number } | null;
+}
+
+export async function getBusinessConfig(): Promise<BusinessConfig> {
+  const { db, business } = await getAppContext();
+  const { data: row, error } = await db
+    .from("businesses")
+    .select("name, timezone, default_locale, settings, template_id")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (error) throw new Error(`businesses query failed: ${error.message}`);
+  if (!row) throw new Error("The signed-in business is not visible.");
+
+  const { data: template, error: tError } = row.template_id
+    ? await db
+        .from("templates")
+        .select("vertical, version, no_go_rules")
+        .eq("id", row.template_id)
+        .maybeSingle()
+    : { data: null, error: null };
+  if (tError) throw new Error(`templates query failed: ${tError.message}`);
+
+  return {
+    name: row.name,
+    timezone: row.timezone,
+    locale: row.default_locale,
+    settings: (row.settings ?? {}) as Record<string, unknown>,
+    template: template
+      ? {
+          vertical: template.vertical,
+          version: template.version,
+          noGoRules: Array.isArray(template.no_go_rules) ? template.no_go_rules.length : 0,
+        }
+      : null,
+  };
+}
+
 // --- Team & Access -------------------------------------------------------------------
 
 export interface TeamMember {
@@ -821,6 +866,8 @@ export interface TeamMember {
   kind: "human" | "agent";
   role: string | null;
   grantCount: number;
+  /** "tool · access" chips, as the mockup's team rows wear them. */
+  grantChips: string[];
 }
 
 export async function getTeam(): Promise<TeamMember[]> {
@@ -839,7 +886,7 @@ export async function getTeam(): Promise<TeamMember[]> {
       .in("actor_type", ["human", "agent"]),
     db
       .from("grants")
-      .select("grantee_actor_id")
+      .select("grantee_actor_id, tool, access")
       .eq("business_id", business.id)
       .is("archived_at", null)
       .is("revoked_at", null),
@@ -853,8 +900,12 @@ export async function getTeam(): Promise<TeamMember[]> {
   }
 
   const grantCounts = new Map<string, number>();
+  const chipsByActor = new Map<string, string[]>();
   for (const g of grants.data ?? []) {
     grantCounts.set(g.grantee_actor_id, (grantCounts.get(g.grantee_actor_id) ?? 0) + 1);
+    const chips = chipsByActor.get(g.grantee_actor_id) ?? [];
+    chips.push(`${g.tool} · ${g.access}`);
+    chipsByActor.set(g.grantee_actor_id, chips);
   }
   const roleByUser = new Map((members.data ?? []).map((m) => [m.user_id, m.role as string]));
 
@@ -866,6 +917,7 @@ export async function getTeam(): Promise<TeamMember[]> {
       kind: a.actor_type as "human" | "agent",
       role: a.user_id ? (roleByUser.get(a.user_id) ?? null) : null,
       grantCount: grantCounts.get(a.id) ?? 0,
+      grantChips: (chipsByActor.get(a.id) ?? []).sort(),
     }));
 }
 

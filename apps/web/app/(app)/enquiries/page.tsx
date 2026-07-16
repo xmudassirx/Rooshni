@@ -23,10 +23,10 @@ function Card({ card }: { card: PipelineCard }) {
   return (
     <Link
       href={`/enquiries/${card.engagementId}`}
-      className="glass block w-full rounded-lg p-3 text-left transition-colors hover:border-ledger"
+      className="glass block w-full rounded-lg p-3 text-left transition-colors hover:border-accent"
     >
       <div className="text-sm font-bold">{card.name}</div>
-      <div className="mt-px mb-1.5 font-mono text-[11px] font-semibold text-ledger">
+      <div className="mt-px mb-1.5 font-mono text-[11px] font-semibold text-accent">
         {card.visaRoute ?? "Route not yet classified"}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">

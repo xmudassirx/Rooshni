@@ -53,7 +53,7 @@ export default async function RecordPage({
           </span>
           <Link
             href="/record"
-            className="ml-auto font-mono text-[11px] font-semibold tracking-wide text-ledger uppercase hover:underline"
+            className="ml-auto font-mono text-[11px] font-semibold tracking-wide text-accent uppercase hover:underline"
           >
             Clear filter →
           </Link>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -144,7 +144,7 @@ export function TasksClient({
     });
   }
 
-  function saveModal() {
+  function saveModal(assigneeAgentId?: string) {
     if (!modal) return;
     const [hh = 0, mm = 0] = modal.time ? modal.time.split(":").map(Number) : [];
     const due = new Date(modal.day.y, modal.day.m, modal.day.d, hh, mm);
@@ -155,6 +155,7 @@ export function TasksClient({
       dueAtISO: due.toISOString(),
       allDay: String(!modal.time),
       engagementId: modal.enquiryId,
+      assigneeAgentId: assigneeAgentId ?? "",
     });
   }
 
@@ -337,9 +338,11 @@ export function TasksClient({
                       className="flex items-center gap-2 pt-2 pb-0.5 text-[13px] text-ink-faint hover:text-ink-soft"
                     >
                       Add a task…{" "}
-                      <span className="light-text font-mono text-[9px] uppercase">
-                        ✦ or just tell Light in “Ask Light anything”
-                      </span>
+                      {isToday ? (
+                        <span className="light-text font-mono text-[9px] uppercase">
+                          ✦ or just tell Light in “Ask Light anything”
+                        </span>
+                      ) : null}
                     </button>
                   </div>
                 ) : null}
@@ -406,7 +409,9 @@ export function TasksClient({
                 >
                   {i + 1}
                   {count ? (
-                    <span className="light-chip mt-1.5 block w-fit min-w-4 rounded-lg px-1 py-px text-center text-[8.5px] font-bold">
+                    // A count is a kind, not Light's hand — accent, not gold
+                    // (decision 61 outranks the mockup's gold pixel here).
+                    <span className="mt-1.5 block w-fit min-w-4 rounded-lg border border-accent bg-accent-tint px-1 py-px text-center text-[8.5px] font-bold text-accent">
                       {count}
                     </span>
                   ) : null}
@@ -431,10 +436,13 @@ export function TasksClient({
           agent={agent}
           error={error}
           pending={pending}
-          onSave={saveModal}
+          onSave={() => saveModal()}
           onHandToLight={
-            modal.id && agent
-              ? () => run(handToLightAction, { id: modal.id!, agentId: agent.id })
+            agent
+              ? () =>
+                  modal.id
+                    ? run(handToLightAction, { id: modal.id, agentId: agent.id })
+                    : saveModal(agent.id)
               : null
           }
         />
@@ -464,6 +472,12 @@ function TaskModal({
 }) {
   const [pop, setPop] = useState<"cal" | "clock" | "enq" | null>(null);
   const [cal, setCal] = useState({ y: modal.day.y, m: modal.day.m });
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  // v2 openTask()/tkEdit(): the name field takes focus whenever editable.
+  useEffect(() => {
+    if (modal.editing) titleRef.current?.focus();
+  }, [modal.editing]);
   const [hh, setHH] = useState(modal.time ? modal.time.split(":")[0] : "09");
   const [mm, setMM] = useState(modal.time ? modal.time.split(":")[1] : "00");
   const [enqQuery, setEnqQuery] = useState(modal.enquiryLabel);
@@ -506,6 +520,7 @@ function TaskModal({
         </div>
         <div className="px-6 pt-2.5">
           <input
+            ref={titleRef}
             value={modal.title}
             disabled={!editing}
             onChange={(e) => setModal({ ...modal, title: e.target.value })}

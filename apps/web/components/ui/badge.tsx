@@ -16,7 +16,8 @@ const badgeVariants = cva(
         gold: "border border-[#e5d2a4] bg-gold-tint text-gold",
         red: "border border-[#e8bcb2] bg-stamp-tint text-stamp",
         green: "border border-ledger-line bg-ledger-tint text-ledger",
-        source: "border border-[#c9d8e8] bg-[#eaf0f6] text-[#40638c]",
+        // Kind chips are chrome (decision 61) — the source chip follows the accent.
+        source: "border border-accent bg-accent-tint text-accent",
         time: "border border-dashed border-rule bg-transparent text-ink-faint normal-case",
         warn: "border border-dashed border-amber bg-transparent text-amber normal-case",
         pending: "border border-dashed border-ink-faint bg-transparent text-ink-faint",

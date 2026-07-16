@@ -51,7 +51,27 @@ export async function TeamTab() {
                 : (member.role ?? "member")}
             </span>
           </span>
-          <span className="ml-auto font-mono text-[10.5px] text-ink-soft">
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+            {member.grantChips.map((chip) => (
+              <span
+                key={chip}
+                className="rounded-md border border-ledger-line bg-ledger-tint px-2 py-0.5 font-mono text-[10px] font-semibold text-ledger"
+              >
+                {chip}
+              </span>
+            ))}
+            {!member.grantChips.length ? (
+              <span className="rounded-md border border-dashed border-rule px-2 py-0.5 font-mono text-[10px] text-ink-faint">
+                no grants yet
+              </span>
+            ) : null}
+            {member.kind === "agent" ? (
+              <span className="rounded-md border border-dashed border-ink-faint px-2 py-0.5 font-mono text-[10px] text-ink-faint">
+                approvals — structurally unholdable by AI
+              </span>
+            ) : null}
+          </span>
+          <span className="ml-auto shrink-0 font-mono text-[10.5px] text-ink-soft">
             {member.grantCount} grant{member.grantCount === 1 ? "" : "s"} →
           </span>
         </Link>

@@ -51,7 +51,7 @@ function Row({ event }: { event: RecordEvent }) {
     <>
       <span className="font-mono text-[10.5px] text-ink-faint">{formatTime(event.occurredAt)}</span>
       <span className="min-w-0 text-[13px]">
-        <span className="font-mono text-[10px] tracking-wide text-ledger">{event.action}</span>
+        <span className="font-mono text-[10px] tracking-wide text-accent">{event.action}</span>
         <span className="text-ink-soft"> — {describeEvent(event.action, event.payload)}</span>
       </span>
       <span className="flex items-center gap-2 justify-self-end">
@@ -100,7 +100,7 @@ export function RecordList({ events }: { events: RecordEvent[] }) {
               "rounded-full border px-3 py-1 font-mono text-[11px] font-semibold tracking-wide uppercase transition-colors",
               filter === f.key
                 ? "border-ink bg-ink text-paper"
-                : "glass border-rule text-ink-soft hover:border-ledger"
+                : "glass border-rule text-ink-soft hover:border-accent"
             )}
           >
             {f.label}
