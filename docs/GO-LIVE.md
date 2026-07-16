@@ -53,3 +53,27 @@ Add to this list during build; check items off only at go-live.
       migration. Until that session, `apps/web/app/(app)/layout.tsx` gates the
       nav item on ownership. The proper gate is a grant on a registered
       `feedback` tool — do not go live with the ownership shortcut.
+- [ ] **Stripe LIVE keys** (introduced Session 9): `STRIPE_SECRET_KEY`,
+      `STRIPE_WEBHOOK_SECRET` and `STRIPE_PRICE_ID` run in TEST MODE until
+      the first real pilot pays. Swap to live keys in Vercel, register the
+      production webhook endpoint (`POST /api/stripe/webhook`) in the Stripe
+      dashboard, and confirm the pinned API version (`STRIPE_API_VERSION`,
+      packages/db/src/stripe.ts) against the dashboard default at switch
+      time. Where they live: Vercel env vars + Stripe dashboard. What they
+      grant: charging real cards. Rotation: Stripe dashboard, on demand.
+- [ ] **Verify the pre-active delete job against production timers**
+      (introduced Session 9): the sweep rides the workflow tick with
+      `TIME_SCALE` applied — after the production `TIME_SCALE=1` flip,
+      verify on the ledger that reminders fire at real 24h/7d and the hard
+      delete + `account.deleted_unpaid` event at real 30 days, not before.
+- [ ] **Resend production sending domain = barakahx.com** (introduced
+      Session 9, founder-ruled): verify the domain in Resend (SPF/DKIM),
+      set `PLATFORM_MAIL_FROM` to a barakahx.com address and swap
+      `RESEND_API_KEY` to the production key. Platform mail and tenant
+      comms are separate pipes permanently — Graph must never carry
+      platform email.
+- [ ] **Microsoft sign-in before the first external pilot** (recorded
+      17 July 2026, founder-ruled fast-follow, outside Session 9's scope):
+      signup states the Google constraint on the email field; the Supabase
+      Azure provider (our app registration exists) lifts it. Until then a
+      pilot's signup email must be Google-signable.
