@@ -813,6 +813,47 @@ export async function getAgentActor(): Promise<{ id: string; name: string } | nu
   return data ? { id: data.id, name: data.display_name } : null;
 }
 
+// --- Billing & usage ---------------------------------------------------------------
+
+export interface CreditUsage {
+  totalCredits: number;
+  /** Metered actions this calendar month, grouped by ledger action. */
+  byAction: { action: string; count: number; credits: number }[];
+}
+
+export async function getCreditUsage(): Promise<CreditUsage> {
+  const { db, business } = await getAppContext();
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const { data, error } = await db
+    .from("events")
+    .select("action, cost")
+    .eq("business_id", business.id)
+    .gte("occurred_at", startOfMonth.toISOString())
+    .not("cost", "is", null);
+  if (error) throw new Error(`events query failed: ${error.message}`);
+
+  const byAction = new Map<string, { count: number; credits: number }>();
+  let total = 0;
+  for (const row of data ?? []) {
+    const cost = row.cost as EventRow["cost"];
+    const credits = typeof cost?.credits === "number" ? cost.credits : 0;
+    total += credits;
+    const entry = byAction.get(row.action) ?? { count: 0, credits: 0 };
+    entry.count += 1;
+    entry.credits += credits;
+    byAction.set(row.action, entry);
+  }
+  return {
+    totalCredits: total,
+    byAction: [...byAction.entries()]
+      .map(([action, v]) => ({ action, ...v }))
+      .sort((a, b) => b.credits - a.credits),
+  };
+}
+
 // --- Website ---------------------------------------------------------------------
 
 export interface WebsitePageRow {
