@@ -176,6 +176,10 @@ export function AppearanceTab() {
       value: view,
       apply: (v) => {
         setView(v);
+        // Stamp the html element too, so an in-app navigation to
+        // Conversations picks the default up without a refresh.
+        if (v === "standard") document.documentElement.dataset.convview = "standard";
+        else delete document.documentElement.dataset.convview;
         persist("ui-convview", v);
       },
     },

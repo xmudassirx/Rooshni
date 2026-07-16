@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Sparkles } from "lucide-react";
+
 
 import { Badge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
@@ -67,7 +67,7 @@ function Pin({ tone }: { tone: "neutral" | "gold" | "red" | "green" }) {
     <span
       className={cn(
         "absolute top-3.5 left-[5px] z-1 size-4.5 rounded-full border-2",
-        tone === "gold" && "border-gold bg-gold-tint",
+        tone === "gold" && "light-pin",
         tone === "red" && "border-stamp bg-stamp-tint",
         tone === "green" && "border-ledger bg-ledger-tint",
         tone === "neutral" && "border-ink-faint bg-paper"
@@ -393,7 +393,9 @@ export default async function EnquiryDetailPage({
                     <span className="min-w-0 flex-1 text-[12.5px] font-medium">
                       <span className={cn(done && "text-ink-soft line-through")}>{task.title}</span>
                       <span className="mt-0.5 flex items-center gap-1 font-mono text-[10px] tracking-wide text-ink-faint uppercase">
-                        {byLight ? <Sparkles className="size-3 text-gold" /> : null}
+                        {byLight ? (
+                          <span className="light-spark text-[11px] leading-none">✦</span>
+                        ) : null}
                         {task.assigneeName ?? "Unassigned"}
                         {task.dueAt ? ` · due ${formatWhen(task.dueAt)}` : ""}
                       </span>
@@ -414,7 +416,7 @@ export default async function EnquiryDetailPage({
               {notes.map((note) => (
                 <div
                   key={note.id}
-                  className="mb-2 rounded-lg border border-gold-tint bg-gold-tint/60 px-3 py-2.5 text-[12.5px] last:mb-0"
+                  className="light-panel mb-2 rounded-lg px-3 py-2.5 text-[12.5px] last:mb-0"
                 >
                   {note.body}
                   <div className="mt-1.5 font-mono text-[10px] tracking-wide text-ink-faint uppercase">

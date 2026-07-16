@@ -55,7 +55,7 @@ function Row({ event }: { event: RecordEvent }) {
         <span className="text-ink-soft"> — {describeEvent(event.action, event.payload)}</span>
       </span>
       <span className="flex items-center gap-2 justify-self-end">
-        {cost ? <span className="font-mono text-[10px] text-gold">{cost}</span> : null}
+        {cost ? <span className="light-text font-mono text-[10px]">{cost}</span> : null}
         <ActorTag event={event} />
       </span>
     </>

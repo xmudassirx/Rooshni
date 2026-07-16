@@ -235,6 +235,16 @@ html:not([data-theme]) .sidebar-glass {
 
 .light-avatar { background: var(--gold); color: #fff; }
 
+/* Timeline pins marking Light's acts. */
+.light-pin { border-color: var(--gold); background: var(--gold-tint); }
+
+/* Light-tone vigilance item (dashboard) — the mockup's .vitem.gold. */
+.light-vitem { border-left-color: var(--gold); }
+
+/* Hover/focus affordances inviting Light — drop zones, brief boxes. */
+.light-drop:hover { border-color: var(--gold); color: var(--ink); }
+.light-focus:focus { border-color: var(--gold); }
+
 [data-lightac="prism"] .light-text,
 [data-lightac="prism"] .light-spark,
 [data-lightac="prism"] .light-head {
@@ -260,6 +270,21 @@ html:not([data-theme]) .sidebar-glass {
 }
 [data-lightac="prism"] .light-btn:hover,
 [data-lightac="prism"] .light-btn-soft:hover { filter: brightness(1.08); color: #fff; }
+
+[data-lightac="prism"] .light-vitem {
+  border-left-color: rgba(180, 79, 216, 0.55);
+}
+[data-lightac="prism"] .light-drop:hover,
+[data-lightac="prism"] .light-focus:focus {
+  border-color: rgba(180, 79, 216, 0.55);
+}
+
+[data-lightac="prism"] .light-pin {
+  background: linear-gradient(115deg, #f0a93b, #e8563f 30%, #b44fd8 55%, #3f8cff 80%, #2e9e6b);
+  background-size: 220% 220%;
+  animation: prismshift 6s ease infinite;
+  border-color: transparent;
+}
 
 [data-lightac="prism"] .light-panel {
   background: linear-gradient(120deg, rgba(240, 169, 59, 0.13), rgba(232, 86, 63, 0.09) 30%, rgba(180, 79, 216, 0.1) 55%, rgba(63, 140, 255, 0.13) 80%, rgba(46, 158, 107, 0.1));

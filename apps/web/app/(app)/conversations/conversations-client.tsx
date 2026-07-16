@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Paperclip, Search } from "lucide-react";
 
@@ -128,10 +128,17 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
   const splitRef = useRef<HTMLDivElement>(null);
 
   // The per-user default view lives in Settings → Appearance; the header
-  // toggle here is the quick switch (v2 copy, verbatim).
-  useEffect(() => {
+  // toggle here is the quick switch (v2 copy, verbatim). The boot script
+  // stamps data-convview before first paint, and this layout effect reads it
+  // BEFORE the browser paints — no flash of the phone default (fix round 2).
+  useLayoutEffect(() => {
     try {
-      if (localStorage.getItem("ui-convview") === "standard") setView("standard");
+      if (
+        document.documentElement.dataset.convview === "standard" ||
+        localStorage.getItem("ui-convview") === "standard"
+      ) {
+        setView("standard");
+      }
     } catch {
       /* stays phone */
     }
@@ -300,7 +307,7 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
           aria-orientation="vertical"
           title="Drag to resize"
           onPointerDown={startDrag}
-          className="flex w-2 shrink-0 cursor-col-resize items-center justify-center border-x border-rule bg-paper-deep text-[13px] text-ink-faint hover:bg-gold-tint max-[900px]:hidden"
+          className="flex w-2 shrink-0 cursor-col-resize items-center justify-center border-x border-rule bg-paper-deep text-[13px] text-ink-faint hover:bg-accent-tint max-[900px]:hidden"
         >
           ⋮
         </div>

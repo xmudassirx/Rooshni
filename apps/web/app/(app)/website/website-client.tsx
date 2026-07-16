@@ -321,7 +321,7 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
                 <textarea
                   autoFocus
                   placeholder="e.g. “A page about spouse visa costs and our fees, people keep asking on the phone…”"
-                  className="min-h-27 w-full resize-none rounded-2xl border-[1.5px] border-rule bg-paper px-4 py-3.5 text-[15px] leading-relaxed text-ink outline-none focus:border-gold"
+                  className="min-h-27 w-full resize-none rounded-2xl border-[1.5px] border-rule bg-paper px-4 py-3.5 text-[15px] leading-relaxed text-ink outline-none light-focus"
                 />
                 <div className="flex items-center py-2">
                   <button

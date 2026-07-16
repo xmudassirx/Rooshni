@@ -38,7 +38,7 @@ export const metadata: Metadata = {
 // Frost, absence of data-accent IS blue. The storage keys are deliberately
 // generic: this script ships on the public holding page too, and the public
 // surface carries no product name (Session 5 founder rule).
-const themeBoot = `try{var d=document.documentElement,g=function(k){return localStorage.getItem(k)},t=g("ui-theme");if(t==="ledger"||t==="mono")d.dataset.theme=t;else delete d.dataset.theme;var a=g("ui-accent");if(a)d.dataset.accent=a;d.dataset.lightac=g("ui-light")==="gold"?"gold":"prism";var f=g("ui-font");if(f&&f!=="theme")d.dataset.font=f;var s=g("ui-size");if(s&&s!=="default")d.dataset.size=s}catch(e){}`;
+const themeBoot = `try{var d=document.documentElement,g=function(k){return localStorage.getItem(k)},t=g("ui-theme");if(t==="ledger"||t==="mono")d.dataset.theme=t;else delete d.dataset.theme;var a=g("ui-accent");if(a)d.dataset.accent=a;d.dataset.lightac=g("ui-light")==="gold"?"gold":"prism";var f=g("ui-font");if(f&&f!=="theme")d.dataset.font=f;var s=g("ui-size");if(s&&s!=="default")d.dataset.size=s;if(g("ui-convview")==="standard")d.dataset.convview="standard"}catch(e){}`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

@@ -13,7 +13,8 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        gold: "border border-[#e5d2a4] bg-gold-tint text-gold",
+        // Light's channel rides the token so Prism/Gold applies product-wide.
+        gold: "light-chip",
         red: "border border-[#e8bcb2] bg-stamp-tint text-stamp",
         green: "border border-ledger-line bg-ledger-tint text-ledger",
         // Kind chips are chrome (decision 61) — the source chip follows the accent.

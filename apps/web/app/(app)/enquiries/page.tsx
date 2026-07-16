@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Sparkles } from "lucide-react";
 
 import { PageHead } from "@/components/shell/page-head";
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +40,7 @@ function Card({ card }: { card: PipelineCard }) {
       {card.nextAction ? (
         <div className="mt-2 flex items-center gap-1.5 border-t border-dashed border-rule pt-1.5 text-[11.5px] text-ink-soft">
           {card.nextAction.byLight ? (
-            <Sparkles className="size-3 shrink-0 text-gold" />
+            <span className="light-spark shrink-0 text-[11px] leading-none">✦</span>
           ) : null}
           <span className="truncate">{card.nextAction.text}</span>
         </div>

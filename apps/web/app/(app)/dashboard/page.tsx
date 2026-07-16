@@ -48,7 +48,7 @@ function VigilanceItem({
         "glass mb-2 flex flex-wrap items-start gap-3 rounded-lg border-l-4 p-3",
         tone === "red" && "border-l-stamp",
         tone === "amber" && "border-l-amber",
-        tone === "gold" && "border-l-gold"
+        tone === "gold" && "light-vitem"
       )}
     >
       <div className="min-w-0 flex-1 text-[13.5px]">

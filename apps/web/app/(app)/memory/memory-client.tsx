@@ -213,7 +213,7 @@ export function MemoryClient({ businessName }: { businessName: string }) {
             />
             <button
               type="button"
-              className="mt-2.5 flex w-full cursor-pointer flex-col gap-1 rounded-xl border-[1.5px] border-dashed border-rule p-4 text-center text-[13px] text-ink-soft hover:border-gold hover:text-ink"
+              className="mt-2.5 flex w-full cursor-pointer flex-col gap-1 rounded-xl border-[1.5px] border-dashed border-rule p-4 text-center text-[13px] text-ink-soft light-drop"
               onClick={() =>
                 setNotice(
                   "Screenshot reading is Light's — it arrives with the memory engine session."
