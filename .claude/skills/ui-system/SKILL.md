@@ -7,6 +7,8 @@ description: Use when building any UI in apps/web — the theme/token architectu
 
 Design authority: `docs/design/master-mockup-v2.html` + `docs/design/AMENDMENTS-PASS3.md` (plus the signed amendments below). Structure deviating from either is Lane C. `docs/design/mockup-pass1-shell-pipeline-case.html` and `docs/design/master-mockup-v1.html` are historical reference only.
 
+Precedence on conflict: AMENDMENTS-PASS3 > in-file amendments > mockup pixels. If a conflict is found, flag it — don't silently pick.
+
 ## Tokens and themes
 
 All theming lives in `apps/web/app/globals.css`:
