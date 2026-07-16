@@ -1,10 +1,20 @@
-import { Placeholder } from "@/components/shell/page-head";
+import { PageHead } from "@/components/shell/page-head";
+import { getNotes } from "@/lib/server/queries";
 
-export default function NotesPage() {
+import { NotesClient } from "./notes-client";
+
+export const dynamic = "force-dynamic";
+
+export default async function NotesPage() {
+  const data = await getNotes();
+
   return (
-    <Placeholder icon="✎" title="Notes">
-      Folders-as-views: an inbox for quick captures, projects generated from
-      links, saved views as pseudo-folders. A Phase 2 surface.
-    </Placeholder>
+    <>
+      <PageHead
+        title="Notes"
+        sub="No folders, ever — structure is generated from links and grants"
+      />
+      <NotesClient data={data} />
+    </>
   );
 }

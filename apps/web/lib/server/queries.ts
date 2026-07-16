@@ -813,6 +813,180 @@ export async function getAgentActor(): Promise<{ id: string; name: string } | nu
   return data ? { id: data.id, name: data.display_name } : null;
 }
 
+// --- Notes ---------------------------------------------------------------------
+
+/*
+ * Notes are content_items of type `note` plus entity_links — no new
+ * primitive, no manual folders (master context 3.10). The rail's engagement
+ * groups are GENERATED from confirmed links; the Inbox is simply the notes
+ * with no links at all.
+ *
+ * JUDGMENT: content_items.body is "structured blocks, never raw HTML" with
+ * no block vocabulary specced yet — notes use [{type:"paragraph",text}] and
+ * [{type:"check",text,done}], additive and portable (Session 8, Lane B).
+ */
+
+export interface NoteBlock {
+  type: "paragraph" | "check";
+  text: string;
+  done?: boolean;
+}
+
+export interface NoteLink {
+  id: string;
+  toType: string;
+  toId: string;
+  label: string;
+  proposedByLight: boolean;
+  confirmed: boolean;
+}
+
+export interface NoteItem {
+  id: string;
+  title: string;
+  blocks: NoteBlock[];
+  visibility: "private" | "team";
+  createdAt: string;
+  updatedAt: string;
+  links: NoteLink[];
+}
+
+export interface NoteGroup {
+  key: string;
+  label: string;
+  noteIds: string[];
+}
+
+export interface NotesData {
+  notes: NoteItem[];
+  /** Generated purely from confirmed entity_links to engagements. */
+  groups: NoteGroup[];
+}
+
+export async function getNotes(): Promise<NotesData> {
+  const { db, business } = await getAppContext();
+
+  const { data: rows, error } = await db
+    .from("content_items")
+    .select("id, title, body, visibility, created_at, updated_at")
+    .eq("business_id", business.id)
+    .eq("content_type", "note")
+    .is("archived_at", null)
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(`content_items query failed: ${error.message}`);
+
+  const noteIds = (rows ?? []).map((r) => r.id);
+  const { data: linkRows, error: linkError } = noteIds.length
+    ? await db
+        .from("entity_links")
+        .select("id, from_entity_id, to_entity_type, to_entity_id, proposed_by_actor_id, confirmed_at")
+        .eq("from_entity_type", "content_item")
+        .in("from_entity_id", noteIds)
+        .is("archived_at", null)
+    : { data: [], error: null };
+  if (linkError) throw new Error(`entity_links query failed: ${linkError.message}`);
+
+  const engagementIds = [
+    ...new Set(
+      (linkRows ?? [])
+        .filter((l) => l.to_entity_type === "engagement")
+        .map((l) => l.to_entity_id)
+    ),
+  ];
+  const contactIds = [
+    ...new Set(
+      (linkRows ?? [])
+        .filter((l) => l.to_entity_type === "contact")
+        .map((l) => l.to_entity_id)
+    ),
+  ];
+  const proposerIds = [
+    ...new Set(
+      (linkRows ?? []).flatMap((l) => (l.proposed_by_actor_id ? [l.proposed_by_actor_id] : []))
+    ),
+  ];
+
+  const [engagements, linkContacts, proposers] = await Promise.all([
+    engagementIds.length
+      ? db.from("engagements").select("id, title").in("id", engagementIds)
+      : Promise.resolve({ data: [], error: null }),
+    contactIds.length
+      ? db.from("contacts").select("id, display_name").in("id", contactIds)
+      : Promise.resolve({ data: [], error: null }),
+    proposerIds.length
+      ? db.from("actors").select("id, actor_type").in("id", proposerIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  for (const [label, result] of [
+    ["engagements", engagements],
+    ["contacts", linkContacts],
+    ["actors", proposers],
+  ] as const) {
+    if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
+  }
+
+  const engagementTitles = new Map((engagements.data ?? []).map((e) => [e.id, e.title as string]));
+  const contactNames = new Map((linkContacts.data ?? []).map((c) => [c.id, c.display_name as string]));
+  const agentProposers = new Set(
+    (proposers.data ?? []).filter((a) => a.actor_type === "agent").map((a) => a.id)
+  );
+
+  const linksByNote = new Map<string, NoteLink[]>();
+  for (const l of linkRows ?? []) {
+    const label =
+      l.to_entity_type === "engagement"
+        ? (engagementTitles.get(l.to_entity_id) ?? "an enquiry")
+        : l.to_entity_type === "contact"
+          ? (contactNames.get(l.to_entity_id) ?? "a contact")
+          : l.to_entity_type;
+    const list = linksByNote.get(l.from_entity_id) ?? [];
+    list.push({
+      id: l.id,
+      toType: l.to_entity_type,
+      toId: l.to_entity_id,
+      label,
+      proposedByLight: l.proposed_by_actor_id ? agentProposers.has(l.proposed_by_actor_id) : false,
+      confirmed: l.confirmed_at !== null,
+    });
+    linksByNote.set(l.from_entity_id, list);
+  }
+
+  const notes: NoteItem[] = (rows ?? []).map((r) => {
+    const raw = Array.isArray(r.body) ? (r.body as unknown[]) : [];
+    const blocks: NoteBlock[] = raw.flatMap((b): NoteBlock[] => {
+      const block = b as Record<string, unknown>;
+      if (block.type === "check" && typeof block.text === "string") {
+        return [{ type: "check", text: block.text, done: block.done === true }];
+      }
+      if (typeof block.text === "string") {
+        return [{ type: "paragraph", text: block.text }];
+      }
+      return [];
+    });
+    return {
+      id: r.id,
+      title: r.title,
+      blocks,
+      visibility: r.visibility as "private" | "team",
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      links: linksByNote.get(r.id) ?? [],
+    };
+  });
+
+  const groups = new Map<string, NoteGroup>();
+  for (const note of notes) {
+    for (const link of note.links) {
+      if (link.toType !== "engagement" || !link.confirmed) continue;
+      const group = groups.get(link.toId) ?? { key: link.toId, label: link.label, noteIds: [] };
+      group.noteIds.push(note.id);
+      groups.set(link.toId, group);
+    }
+  }
+
+  return { notes, groups: [...groups.values()] };
+}
+
 // --- Enquiry detail ----------------------------------------------------------
 
 export interface EnquiryStage {

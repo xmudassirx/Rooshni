@@ -1,10 +1,20 @@
-import { Placeholder } from "@/components/shell/page-head";
+import { PageHead } from "@/components/shell/page-head";
+import { getAppContext } from "@/lib/server/context";
 
-export default function MemoryPage() {
+import { MemoryClient } from "./memory-client";
+
+export const dynamic = "force-dynamic";
+
+export default async function MemoryPage() {
+  const { business } = await getAppContext();
+
   return (
-    <Placeholder icon="▤" title="Light's Memory">
-      Everything Light believes — nothing hidden, everything editable, every
-      card with its provenance on the record. Arrives with Spec 2.
-    </Placeholder>
+    <>
+      <PageHead
+        title="Light's Memory"
+        sub="Everything Light believes — nothing hidden, everything editable"
+      />
+      <MemoryClient businessName={business.name} />
+    </>
   );
 }
