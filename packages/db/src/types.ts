@@ -7,10 +7,12 @@ export type ActorType = "human" | "agent" | "workflow" | "integration";
 
 export type EventAction = `${string}.${string}`;
 
-/** Spec 1 §5.2 — the append-only audit ledger row. */
+/** Spec 1 §5.2 — the append-only audit ledger row. business_id is null only
+ * for PLATFORM-scope events (the account.* namespace, 0020): a deleted
+ * unpaid signup has no business to charge the event to. */
 export interface EventRow {
   id: string;
-  business_id: string;
+  business_id: string | null;
   actor_id: string;
   action: EventAction;
   entity_type: string | null;
@@ -270,7 +272,8 @@ export interface TickReport {
 }
 
 export interface EmitEventInput {
-  business_id: string;
+  /** null = platform scope — lawful only for account.* (0020 constraint). */
+  business_id: string | null;
   actor_id: string;
   action: EventAction;
   entity_type?: string;
