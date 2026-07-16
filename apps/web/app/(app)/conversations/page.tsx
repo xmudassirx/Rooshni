@@ -1,10 +1,20 @@
-import { Placeholder } from "@/components/shell/page-head";
+import { PageHead } from "@/components/shell/page-head";
+import { getConversations } from "@/lib/server/queries";
 
-export default function ConversationsPage() {
+import { ConversationsClient } from "./conversations-client";
+
+export const dynamic = "force-dynamic";
+
+export default async function ConversationsPage() {
+  const threads = await getConversations();
+
   return (
-    <Placeholder icon="✉" title="Conversations">
-      Every channel, one thread per person — with the client/Light reply
-      toggle. Incoming mail lands here, never in the Approval Inbox.
-    </Placeholder>
+    <>
+      <PageHead
+        title="Conversations"
+        sub="One inbox across WhatsApp, email and SMS — every message is a row on The Record"
+      />
+      <ConversationsClient threads={threads} />
+    </>
   );
 }

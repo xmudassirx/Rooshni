@@ -458,6 +458,361 @@ export async function getRecordEvents(filter?: {
   });
 }
 
+// --- Conversations -----------------------------------------------------------
+
+export interface ThreadMessage {
+  id: string;
+  channel: string;
+  direction: "inbound" | "outbound" | "internal";
+  status: string;
+  body: string;
+  subject: string | null;
+  occurredAt: string;
+  scheduledFor: string | null;
+  durationSeconds: number | null;
+  draftedByLight: boolean;
+  stampedByName: string | null;
+  /** An outbound draft still waiting for its stamp — gold, dashed, unsent. */
+  isPendingDraft: boolean;
+}
+
+export interface ThreadConsent {
+  channel: string;
+  ok: boolean;
+  note: string;
+}
+
+export interface ConversationThread {
+  id: string;
+  contactId: string;
+  contactName: string;
+  channel: string;
+  subject: string | null;
+  lastAt: string;
+  snippet: string;
+  /** Derived, never invented: pending draft > Light handling > awaiting you > stage. */
+  state: { tone: "gold" | "you" | "done"; label: string };
+  lightHandling: boolean;
+  awaitingYou: boolean;
+  hasPendingDraft: boolean;
+  enquiry: { id: string; title: string; stageLabel: string | null } | null;
+  contact: {
+    type: "person" | "organisation";
+    status: string;
+    isClient: boolean;
+    phone: string | null;
+    email: string | null;
+    source: string | null;
+    consents: ThreadConsent[];
+  };
+  messages: ThreadMessage[];
+}
+
+function consentNote(consent: Record<string, unknown>): { ok: boolean; note: string } {
+  const kinds = ["transactional", "marketing"].filter((k) => consent[k] === true);
+  if (!kinds.length) return { ok: false, note: "no consent recorded" };
+  const source = typeof consent.source === "string" ? ` · ${consent.source}` : "";
+  return { ok: true, note: kinds.join(" · ") + source };
+}
+
+export async function getConversations(): Promise<ConversationThread[]> {
+  const { db, business } = await getAppContext();
+
+  const [threads, comms] = await Promise.all([
+    db
+      .from("comm_threads")
+      .select("id, subject, channel, contact_id, engagement_id")
+      .eq("business_id", business.id)
+      .is("archived_at", null),
+    db
+      .from("communications")
+      .select(
+        "id, thread_id, channel, direction, status, body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id"
+      )
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .order("occurred_at", { ascending: true }),
+  ]);
+  if (threads.error) throw new Error(`comm_threads query failed: ${threads.error.message}`);
+  if (comms.error) throw new Error(`communications query failed: ${comms.error.message}`);
+
+  const contactIds = [...new Set((threads.data ?? []).map((t) => t.contact_id))];
+  const engagementIds = [
+    ...new Set((threads.data ?? []).flatMap((t) => (t.engagement_id ? [t.engagement_id] : []))),
+  ];
+  const actorIds = [
+    ...new Set(
+      (comms.data ?? []).flatMap((c) => [
+        ...(c.drafted_by_actor_id ? [c.drafted_by_actor_id] : []),
+        ...(c.approved_by_actor_id ? [c.approved_by_actor_id] : []),
+      ])
+    ),
+  ];
+
+  const [contacts, channels, engagements, runs, actors] = await Promise.all([
+    contactIds.length
+      ? db
+          .from("contacts")
+          .select("id, display_name, type, status, first_touch")
+          .in("id", contactIds)
+      : Promise.resolve({ data: [], error: null }),
+    contactIds.length
+      ? db
+          .from("contact_channels")
+          .select("contact_id, channel, value, is_primary, consent")
+          .in("contact_id", contactIds)
+          .is("archived_at", null)
+      : Promise.resolve({ data: [], error: null }),
+    engagementIds.length
+      ? db
+          .from("engagements")
+          .select("id, title, outcome, stage_definitions(label)")
+          .in("id", engagementIds)
+      : Promise.resolve({ data: [], error: null }),
+    engagementIds.length
+      ? db
+          .from("workflow_runs")
+          .select("engagement_id, status")
+          .in("engagement_id", engagementIds)
+          .in("status", ["running", "waiting", "blocked"])
+      : Promise.resolve({ data: [], error: null }),
+    actorIds.length
+      ? db.from("actors").select("id, display_name, actor_type").in("id", actorIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  for (const [label, result] of [
+    ["contacts", contacts],
+    ["contact_channels", channels],
+    ["engagements", engagements],
+    ["workflow_runs", runs],
+    ["actors", actors],
+  ] as const) {
+    if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
+  }
+
+  const contactById = new Map((contacts.data ?? []).map((c) => [c.id, c]));
+  const channelsByContact = new Map<string, typeof channels.data>();
+  for (const ch of channels.data ?? []) {
+    const list = channelsByContact.get(ch.contact_id) ?? [];
+    list!.push(ch);
+    channelsByContact.set(ch.contact_id, list!);
+  }
+  const engagementById = new Map((engagements.data ?? []).map((e) => [e.id, e]));
+  const liveRunEngagements = new Set((runs.data ?? []).map((r) => r.engagement_id));
+  const actorById = new Map(
+    (actors.data ?? []).map((a) => [
+      a.id,
+      { name: a.display_name as string, type: a.actor_type as ActorType },
+    ])
+  );
+
+  const commsByThread = new Map<string, NonNullable<typeof comms.data>>();
+  for (const c of comms.data ?? []) {
+    const list = commsByThread.get(c.thread_id) ?? [];
+    list.push(c);
+    commsByThread.set(c.thread_id, list);
+  }
+
+  const result: ConversationThread[] = (threads.data ?? []).flatMap((t) => {
+    const contact = contactById.get(t.contact_id);
+    if (!contact) return [];
+    const list = commsByThread.get(t.id) ?? [];
+    if (!list.length) return [];
+
+    const messages: ThreadMessage[] = list.map((c) => {
+      const draftedBy = c.drafted_by_actor_id ? actorById.get(c.drafted_by_actor_id) : null;
+      const approvedBy = c.approved_by_actor_id ? actorById.get(c.approved_by_actor_id) : null;
+      return {
+        id: c.id,
+        channel: c.channel,
+        direction: c.direction as ThreadMessage["direction"],
+        status: c.status,
+        body: c.body,
+        subject: null,
+        occurredAt: c.occurred_at,
+        scheduledFor: c.scheduled_for,
+        durationSeconds: c.duration_seconds,
+        draftedByLight: draftedBy?.type === "agent",
+        stampedByName: approvedBy?.name ?? null,
+        isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
+      };
+    });
+
+    const last = messages[messages.length - 1];
+    if (!last) return [];
+    const hasPendingDraft = messages.some((m) => m.isPendingDraft);
+    const engagement = t.engagement_id ? engagementById.get(t.engagement_id) : null;
+    const stage = engagement?.stage_definitions as unknown as { label: string } | null;
+    const lightHandling = t.engagement_id ? liveRunEngagements.has(t.engagement_id) : false;
+    const awaitingYou = !hasPendingDraft && last.direction === "inbound";
+
+    const state: ConversationThread["state"] = hasPendingDraft
+      ? { tone: "gold", label: "✦ draft awaiting stamp" }
+      : lightHandling
+        ? { tone: "gold", label: "Light handling" }
+        : awaitingYou
+          ? { tone: "you", label: "awaiting you" }
+          : { tone: "done", label: stage?.label.toLowerCase() ?? "up to date" };
+
+    const contactChannels = channelsByContact.get(t.contact_id) ?? [];
+    const primary = (kind: string) =>
+      contactChannels.find((c) => c.channel === kind && c.is_primary) ??
+      contactChannels.find((c) => c.channel === kind);
+    const firstTouch = (contact.first_touch ?? {}) as Record<string, unknown>;
+
+    return [
+      {
+        id: t.id,
+        contactId: t.contact_id,
+        contactName: contact.display_name,
+        channel: t.channel,
+        subject: t.subject,
+        lastAt: last.occurredAt,
+        snippet: hasPendingDraft
+          ? "✦ Light's draft — awaiting your stamp"
+          : last.body.length > 80
+            ? `${last.body.slice(0, 80)}…`
+            : last.body,
+        state,
+        lightHandling,
+        awaitingYou,
+        hasPendingDraft,
+        enquiry: engagement
+          ? {
+              id: engagement.id,
+              title: engagement.title,
+              stageLabel: stage?.label ?? null,
+            }
+          : null,
+        contact: {
+          type: contact.type as "person" | "organisation",
+          status: contact.status,
+          isClient: engagement?.outcome === "won",
+          phone: primary("phone")?.value ?? primary("whatsapp")?.value ?? null,
+          email: primary("email")?.value ?? null,
+          source: typeof firstTouch.source === "string" ? firstTouch.source : null,
+          consents: contactChannels.map((c) => {
+            const { ok, note } = consentNote((c.consent ?? {}) as Record<string, unknown>);
+            return { channel: c.channel, ok, note };
+          }),
+        },
+        messages,
+      },
+    ];
+  });
+
+  return result.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+}
+
+// --- Tasks ---------------------------------------------------------------------
+
+export interface TaskRow {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  dueAt: string | null;
+  /** attributes.all_day — an untimed task; syncs as all-day when sync lands. */
+  allDay: boolean;
+  priority: string;
+  assigneeName: string | null;
+  assigneeIsAgent: boolean;
+  createdByAgent: boolean;
+  enquiry: { id: string; title: string } | null;
+}
+
+export interface EnquiryOption {
+  id: string;
+  title: string;
+  stageLabel: string | null;
+}
+
+export async function getTasks(): Promise<TaskRow[]> {
+  const { db, business } = await getAppContext();
+  const { data, error } = await db
+    .from("tasks")
+    .select(
+      "id, title, description, status, due_at, priority, attributes, assignee_actor_id, created_by, engagements(id, title)"
+    )
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .order("due_at", { ascending: true, nullsFirst: false });
+  if (error) throw new Error(`tasks query failed: ${error.message}`);
+
+  const actorIds = [
+    ...new Set(
+      (data ?? []).flatMap((t) => [
+        ...(t.assignee_actor_id ? [t.assignee_actor_id] : []),
+        ...(t.created_by ? [t.created_by] : []),
+      ])
+    ),
+  ];
+  const { data: actorRows, error: actorsError } = actorIds.length
+    ? await db.from("actors").select("id, display_name, actor_type").in("id", actorIds)
+    : { data: [], error: null };
+  if (actorsError) throw new Error(`actors query failed: ${actorsError.message}`);
+  const actorById = new Map(
+    (actorRows ?? []).map((a) => [
+      a.id,
+      { name: a.display_name as string, type: a.actor_type as ActorType },
+    ])
+  );
+
+  return (data ?? []).map((t) => {
+    const engagement = t.engagements as unknown as { id: string; title: string } | null;
+    const assignee = t.assignee_actor_id ? actorById.get(t.assignee_actor_id) : null;
+    const creator = t.created_by ? actorById.get(t.created_by) : null;
+    const attributes = (t.attributes ?? {}) as Record<string, unknown>;
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      status: t.status,
+      dueAt: t.due_at,
+      allDay: attributes.all_day === true,
+      priority: t.priority,
+      assigneeName: assignee?.name ?? null,
+      assigneeIsAgent: assignee?.type === "agent",
+      createdByAgent: creator?.type === "agent",
+      enquiry: engagement ? { id: engagement.id, title: engagement.title } : null,
+    };
+  });
+}
+
+/** Open (non-terminal) enquiries for the task modal's link search. */
+export async function getEnquiryOptions(): Promise<EnquiryOption[]> {
+  const { db, business } = await getAppContext();
+  const { data, error } = await db
+    .from("engagements")
+    .select("id, title, stage_definitions(label, is_terminal)")
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`engagements query failed: ${error.message}`);
+  return (data ?? []).map((e) => {
+    const stage = e.stage_definitions as unknown as {
+      label: string;
+      is_terminal: boolean;
+    } | null;
+    return { id: e.id, title: e.title, stageLabel: stage?.label ?? null };
+  });
+}
+
+/** Light's actor — the agent tasks are handed to. Null when no agent exists. */
+export async function getAgentActor(): Promise<{ id: string; name: string } | null> {
+  const { db } = await getAppContext();
+  const { data, error } = await db
+    .from("actors")
+    .select("id, display_name")
+    .eq("actor_type", "agent")
+    .is("archived_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`agent actor query failed: ${error.message}`);
+  return data ? { id: data.id, name: data.display_name } : null;
+}
+
 // --- Enquiry detail ----------------------------------------------------------
 
 export interface EnquiryStage {
@@ -796,6 +1151,12 @@ export interface ContactListRow {
   channels: ChannelConsent[];
   openEnquiries: number;
   relationships: ContactRelationship[];
+  /** Won at least one engagement — the book's LEAD/CLIENT split. */
+  isClient: boolean;
+  phone: string | null;
+  email: string | null;
+  /** Most recent communication on their threads, if any. */
+  lastActivityAt: string | null;
 }
 
 interface EngagementEmbed {
@@ -816,7 +1177,7 @@ interface EngagementEmbed {
 export async function getContacts(): Promise<ContactListRow[]> {
   const { db, business } = await getAppContext();
 
-  const [contacts, channels, relationships, participants] = await Promise.all([
+  const [contacts, channels, relationships, participants, lastComms] = await Promise.all([
     db
       .from("contacts")
       .select("id, display_name, type, status, locale, first_touch")
@@ -840,12 +1201,20 @@ export async function getContacts(): Promise<ContactListRow[]> {
       )
       .eq("business_id", business.id)
       .is("archived_at", null),
+    db
+      .from("communications")
+      .select("contact_id, occurred_at")
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .not("contact_id", "is", null)
+      .order("occurred_at", { ascending: false }),
   ]);
   for (const [label, result] of [
     ["contacts", contacts],
     ["contact_channels", channels],
     ["contact_relationships", relationships],
     ["engagement_participants", participants],
+    ["communications", lastComms],
   ] as const) {
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
@@ -881,15 +1250,30 @@ export async function getContacts(): Promise<ContactListRow[]> {
   }
 
   const openByContact = new Map<string, number>();
+  const wonByContact = new Set<string>();
   for (const p of participants.data ?? []) {
     const engagement = p.engagements as unknown as EngagementEmbed | null;
     if (!engagement || engagement.archived_at) continue;
+    if (engagement.outcome === "won" || engagement.stage_definitions?.terminal_outcome === "won") {
+      wonByContact.add(p.contact_id);
+    }
     if (engagement.stage_definitions?.is_terminal) continue;
     openByContact.set(p.contact_id, (openByContact.get(p.contact_id) ?? 0) + 1);
   }
 
+  const lastByContact = new Map<string, string>();
+  for (const c of lastComms.data ?? []) {
+    if (c.contact_id && !lastByContact.has(c.contact_id)) {
+      lastByContact.set(c.contact_id, c.occurred_at);
+    }
+  }
+
   return (contacts.data ?? []).map((c) => {
     const firstTouch = (c.first_touch ?? {}) as Record<string, unknown>;
+    const myChannels = channelsByContact.get(c.id) ?? [];
+    const primary = (kind: string) =>
+      myChannels.find((ch) => ch.channel === kind && ch.isPrimary) ??
+      myChannels.find((ch) => ch.channel === kind);
     return {
       id: c.id,
       name: c.display_name,
@@ -897,9 +1281,13 @@ export async function getContacts(): Promise<ContactListRow[]> {
       status: c.status,
       locale: c.locale,
       source: typeof firstTouch.source === "string" ? firstTouch.source : null,
-      channels: channelsByContact.get(c.id) ?? [],
+      channels: myChannels,
       openEnquiries: openByContact.get(c.id) ?? 0,
       relationships: relationshipsByContact.get(c.id) ?? [],
+      isClient: wonByContact.has(c.id),
+      phone: primary("phone")?.value ?? primary("whatsapp")?.value ?? null,
+      email: primary("email")?.value ?? null,
+      lastActivityAt: lastByContact.get(c.id) ?? null,
     };
   });
 }

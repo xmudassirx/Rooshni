@@ -1,9 +1,24 @@
-import { Placeholder } from "@/components/shell/page-head";
+import { PageHead } from "@/components/shell/page-head";
+import { getAgentActor, getEnquiryOptions, getTasks } from "@/lib/server/queries";
 
-export default function Page() {
+import { TasksClient } from "./tasks-client";
+
+export const dynamic = "force-dynamic";
+
+export default async function TasksPage() {
+  const [tasks, enquiries, agent] = await Promise.all([
+    getTasks(),
+    getEnquiryOptions(),
+    getAgentActor(),
+  ]);
+
   return (
-    <Placeholder icon="☐" title="Tasks" chip="Later in Session 8">
-      The weekly view with strict columns, the task modal and the hand-to-Light buttons — being built later in this session.
-    </Placeholder>
+    <>
+      <PageHead
+        title="Tasks"
+        sub="Yours — the Approval Inbox is where Light waits for you; this is what the week wants from you"
+      />
+      <TasksClient tasks={tasks} enquiries={enquiries} agent={agent} />
+    </>
   );
 }
