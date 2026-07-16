@@ -134,6 +134,20 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   NEVER marks a communication `sent` — the send door (decision 16) stays
   locked; the STUB executor only logs `communication.send_stubbed`.
 
+- The **onboarding doors** (Session 9): activation happens only through the
+  service-only `activate_signup()` — atomic, idempotent, and the sole path
+  from `pre_active` to a live business (revoked from every API role); hard
+  deletion of a signup only through `delete_unpaid_signup()`, which
+  structurally refuses any account that is activated, non-pre-active, or
+  has a business or actors; the Stripe webhook FAILS CLOSED (no secret, no
+  processing; signature verified against the raw body before parsing) and
+  is idempotent on the provider's event id (`stripe_events` unique index);
+  platform-scope ledger events (null `business_id`) are lawful ONLY for the
+  `account.*` namespace (check constraint) and are invisible to every API
+  caller; a `first_light_predicates` flip is impossible without its ledger
+  event (all-or-none constraint), and no authenticated role can write the
+  table at all — a tick can never be self-reported from a browser.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail
