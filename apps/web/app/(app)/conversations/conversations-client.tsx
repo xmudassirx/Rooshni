@@ -43,12 +43,11 @@ function initials(name: string): string {
 }
 
 /*
- * The per-user default view (Settings → Appearance). Fix round 3: the
- * default is read as PART OF THE RENDER via useSyncExternalStore — during
- * hydration React swaps to the client snapshot synchronously before paint,
- * so there is no effect racing the first paint and no state initialiser for
- * the SSR default to win. The header toggle is a session-local override on
- * top (v2: the quick switch, not the default).
+ * The per-user conversation view (Settings → Appearance — the ONLY door,
+ * decision 77). Read as PART OF THE RENDER via useSyncExternalStore: during
+ * hydration React swaps to the client snapshot synchronously before paint —
+ * no effect racing the first paint, no second writer, no state initialiser
+ * for the SSR default to win.
  */
 function subscribeConvView(onChange: () => void): () => void {
   window.addEventListener("storage", onChange);
@@ -84,15 +83,24 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
       </div>
     );
   }
+  /*
+   * Founder amendment (fix round 4, decision 78): alignment follows the
+   * AUTHOR SIDE, never the state. Firm-authored — Light drafts, stamped
+   * sends, direct messages, internal notes — sit right with a left gap;
+   * client inbound sits left with a right gap. A draft and its stamped
+   * version share a side; state changes the chrome (dashed light-panel,
+   * NOT YET SENT label), never the side. Bubbles cap at ~72% of the pane
+   * at every viewport width (fluid shell, decision 76).
+   */
   if (message.isPendingDraft) {
     return (
       <>
-        <div className="light-panel max-w-[82%] self-end rounded-xl rounded-br-sm border-dashed px-2.5 py-2 text-[12.5px] leading-normal shadow-panel">
+        <div className="light-panel max-w-[72%] self-end rounded-xl rounded-br-sm border-dashed px-2.5 py-2 text-[12.5px] leading-normal shadow-panel">
           <span className="light-head mb-1 block font-mono text-[8.5px] font-semibold tracking-[.08em] uppercase">
             ✦ Light&rsquo;s draft — not yet sent
           </span>
           {message.body}
-          <span className="mt-1 block font-mono text-[8.5px] tracking-wide text-ink-faint">
+          <span className="mt-1 block text-right font-mono text-[8.5px] tracking-wide text-ink-faint">
             {message.scheduledFor
               ? `scheduled — sends ${formatWhen(message.scheduledFor)} on approval`
               : `drafted ${formatWhen(message.occurredAt)}`}
@@ -114,11 +122,11 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
   return (
     <div
       className={cn(
-        "max-w-[82%] rounded-[13px] border px-2.5 py-2 text-[12.5px] leading-normal shadow-panel",
+        "max-w-[72%] rounded-[13px] border px-2.5 py-2 text-[12.5px] leading-normal shadow-panel",
         inbound
           ? "self-start rounded-bl-sm border-rule bg-panel"
           : "self-end rounded-br-sm border-ledger-line bg-accent-tint",
-        isEmail && "max-w-[94%] rounded-lg"
+        isEmail && "rounded-lg"
       )}
     >
       {isEmail && thread.subject ? (
@@ -127,11 +135,16 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
         </span>
       ) : null}
       {message.body}
-      <span className="mt-1 block text-right font-mono text-[8.5px] tracking-wide text-ink-faint">
+      <span
+        className={cn(
+          "mt-1 block font-mono text-[8.5px] tracking-wide text-ink-faint",
+          inbound ? "text-left" : "text-right"
+        )}
+      >
         {formatWhen(message.occurredAt)}
       </span>
       {!inbound && message.draftedByLight ? (
-        <span className="light-text mt-0.5 block font-mono text-[8.5px] tracking-wide">
+        <span className="light-text mt-0.5 block text-right font-mono text-[8.5px] tracking-wide">
           ✦ drafted by Light{message.stampedByName ? ` · stamped by ${message.stampedByName}` : ""}
         </span>
       ) : null}
@@ -143,14 +156,15 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
   const [selectedId, setSelectedId] = useState<string | null>(threads[0]?.id ?? null);
   const [filter, setFilter] = useState<"all" | "you" | "light">("all");
   const [query, setQuery] = useState("");
-  const defaultView = useSyncExternalStore(
+  // Founder amendment (fix round 4, decision 77): the header quick-switch is
+  // GONE — two writers (view-local toggle vs the appearance stamp) raced on
+  // one value, so the second writer is removed. Settings → Appearance is the
+  // only door; the stamp is the single source and the view renders from it.
+  const view = useSyncExternalStore(
     subscribeConvView,
     readConvViewDefault,
     () => "phone" as const
   );
-  const [viewOverride, setViewOverride] = useState<"phone" | "standard" | null>(null);
-  const view = viewOverride ?? defaultView;
-  const setView = setViewOverride;
   const [mode, setMode] = useState<"direct" | "light">("direct");
   const [railOpen, setRailOpen] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
@@ -347,21 +361,8 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
               ) : (
                 <span className="ml-auto" />
               )}
-              <div className="flex gap-0.5 rounded-md bg-paper-deep p-0.5">
-                {(["phone", "standard"] as const).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setView(v)}
-                    className={cn(
-                      "rounded px-2.5 py-1 font-mono text-[9.5px] font-semibold tracking-wide uppercase",
-                      view === v ? "bg-panel text-ink shadow-panel" : "text-ink-soft"
-                    )}
-                  >
-                    {v === "phone" ? "📱 Phone" : "☰ Standard"}
-                  </button>
-                ))}
-              </div>
+              {/* The phone/standard toggle is gone (decision 77) — Settings →
+                  Appearance → Conversation view is the only door. */}
               {/* v2 quick actions. Star and read-state need per-user columns
                   that do not exist — those two render disabled, stated on
                   hover. Log-a-call and archive answer with the mockup's own

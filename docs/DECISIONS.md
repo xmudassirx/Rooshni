@@ -565,3 +565,21 @@ skill.
     and the ask composer keep their intrinsic widths; the Light page and
     the generated workflow canvas column keep theirs (Lane B, noted at
     handover). Rationale: wide screens get more content, never longer lines.
+
+77. **The Conversations header loses its phone/standard toggle** (fix round
+    4, overriding mockup v2's quick-switch) — Settings → Appearance →
+    Conversation view is the ONLY door, and the view renders straight from
+    the appearance stamp. Root cause for the record: two writers (view-local
+    toggle state vs the appearance stamp) raced on one value; removing the
+    second writer removes the race. Rationale: the one-door pattern, third
+    application (decisions 58, 64).
+
+78. **Message alignment follows the AUTHOR SIDE, never the state** — firm-
+    authored messages (Light drafts, stamped sends, direct messages,
+    internal notes) sit right with a left gap; client inbound sits left
+    with a right gap; a draft and its stamped version share a side, with
+    state changing only the chrome (prism/gold border, not-yet-sent label);
+    bubbles cap at ~72% of the pane at every viewport width; timestamps and
+    meta lines follow their bubble's alignment — in both standard and phone
+    views. Rationale: a thread must read as a chat; sides carry authorship,
+    chrome carries state.

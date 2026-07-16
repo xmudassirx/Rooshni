@@ -201,9 +201,9 @@ export function AppearanceTab() {
         ))}
       </div>
       <p className="mt-3 font-mono text-[11px] text-ink-faint uppercase">
-        All per-user · the header toggle in Conversations is the quick switch, this is the
-        default · semantic colours never move: gold = Light acted, red = your stamp, green
-        = done.
+        All per-user · this is the only door — Conversations renders straight from these
+        settings (decision 77) · semantic colours never move: gold = Light acted, red =
+        your stamp, green = done.
       </p>
     </>
   );
