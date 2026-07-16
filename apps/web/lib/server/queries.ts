@@ -813,6 +813,193 @@ export async function getAgentActor(): Promise<{ id: string; name: string } | nu
   return data ? { id: data.id, name: data.display_name } : null;
 }
 
+// --- Automation ------------------------------------------------------------------
+
+export interface WorkflowStepRow {
+  id: string;
+  key: string;
+  sortOrder: number;
+  kind: string;
+  gateLevel: number | null;
+  config: Record<string, unknown>;
+}
+
+export interface WorkflowListItem {
+  id: string;
+  key: string;
+  version: number;
+  status: string;
+  description: string;
+  activeRuns: number;
+  steps: WorkflowStepRow[];
+}
+
+export async function getWorkflows(): Promise<WorkflowListItem[]> {
+  const { db, business } = await getAppContext();
+
+  const [defs, steps, runs] = await Promise.all([
+    db
+      .from("workflow_definitions")
+      .select("id, key, version, status, description_plain")
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .order("created_at", { ascending: true }),
+    db
+      .from("workflow_steps")
+      .select("id, definition_id, key, sort_order, kind, gate_level, config")
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .order("sort_order", { ascending: true }),
+    db
+      .from("workflow_runs")
+      .select("definition_id, status")
+      .eq("business_id", business.id)
+      .in("status", ["running", "waiting", "blocked"]),
+  ]);
+  for (const [label, result] of [
+    ["workflow_definitions", defs],
+    ["workflow_steps", steps],
+    ["workflow_runs", runs],
+  ] as const) {
+    if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
+  }
+
+  const stepsByDef = new Map<string, WorkflowStepRow[]>();
+  for (const s of steps.data ?? []) {
+    const list = stepsByDef.get(s.definition_id) ?? [];
+    list.push({
+      id: s.id,
+      key: s.key,
+      sortOrder: s.sort_order,
+      kind: s.kind,
+      gateLevel: s.gate_level,
+      config: (s.config ?? {}) as Record<string, unknown>,
+    });
+    stepsByDef.set(s.definition_id, list);
+  }
+  const runCount = new Map<string, number>();
+  for (const r of runs.data ?? []) {
+    runCount.set(r.definition_id, (runCount.get(r.definition_id) ?? 0) + 1);
+  }
+
+  return (defs.data ?? []).map((d) => ({
+    id: d.id,
+    key: d.key,
+    version: d.version,
+    status: d.status,
+    description: d.description_plain,
+    activeRuns: runCount.get(d.id) ?? 0,
+    steps: stepsByDef.get(d.id) ?? [],
+  }));
+}
+
+export interface WorkflowRunRow {
+  id: string;
+  status: string;
+  startedAt: string;
+  engagementId: string;
+  engagementTitle: string;
+  currentStepKey: string | null;
+}
+
+export interface StepRunRow {
+  id: string;
+  stepKey: string;
+  status: string;
+  scheduledFor: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface WorkflowDetail extends WorkflowListItem {
+  trigger: Record<string, unknown>;
+  runs: WorkflowRunRow[];
+  stepRuns: StepRunRow[];
+}
+
+export async function getWorkflowDetail(id: string): Promise<WorkflowDetail | null> {
+  if (!isUuid(id)) return null;
+  const { db, business } = await getAppContext();
+
+  const { data: def, error: defError } = await db
+    .from("workflow_definitions")
+    .select("id, key, version, status, description_plain, trigger")
+    .eq("id", id)
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (defError) throw new Error(`workflow definition lookup failed: ${defError.message}`);
+  if (!def) return null;
+
+  const [steps, runs] = await Promise.all([
+    db
+      .from("workflow_steps")
+      .select("id, key, sort_order, kind, gate_level, config")
+      .eq("definition_id", id)
+      .is("archived_at", null)
+      .order("sort_order", { ascending: true }),
+    db
+      .from("workflow_runs")
+      .select("id, status, started_at, engagement_id, current_step, engagements(title)")
+      .eq("definition_id", id)
+      .order("started_at", { ascending: false })
+      .limit(100),
+  ]);
+  if (steps.error) throw new Error(`workflow_steps query failed: ${steps.error.message}`);
+  if (runs.error) throw new Error(`workflow_runs query failed: ${runs.error.message}`);
+
+  const stepKeyById = new Map((steps.data ?? []).map((s) => [s.id, s.key as string]));
+  const runIds = (runs.data ?? []).map((r) => r.id);
+  const { data: stepRunRows, error: srError } = runIds.length
+    ? await db
+        .from("step_runs")
+        .select("id, run_id, step_id, status, scheduled_for, started_at, finished_at")
+        .in("run_id", runIds)
+        .order("scheduled_for", { ascending: false })
+        .limit(100)
+    : { data: [], error: null };
+  if (srError) throw new Error(`step_runs query failed: ${srError.message}`);
+
+  const activeStatuses = new Set(["running", "waiting", "blocked"]);
+
+  return {
+    id: def.id,
+    key: def.key,
+    version: def.version,
+    status: def.status,
+    description: def.description_plain,
+    trigger: (def.trigger ?? {}) as Record<string, unknown>,
+    activeRuns: (runs.data ?? []).filter((r) => activeStatuses.has(r.status)).length,
+    steps: (steps.data ?? []).map((s) => ({
+      id: s.id,
+      key: s.key,
+      sortOrder: s.sort_order,
+      kind: s.kind,
+      gateLevel: s.gate_level,
+      config: (s.config ?? {}) as Record<string, unknown>,
+    })),
+    runs: (runs.data ?? []).map((r) => {
+      const engagement = r.engagements as unknown as { title: string } | null;
+      return {
+        id: r.id,
+        status: r.status,
+        startedAt: r.started_at,
+        engagementId: r.engagement_id,
+        engagementTitle: engagement?.title ?? "an enquiry",
+        currentStepKey: r.current_step ? (stepKeyById.get(r.current_step) ?? null) : null,
+      };
+    }),
+    stepRuns: (stepRunRows ?? []).map((sr) => ({
+      id: sr.id,
+      stepKey: stepKeyById.get(sr.step_id) ?? "step",
+      status: sr.status,
+      scheduledFor: sr.scheduled_for,
+      startedAt: sr.started_at,
+      finishedAt: sr.finished_at,
+    })),
+  };
+}
+
 // --- Notes ---------------------------------------------------------------------
 
 /*
