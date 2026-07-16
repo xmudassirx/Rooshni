@@ -583,3 +583,112 @@ skill.
     meta lines follow their bubble's alignment — in both standard and phone
     views. Rationale: a thread must read as a chat; sides carry authorship,
     chrome carries state.
+
+## Session 9 (17 July 2026) — onboarding foundations
+
+Entries 79–84 are the signed Design Pass 4 handover rulings
+(docs/design/ONBOARDING-HANDOVER.md, signed 16 July 2026), renumbered per
+that document's own numbering note (its proposed 76–81 collided with
+session 8's 77–78) and appended at close on the founder's in-session
+instruction. Entries 85–89 are this session's rulings, approved verbatim in
+the founder's rulings message of 17 July 2026.
+
+79. **Two-step signup; payment before the shell.** Step 1: your name,
+    business name, email, phone, website URL. Step 2: plan card + Stripe
+    checkout. Pilots pay — there is no free tier and no trial wall to
+    remove later. No template picker: UK Immigration Advisory v3 applies by
+    default (vertical discipline deleted the screen); the vertical lives in
+    Settings → General for the day there is a second one.
+
+80. **Crawl-after-payment law.** The website crawl is triggered by the
+    `payment.succeeded` webhook, never by URL entry. No AI spend exists for
+    an unpaid signup. The URL is held (costs nothing) from step 1.
+
+81. **First Light** is the onboarding surface: a top-bar pill beside Ask
+    Light, wearing prism|gold (it is Light's channel — it speaks in Light's
+    voice and carries Light's proposals; navigation rows inside the panel
+    take accent — the prism is on the proposals, not the furniture). It
+    opens a panel of setup rows. It is NOT a sidebar nav item.
+
+82. **First Light rows are real task rows** (tasks table, tagged with
+    `first_light` and a predicate key), visible in Tasks too — same rows,
+    two doors. Every done-state is EARNED by a deterministic predicate,
+    never by dismissing the row. Predicates live as ROWS in a table
+    (founder-ruled): state in the database, flips evented on The Record;
+    evaluation logic runs server-side. Rows: confirm business basics (all
+    General rows stamped) · connect email & calendar / WhatsApp / Meta (the
+    grant row exists; deep-link to Settings → Integrations; state reflects
+    back; the panel never renders a credential field — decision 58 holds) ·
+    review what Light found (memory proposals tray emptied) · review no-go
+    rules (viewed/acknowledged event — the weakest tick, earned by
+    acknowledgment; acceptable for Phase 2, never precedent) · verify
+    sending domain (DNS checks pass) · book walkthrough (calendar event
+    exists, via the product's OWN booking-link mechanism — dogfood or don't
+    ship it). Meta Lead Forms row is skippable (only-if-running-ads,
+    stated).
+
+83. **First Light retires itself.** When every row is done, the pill
+    disappears. Setup chrome must not haunt an onboarded firm. The rows
+    remain in Tasks history and on The Record.
+
+84. **The propose→stamp inversion is the first product experience.**
+    Post-crawl, Settings → General values arrive as Light's PROPOSALS with
+    provenance ("read from jurists.co.uk/about"); the founder confirms or
+    corrects each — their first hour teaches the OS's core loop on their
+    own data. Crawl findings land as memory PROPOSALS (trust: observed,
+    provenance: crawl) — nothing enters memory unvouched. Values the crawl
+    couldn't read are honest ("suggestion, not a reading" / blank), never
+    silently defaulted-as-if-read.
+
+85. **The naming law: platform = Barakah, agent = Light, company =
+    BarakahX.** Public surfaces (the signup pair, the success page,
+    reminder emails) carry the name BARAKAH; internal and repo names
+    (Rooshni, package names, storage keys) are unchanged. This amends
+    decision 25's no-name rule for exactly these surfaces; the holding page
+    stays nameless. Production sending domain barakahx.com is on GO-LIVE.
+
+86. **Platform-scope events** (decision 26's recorded revisit trigger,
+    now arrived: platform-level events exist for another reason).
+    `events.business_id` is nullable, guarded by a check constraint — a
+    null business is lawful ONLY for the `account.*` namespace — plus one
+    platform system actor (`actors.account_id` null, per decision 3;
+    actor_type `workflow`, display name "Barakah platform"). Tenant RLS is
+    untouched: a platform-scope row is visible to no API caller; append-only
+    enforcement unchanged. First consumer: `account.deleted_unpaid` — a
+    deleted unpaid signup has no business to charge the event to, and its
+    event payload carries NO personal data (the ledger is append-only;
+    eventing the deleted email would re-retain what the ruling deleted).
+
+87. **Platform mail rides Resend; platform mail and tenant comms are
+    separate pipes, permanently.** Graph sends as the firm and must never
+    carry platform email; Resend sends as Barakah and must never carry a
+    tenant's message. Pre-active reminder mail (24h, 7d, then silence)
+    goes to people who are customers of no tenant — it touches neither the
+    communications table nor the approval pipeline, stated on the record.
+
+88. **The Google-only door at activation.** Payment-time activation
+    provisions the auth user by admin API, writes the allowlist row and
+    maps the owner actor; the shell is entered through the existing Google
+    sign-in, with Supabase's verified-email auto-linking (the decision 24
+    precedent) joining the identity to the actor. The constraint is stated
+    at step 1 on the email field ("use an email you can sign in to Google
+    with"), never after payment. Microsoft sign-in (Supabase Azure
+    provider — the app registration exists) is a recorded fast-follow
+    before the first external pilot, on GO-LIVE.
+
+89. **Session 9 builder placements, approved as argued:** (a) Stripe
+    references and `plan` live on `accounts` (Spec 1 §5.0 — billing is
+    account-level; the account is the person), `website_url` on
+    `businesses`; (b) a pre-active signup IS an `accounts` row
+    (billing_status `pre_active`) holding the four signup facts — plus the
+    business name, read as within the ruling's data-minimisation intent
+    (activation cannot otherwise name the business the payer paid for);
+    (c) no money-domain rows for the platform subscription —
+    `invoices.contact_id` bills tenant contacts and §4.6 keeps platform
+    billing outside the tenant schema; the amount lives in the
+    `payment.succeeded` payload; (d) ledger event kinds are TS constants
+    in `@rooshni/db` (no kind registry exists in schema; inventing one
+    would be improvised schema); (e) contract discipline and TEST-MODE
+    wiring run in this one session because the DoD demands a test-card
+    circuit — live keys remain the GO-LIVE tick (the two-session rule's
+    spirit: nothing live until the checklist says so).
