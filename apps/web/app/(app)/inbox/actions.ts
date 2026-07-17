@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { approveCommunication, rejectCommunication } from "@rooshni/db";
 
 import { getAppContext } from "@/lib/server/context";
+import { dispatchAfterApproval } from "@/lib/server/outbound";
 
 export interface DecisionState {
   error: string | null;
@@ -32,6 +33,11 @@ export async function approveAction(
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Approval failed." };
   }
+  // Session 10: the stamp is given — carry the message now (best-effort;
+  // quiet hours hold it, and any transient failure leaves it approved for
+  // the tick sweep). APPROVED ≠ SENT: a carriage problem never unwinds the
+  // approval.
+  await dispatchAfterApproval(communicationId);
   revalidatePath("/", "layout");
   redirect("/inbox");
 }

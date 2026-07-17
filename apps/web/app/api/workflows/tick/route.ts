@@ -1,8 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { runWorkflowTick, sweepPreActiveSignups } from "@rooshni/db";
+import { dispatchApprovedCommunications, runWorkflowTick, sweepPreActiveSignups } from "@rooshni/db";
 import { sendSignupReminder } from "@/lib/server/platform-mail";
+import { outboundProviders } from "@/lib/server/outbound";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -63,10 +64,18 @@ async function tick(request: NextRequest): Promise<NextResponse> {
     sendReminder: (kind, target) => sendSignupReminder(kind, target, origin),
   });
 
+  // Session 10: the send pipeline's sweep runs AFTER the workflow pass —
+  // steps unblocked by a stamp this tick have their drafts carried this same
+  // tick. Quiet-hours holds, provider refusals (visible failed state) and
+  // transient retries are all inside the dispatcher; approved ≠ sent is the
+  // distinction this phase makes real.
+  const dispatch = await dispatchApprovedCommunications(db, { providers: outboundProviders() });
+
   return NextResponse.json({
-    ok: report.errors.length === 0 && signups.errors.length === 0,
+    ok: report.errors.length === 0 && signups.errors.length === 0 && dispatch.errors.length === 0,
     report,
     signups,
+    dispatch,
   });
 }
 
