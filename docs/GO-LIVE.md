@@ -72,6 +72,14 @@ Add to this list during build; check items off only at go-live.
       `RESEND_API_KEY` to the production key. Platform mail and tenant
       comms are separate pipes permanently — Graph must never carry
       platform email.
+- [ ] **Purge the DoD circuit test tenant** (introduced 17 July 2026, the
+      Session 9 acceptance circuit): account `019f6f0a-291e-7d8f-961b-d3a907935699`
+      ("Pilot Test" / business "Jurists Pilot", signup email
+      pilot-test@barakahx.com), its actors, grants, First Light task and
+      predicate rows, allowlist row, Stripe test-mode customer/subscription,
+      and the `stripe_events` circuit rows. Its ledger events are append-only;
+      they go with the one-off superuser purge at go-live like the other
+      fixture events.
 - [ ] **Microsoft sign-in before the first external pilot** (recorded
       17 July 2026, founder-ruled fast-follow, outside Session 9's scope):
       signup states the Google constraint on the email field; the Supabase
