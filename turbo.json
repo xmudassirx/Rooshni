@@ -12,7 +12,14 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"],
+      "env": [
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_PRICE_ID",
+        "RESEND_API_KEY",
+        "PLATFORM_MAIL_FROM"
+      ]
     },
     "dev": {
       "cache": false,
