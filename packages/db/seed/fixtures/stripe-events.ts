@@ -46,7 +46,7 @@ export interface StripeCheckoutCompletedFixture {
 export const checkoutSessionCompleted: StripeCheckoutCompletedFixture = {
   id: "evt_1RfixtureCheckoutDone01",
   object: "event",
-  api_version: "2024-09-30.acacia",
+  api_version: "2026-06-24.dahlia",
   created: 1752750000,
   livemode: false,
   pending_webhooks: 1,

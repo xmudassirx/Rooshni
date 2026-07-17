@@ -5,11 +5,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * (external-integrations rule: version strings live in config, never
  * scattered); a bump is a deliberate change.
  *
- * JUDGMENT: pinned to 2024-09-30.acacia — a version known-stable for the
- * three surfaces used (Checkout Sessions, webhook envelopes, subscriptions).
- * Flagged in the close report for a dashboard check at wiring time.
+ * Pinned to 2026-06-24.dahlia — the dashboard's offered version, confirmed
+ * by Mudassir at wiring (17 July 2026), replacing the close report's
+ * flagged placeholder pin.
  */
-export const STRIPE_API_VERSION = "2024-09-30.acacia";
+export const STRIPE_API_VERSION = "2026-06-24.dahlia";
 const STRIPE_API_BASE = "https://api.stripe.com";
 
 /** Webhook signature tolerance — Stripe's documented default. This is
