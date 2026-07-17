@@ -115,3 +115,27 @@ session builds; B cannot precede it.
 Everything above is Phase 2 scope (pilot acquisition). Nothing here touches
 voice, telephony, or Phase 3 surfaces. Mock-one-phase-ahead holds: the mockup
 draws only what this list builds.
+
+## Session 9 close addendum — founder review outcomes (17 July 2026)
+
+<!-- Recorded at the Session 9 close on the founder's close instruction —
+     this section is bookkeeping appended by the builder, not part of the
+     signed 16 July text above. It exists so Session B's source document
+     carries its own deferred list (CLAUDE.md law 2). -->
+
+Actioned during Session 9 (chore commit `2aa381f`, confirmed on production):
+- Post-signin default route is `/dashboard`, not `/enquiries` (mockup residue).
+- Signup placeholders are vertical-neutral ("e.g. Acme & Co",
+  "you@yourcompany.com", "yourcompany.com"); the footer vertical line and all
+  template-driven copy stay — decision 79 holds.
+- Pay-button footer copy: "Payment handled securely by Stripe · cancel any
+  time. Light begins setting up your business the moment payment clears."
+
+Deferred to Session B (First Light), founder-ruled at close:
+- The template-content rule + a hardcoded-vertical sweep (vertical-specific
+  strings move to template content; also owns where the UK Immigration v3
+  template definition lands — the open question flagged in the Session 9
+  close report).
+- Nurture sequence days 3/7.
+- The dashboard checklist block.
+- The accreditation row as template content.
