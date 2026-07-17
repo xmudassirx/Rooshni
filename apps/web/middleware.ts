@@ -26,6 +26,10 @@ import { createServerClient } from "@supabase/ssr";
 // (decision 79 — signup lives outside the shell); /api/stripe/webhook is
 // public because Stripe holds no session — it FAILS CLOSED on signature
 // verification, and activation stays a service-role database door.
+// /api/meta/leads is public because Meta holds no session — it FAILS CLOSED
+// on the verify-token handshake (GET) and app-secret signature (POST), and
+// everything it may create stays Level 2 under the integration actor's
+// grant; it can never approve, publish or send (Session 10).
 const PUBLIC_PATHS = [
   "/construction",
   "/signin",
@@ -35,6 +39,7 @@ const PUBLIC_PATHS = [
   "/api/stripe/webhook",
   "/api/health",
   "/api/workflows/tick",
+  "/api/meta/leads",
 ];
 
 function isPublic(pathname: string): boolean {
