@@ -692,3 +692,53 @@ the founder's rulings message of 17 July 2026.
     wiring run in this one session because the DoD demands a test-card
     circuit — live keys remain the GO-LIVE tick (the two-session rule's
     spirit: nothing live until the checklist says so).
+
+## Session 10 (17 July 2026) — the send pipeline and the Meta door, all approved
+
+Entries 90–96 are the session's Lane B calls, approved verbatim in the
+founder's message at close ("All seven approved, decision 15 line approved
+verbatim"); recorded in-session per §8. JUDGMENT comments at each site.
+
+90. **The semantic stage set IS the seeded `stage_definitions`** — decision
+    60's one-vocabulary law applied to the LEAD-LOG ruling: an inbound Meta
+    lead lands at `new_lead` ("New"); no stages are renamed or added, and
+    Brevo's four timer-costume stages are never created — timers are
+    workflow data, not stages.
+
+91. **Quiet hours are a wall-clock window, not a duration** — default
+    20:00–08:00 in the business's timezone (the signed mockup's regulated-
+    firm words: "stamped messages that hit quiet hours queue and dispatch
+    at 08:00 — the stamp is yours, the timing is policy"), overridable per
+    business in `businesses.settings.quiet_hours`, null disables. Law 11
+    (timeScale) governs durations; a clock window has nothing to scale —
+    tests inject the clock. Constants in `quiet-hours.ts`.
+
+92. **The WhatsApp 24h session window runs in real time** — provider law,
+    the decision 44 class (like the claim lease), never TIME_SCALE data.
+    Enforced in the readiness pre-flight: free-form WhatsApp without a
+    customer inbound inside a real 24h cannot be approved; a Meta-approved
+    template reference (`attributes.wa_template`) passes any time.
+
+93. **Dispatch events attribute to the business's workflow actor** — the
+    Session 6 engine-actor precedent: carriage is platform automation; the
+    human authority is already on the row as `approved_by_actor_id` and in
+    the `communication.approved` event. Exactly one workflow actor per
+    account; ambiguity is a loud failure.
+
+94. **Stub-era approved rows never dispatch** — Session 3/6 demo drafts
+    approved in the stub era carry `communication.send_stubbed` events and
+    the dispatcher permanently walks past them; they leave with the
+    go-live demo-data purge.
+
+95. **`meta_webhook_events` carries no business envelope** — platform
+    infrastructure, the stripe_events/allowed_emails precedent: RLS on
+    with no policies (service-role only), idempotency on Meta's leadgen
+    id, the tenant resolved during processing and recorded in `outcome`.
+
+96. **Auto-close distinguishes the two silences (decision 15, landed)** —
+    closing as Unresponsive requires ≥1 nudge with sent/delivered/read
+    status (PROVISIONAL, `AUTO_CLOSE_POLICY` in auto-close.ts, tuned from
+    live ledger data post-go-live); nudges that died unstamped NEVER close
+    an enquiry — the step skips on the ledger with its reason
+    (`workflow.auto_close_refused`) and the enquiry stays open for a
+    human. Cadence remains workflow data.
