@@ -148,6 +148,27 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   event (all-or-none constraint), and no authenticated role can write the
   table at all — a tick can never be self-reported from a browser.
 
+- The **send-pipeline doors** (Session 10): the only paths from `approved`
+  are the service-only `mark_communication_sent()` and
+  `mark_communication_send_failed()` (0021) — a signed-in session is
+  refused, direct status updates stay revoked for every API role, and both
+  transitions re-fire the human-stamp and readiness pre-flight triggers.
+  APPROVED ≠ SENT is structural: only an approved row can become `sent`
+  (with provider + provider message id on `external_refs`) or `failed`
+  (reason required, recorded on the row and the ledger) — a failed or sent
+  row can never be re-sent through the door. The **WhatsApp session
+  window** is a pre-flight check: free-form WhatsApp without a customer
+  inbound inside a real 24h cannot be approved; only a Meta-approved
+  template reference passes outside the window. The **Meta webhook** fails
+  closed (no app secret, no processing; `X-Hub-Signature-256` verified
+  against the raw body before parsing) and is idempotent on the leadgen id
+  (`meta_webhook_events` unique index); it creates Level 2 rows under the
+  integration actor's grant and can never approve, publish or send.
+  **Decision 15** is engine law: the auto-close step refuses to close an
+  enquiry as Unresponsive when its nudges never reached the client
+  (evaluated from communication statuses; refusal skips on the ledger with
+  its reason and the enquiry stays open for a human).
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail

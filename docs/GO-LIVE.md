@@ -88,3 +88,45 @@ Add to this list during build; check items off only at go-live.
       signup states the Google constraint on the email field; the Supabase
       Azure provider (our app registration exists) lifts it. Until then a
       pilot's signup email must be Google-signable.
+- [ ] **Send-pipeline secrets** (introduced Session 10): `AZURE_CLIENT_SECRET`
+      + `GRAPH_SENDER_ADDRESS` (Graph app-only mail — sends as the firm's
+      mailbox; the Azure client secret expires per its app-registration
+      clock, ~730 days — record the expiry date and rotate in the Azure
+      portal), `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_PHONE_NUMBER_ID`
+      (WhatsApp Cloud API — sends as the firm's WhatsApp number; rotate via
+      Meta Business system-user tokens). Where they live: `.env.local` +
+      Vercel env vars. What they grant: sending real messages as the firm.
+- [ ] **Meta webhook secrets** (introduced Session 10): `META_APP_SECRET`
+      (signature check — webhook fails closed without it),
+      `META_VERIFY_TOKEN` (subscription handshake), `META_ACCESS_TOKEN`
+      (leads_retrieval — the webhook ping carries ids only; field data is
+      fetched). Live in `.env.local` + Vercel; rotate via the Meta app
+      dashboard / system-user token. Register the webhook (Page
+      subscriptions → leadgen → `POST /api/meta/leads`) and bind the page:
+      `npm run wire-meta --workspace=@rooshni/db -- <page_id>`.
+- [ ] **Meta App Review before non-tester lead traffic** (introduced
+      Session 10): a dev-mode app with the firm's own system-user token
+      reads its own page's leads, which covers the pilot; App Review
+      (leads_retrieval, pages_manage_metadata) is required before the app
+      serves any page outside the firm's Business Manager. The working demo
+      this session produces is the review submission's evidence.
+- [ ] **WhatsApp template approval** (introduced Session 10): the nurture
+      T+2 WhatsApp nudge dispatches as a Meta-approved TEMPLATE (session-
+      window law; free-form to a silent lead is undeliverable and the
+      pre-flight refuses it). Create/approve the template in WhatsApp
+      Manager, then set `message_templates.attributes.wa_template =
+      {"name": "...", "language": "...", "params": ["first_name", ...]}`
+      on `nurture_t2_v1` so drafts carry it. Until then the nudge falls
+      back to email (decision 50) — WhatsApp nudges silently don't exist.
+- [ ] **Vercel cron is live cadence** (introduced Session 10):
+      `apps/web/vercel.json` ships a per-minute cron for
+      `GET /api/workflows/tick` — per-minute cadence requires Vercel Pro
+      (already on this list; now sequence-forced — Hobby refuses sub-daily
+      schedules at deploy). After merge, verify the cron appears in the
+      Vercel dashboard and the tick returns ok with `CRON_SECRET` set.
+- [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
+      Session 3/6 demo drafts that were approved in the stub era carry
+      `communication.send_stubbed` events; the dispatcher permanently walks
+      past them. They leave with the existing demo-data purge items — until
+      that purge, they sit `approved` forever by design, and no real message
+      is ever sent to the fixture addresses.
