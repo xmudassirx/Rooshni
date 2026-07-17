@@ -13,6 +13,8 @@
     "check-local": "tsx scripts/check-local.ts",
     "tick": "tsx scripts/tick.ts",
     "tick:watch": "tsx scripts/tick.ts --watch",
+    "wire-meta": "tsx scripts/wire-meta.ts",
+    "circuit:wa-draft": "tsx scripts/circuit-wa-draft.ts",
     "demo:reset": "tsx scripts/demo-reset.ts",
     "typecheck": "tsc --noEmit"
   },

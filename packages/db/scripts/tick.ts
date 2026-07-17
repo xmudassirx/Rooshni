@@ -22,7 +22,6 @@ function summarise(report: Awaited<ReturnType<typeof runWorkflowTick>>): string 
   if (report.steps_completed) parts.push(`${report.steps_completed} step(s) completed`);
   if (report.steps_skipped) parts.push(`${report.steps_skipped} skipped`);
   if (report.steps_awaiting_approval) parts.push(`${report.steps_awaiting_approval} awaiting the stamp`);
-  if (report.sends_stubbed) parts.push(`${report.sends_stubbed} send(s) STUBBED`);
   if (report.runs_completed) parts.push(`${report.runs_completed} run(s) completed`);
   if (report.steps_failed) parts.push(`${report.steps_failed} FAILED`);
   return parts.length ? parts.join(", ") : "nothing due";

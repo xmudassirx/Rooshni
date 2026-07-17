@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { scaleDurationMs } from "@rooshni/config";
 import { emitEvent } from "./events";
 import { submitCommunication } from "./approvals";
+import { evaluateAutoClose, type NudgeFact } from "./auto-close";
+import { SEND_EVENT_KINDS } from "./event-kinds";
 import type {
   EventRow,
   RealDuration,
@@ -26,11 +28,12 @@ import type {
  * one-live-run-per-engagement, and step effects are keyed on the step_run id,
  * so overlapping or repeated ticks re-do nothing.
  *
- * THE SEND BOUNDARY (Spec 4 §4 step 1; decision 16): this runner NEVER marks
- * a communication `sent`. The send pipeline does not exist yet and its door
- * is locked (0017). When a stamped draft would be dispatched, the STUB
- * executor logs `communication.send_stubbed` on the ledger and moves on —
- * clearly marked, and listed on docs/GO-LIVE.md.
+ * THE SEND BOUNDARY (Session 10): this runner STILL never marks a
+ * communication `sent` — carriage belongs to the send pipeline (send.ts
+ * through the 0021 doors), which the tick route runs after this pass. The
+ * runner's business with a stamped draft ends at the stamp: it advances the
+ * run and leaves the approved row for the dispatcher. The Session 6 STUB is
+ * gone.
  */
 
 // ---------------------------------------------------------------------------
@@ -343,35 +346,6 @@ async function completeStep(
   }
 }
 
-/** The STUB send boundary. Spec 4 places the send pipeline exactly after the
- * stamp; it is not built yet and its door is locked (decision 16), so the
- * would-be dispatch is logged on the ledger instead. Listed on GO-LIVE.md. */
-async function stubSend(
-  db: SupabaseClient,
-  businessId: string,
-  actorId: string,
-  comm: { id: string; channel: string; contact_id: string | null },
-  runId: string,
-  report: TickReport
-): Promise<string> {
-  const event = await emitEvent(db, {
-    business_id: businessId,
-    actor_id: actorId,
-    action: "communication.send_stubbed",
-    entity_type: "communication",
-    entity_id: comm.id,
-    payload: {
-      stub: true,
-      note: "STUB — the send pipeline is a later session; this stamped message would have been dispatched here. See docs/GO-LIVE.md.",
-      channel: comm.channel,
-      contact_id: comm.contact_id,
-      workflow_run_id: runId,
-    },
-  });
-  report.sends_stubbed += 1;
-  return event.id;
-}
-
 // ---------------------------------------------------------------------------
 // Step executors
 // ---------------------------------------------------------------------------
@@ -490,10 +464,12 @@ async function executeDraftComm(
     if (!facts.contact) throw new Error(`Engagement ${run.engagement_id} has no client contact to write to`);
     const templateKey = step.config.template;
     if (!templateKey) throw new Error(`Step ${step.key} has no template configured`);
-    const templates = await q<{ id: string; key: string; version: number; channel: string; subject: string | null; body: string }[]>(
+    const templates = await q<
+      { id: string; key: string; version: number; channel: string; subject: string | null; body: string; attributes: Record<string, unknown> }[]
+    >(
       db
         .from("message_templates")
-        .select("id, key, version, channel, subject, body")
+        .select("id, key, version, channel, subject, body, attributes")
         .eq("business_id", run.business_id)
         .eq("key", templateKey)
         .is("archived_at", null)
@@ -508,6 +484,34 @@ async function executeDraftComm(
     const subject = templates[0].subject ? renderTemplate(templates[0].subject, vars) : null;
     const intended = (step.config.channel as string) ?? templates[0].channel;
     const picked = await pickChannel(db, facts.contact.id, intended, step.config.fallback_channel);
+
+    // Session 10: a WhatsApp draft carries its Meta-approved template
+    // reference (message_templates.attributes.wa_template: {name, language,
+    // params: [var names]}) with the SAME rendered variables — the session
+    // window pre-flight passes template messages, and the dispatcher sends
+    // exactly what the stamp saw.
+    let waTemplate: { name: string; language: string; components?: unknown[] } | null = null;
+    if (picked.channel === "whatsapp") {
+      const raw = (templates[0] as { attributes?: Record<string, unknown> }).attributes?.wa_template as
+        | { name?: string; language?: string; params?: string[] }
+        | undefined;
+      if (raw?.name) {
+        waTemplate = {
+          name: raw.name,
+          language: raw.language ?? "en_GB",
+          ...(raw.params?.length
+            ? {
+                components: [
+                  {
+                    type: "body",
+                    parameters: raw.params.map((p) => ({ type: "text", text: vars[p] ?? "" })),
+                  },
+                ],
+              }
+            : {}),
+        };
+      }
+    }
 
     const threads = await q<{ id: string }[]>(
       db
@@ -559,6 +563,7 @@ async function executeDraftComm(
             template_key: templates[0].key,
             template_version: templates[0].version,
             ...(picked.fell_back ? { channel_fallback_from: intended } : {}),
+            ...(waTemplate ? { wa_template: waTemplate } : {}),
           },
         })
         .select("id, channel, contact_id, status"),
@@ -744,6 +749,107 @@ async function executeMoveStage(
   );
 }
 
+/** The run's NUDGES — communications born from draft_comm steps marked
+ * cancel_on_reply (the nurture touches), identified by data, not by name. */
+async function loadRunNudges(db: SupabaseClient, bundle: RunBundle): Promise<NudgeFact[]> {
+  const nudgeStepIds = new Set(
+    bundle.steps.filter((s) => s.kind === "draft_comm" && s.config.cancel_on_reply).map((s) => s.id)
+  );
+  if (nudgeStepIds.size === 0) return [];
+  const stepRuns = await q<{ id: string; step_id: string }[]>(
+    db.from("step_runs").select("id, step_id").eq("run_id", bundle.run.id),
+    "nudge step-run lookup"
+  );
+  const stepOf = new Map(stepRuns.map((sr) => [sr.id, sr.step_id]));
+  const comms = await q<{ id: string; status: string; attributes: Record<string, unknown> }[]>(
+    db
+      .from("communications")
+      .select("id, status, attributes")
+      .eq("attributes->>workflow_run_id", bundle.run.id)
+      .eq("direction", "outbound")
+      .is("archived_at", null),
+    "nudge communications lookup"
+  );
+  return comms
+    .filter((c) => {
+      const stepRunId = c.attributes?.step_run_id as string | undefined;
+      const stepId = stepRunId ? stepOf.get(stepRunId) : undefined;
+      return stepId ? nudgeStepIds.has(stepId) : false;
+    })
+    .map((c) => ({ communication_id: c.id, status: c.status }));
+}
+
+/**
+ * Decision 15 — the close step distinguishes the two silences on the ledger.
+ * Closing as Unresponsive is allowed only when nudges genuinely reached the
+ * client; nudges that died unstamped in the inbox NEVER close an enquiry —
+ * the step skips with its reason on The Record and the enquiry stays open
+ * for a human. Policy constants live in auto-close.ts (PROVISIONAL, tuned
+ * from live ledger data post-go-live per LEAD-LOG-BASELINE).
+ */
+async function executeClose(
+  db: SupabaseClient,
+  bundle: RunBundle,
+  step: WorkflowStepRow,
+  stepRun: StepRunRow,
+  now: Date,
+  report: TickReport
+): Promise<void> {
+  const { run } = bundle;
+  const stageKey = step.config.stage;
+  const engagements = await q<{ template_type_id: string }[]>(
+    db.from("engagements").select("template_type_id").eq("id", run.engagement_id).limit(1),
+    "close engagement lookup"
+  );
+  const stages = await q<{ terminal_outcome: string | null }[]>(
+    db
+      .from("stage_definitions")
+      .select("terminal_outcome")
+      .eq("engagement_type_id", engagements[0]?.template_type_id ?? "")
+      .eq("key", stageKey ?? "")
+      .is("archived_at", null)
+      .limit(1),
+    "close stage lookup"
+  );
+  if (stages[0]?.terminal_outcome === "unresponsive") {
+    const nudges = await loadRunNudges(db, bundle);
+    const verdict = evaluateAutoClose(nudges);
+    if (!verdict.close) {
+      const engineActor = (run.context.engine_actor_id as string) ?? run.created_by;
+      await emitEvent(db, {
+        business_id: run.business_id,
+        actor_id: engineActor,
+        action: SEND_EVENT_KINDS.workflowAutoCloseRefused,
+        entity_type: "engagement",
+        entity_id: run.engagement_id,
+        payload: {
+          workflow_run_id: run.id,
+          step_key: step.key,
+          reason: verdict.reason,
+          nudges_drafted: verdict.nudges_drafted,
+          nudges_sent: verdict.nudges_sent,
+        },
+      });
+      await completeStep(
+        db,
+        bundle,
+        stepRun,
+        "skipped",
+        {
+          reason: verdict.reason,
+          condition: "decision_15_auto_close",
+          nudges_drafted: verdict.nudges_drafted,
+          nudges_sent: verdict.nudges_sent,
+        },
+        advanceArgs(bundle.steps, step.id, now),
+        report
+      );
+      return;
+    }
+  }
+  await executeMoveStage(db, bundle, step, stepRun, now, report);
+}
+
 async function executeFireConversion(
   db: SupabaseClient,
   bundle: RunBundle,
@@ -805,7 +911,6 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
     steps_failed: 0,
     steps_awaiting_approval: 0,
     runs_completed: 0,
-    sends_stubbed: 0,
     errors: [],
   };
   const bundles = new Map<string, RunBundle>();
@@ -880,8 +985,14 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
   for (let round = 0; round < maxRounds; round++) {
     let didWork = false;
 
-    // Phase 2: awaiting-approval steps whose draft got the stamp move on —
-    // through the STUB send boundary.
+    // Phase 2: awaiting-approval steps whose draft got the STAMP move on.
+    // The stamp is what the run was blocked on; carriage is the send
+    // pipeline's business (send.ts, after this pass). A stamped draft may
+    // already read sent/delivered/read — or failed, which is a visible state
+    // for a human, not a reason to hold the run's independent steps hostage.
+    // A rejected draft returns to `draft` with no stamp and the run stays
+    // blocked, exactly as before.
+    const STAMPED_STATUSES = new Set(["approved", "sent", "delivered", "read", "failed"]);
     const awaiting = await q<StepRunRow[]>(
       db.from("step_runs").select("*").eq("status", "awaiting_approval"),
       "awaiting steps"
@@ -892,19 +1003,17 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
         if (bundle.run.status !== "blocked") continue;
         const commId = stepRun.outcome.communication_id as string | undefined;
         if (!commId) continue;
-        const comms = await q<{ id: string; status: string; channel: string; contact_id: string | null }[]>(
-          db.from("communications").select("id, status, channel, contact_id").eq("id", commId).limit(1),
+        const comms = await q<{ id: string; status: string }[]>(
+          db.from("communications").select("id, status").eq("id", commId).limit(1),
           "awaited communication lookup"
         );
-        if (!comms[0] || comms[0].status !== "approved") continue;
-        const engineActor = (bundle.run.context.engine_actor_id as string) ?? bundle.run.created_by;
-        const stubEventId = await stubSend(db, bundle.run.business_id, engineActor, comms[0], bundle.run.id, report);
+        if (!comms[0] || !STAMPED_STATUSES.has(comms[0].status)) continue;
         await completeStep(
           db,
           bundle,
           stepRun,
           "completed",
-          { communication_id: commId, approved: true, send_stubbed_event_id: stubEventId },
+          { communication_id: commId, stamped: true, communication_status: comms[0].status },
           advanceArgs(bundle.steps, stepRun.step_id, now()),
           report
         );
@@ -985,8 +1094,10 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
             await completeStep(db, bundle, stepRun, "completed", {}, advanceArgs(bundle.steps, step.id, now()), report);
             break;
           case "move_stage":
-          case "close":
             await executeMoveStage(db, bundle, step, stepRun, now(), report);
+            break;
+          case "close":
+            await executeClose(db, bundle, step, stepRun, now(), report);
             break;
           case "fire_conversion":
             await executeFireConversion(db, bundle, step, stepRun, now(), report);
@@ -1032,43 +1143,9 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
     if (!didWork) break;
   }
 
-  // -- Phase 4: the send boundary for NON-blocking workflow drafts (nurture
-  // nudges): once stamped, their would-be dispatch is stub-logged exactly
-  // once. Keyed on the ledger itself — replays add nothing.
-  try {
-    const approved = await q<{ id: string; channel: string; contact_id: string | null; business_id: string; attributes: Record<string, unknown> }[]>(
-      db
-        .from("communications")
-        .select("id, channel, contact_id, business_id, attributes")
-        .eq("status", "approved")
-        .not("attributes->>workflow_run_id", "is", null),
-      "approved workflow drafts"
-    );
-    if (approved.length > 0) {
-      const logged = await q<{ entity_id: string }[]>(
-        db
-          .from("events")
-          .select("entity_id")
-          .eq("action", "communication.send_stubbed")
-          .in("entity_id", approved.map((c) => c.id)),
-        "stubbed sends lookup"
-      );
-      const done = new Set(logged.map((l) => l.entity_id));
-      for (const comm of approved) {
-        if (done.has(comm.id)) continue;
-        const runId = comm.attributes.workflow_run_id as string;
-        try {
-          const bundle = await loadRunBundle(db, runId, bundles);
-          const engineActor = (bundle.run.context.engine_actor_id as string) ?? bundle.run.created_by;
-          await stubSend(db, comm.business_id, engineActor, comm, runId, report);
-        } catch (err) {
-          report.errors.push(`stub send (${comm.id}): ${err instanceof Error ? err.message : err}`);
-        }
-      }
-    }
-  } catch (err) {
-    report.errors.push(`send boundary sweep: ${err instanceof Error ? err.message : err}`);
-  }
-
+  // Carriage of stamped drafts — workflow-born and hand-written alike — is
+  // the send pipeline's sweep (dispatchApprovedCommunications in send.ts),
+  // which the tick route runs after this pass. The Session 6 stub sweep that
+  // lived here is gone.
   return report;
 }

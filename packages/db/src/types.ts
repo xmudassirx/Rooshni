@@ -92,9 +92,10 @@ export interface GrantRow {
 
 // --- Session 3: the Approval Inbox ------------------------------------------
 
-/** One deterministic readiness check (Spec 3 §6, decision 11). */
+/** One deterministic readiness check (Spec 3 §6, decision 11; Session 10
+ * adds the WhatsApp session-window check). */
 export interface PreflightCheck {
-  key: "body" | "placeholders" | "consent" | "attachment" | string;
+  key: "body" | "placeholders" | "consent" | "attachment" | "wa_session_window" | string;
   label: string;
   pass: boolean;
   detail: string | null;
@@ -259,7 +260,9 @@ export interface MessageTemplateRow {
   archived_at: string | null;
 }
 
-/** What one runWorkflowTick() pass did — returned to the cron/route caller. */
+/** What one runWorkflowTick() pass did — returned to the cron/route caller.
+ * (Session 10: sends_stubbed is gone with the stub — carriage is counted by
+ * the send pipeline's own DispatchReport.) */
 export interface TickReport {
   runs_started: number;
   steps_completed: number;
@@ -267,7 +270,6 @@ export interface TickReport {
   steps_failed: number;
   steps_awaiting_approval: number;
   runs_completed: number;
-  sends_stubbed: number;
   errors: string[];
 }
 

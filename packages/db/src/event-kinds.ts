@@ -26,4 +26,23 @@ export const EVENT_KINDS = {
   firstLightCompleted: "first_light.completed",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 10 — the send-pipeline and Meta-inbound vocabulary. Same JUDGMENT
+ * as above: kinds are TS constants, the single truth every emitter imports
+ * (decision 89d — no kind registry exists in schema; inventing one would be
+ * improvised schema).
+ */
+export const SEND_EVENT_KINDS = {
+  /** A stamped message left the building — provider + provider message id in the payload. */
+  communicationSent: "communication.sent",
+  /** The provider REFUSED the message — a visible failure, never a silent drop. */
+  communicationSendFailed: "communication.send_failed",
+  /** Stamped inside quiet hours — held, dispatching at the window's end. The stamp is the founder's; the timing is policy. */
+  communicationQueuedQuietHours: "communication.queued_quiet_hours",
+  /** A real Meta lead arrived through the webhook (idempotent on the leadgen id). */
+  metaLeadReceived: "meta.lead_received",
+  /** Decision 15: the auto-close step refused to close — its nudges never reached the client. */
+  workflowAutoCloseRefused: "workflow.auto_close_refused",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];
