@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { scaleDurationMs } from "@rooshni/config";
 import { verifyStripeSignature } from "../src/stripe";
+import { verifyMetaSignature } from "../src/meta";
+import { quietHoursHoldUntil, QUIET_HOURS_DEFAULT } from "../src/quiet-hours";
+import { evaluateAutoClose } from "../src/auto-close";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -1544,6 +1547,213 @@ async function main() {
     );
     await db.exec(`reset role`);
     if (r.rows[0]!.n !== 0) throw new Error(`a browser flipped ${r.rows[0]!.n} tick(s)`);
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 10 — connect to the world: the send-pipeline door (0021), the
+  // WhatsApp session-window pre-flight, Meta webhook signature + leadgen
+  // idempotency, quiet-hours policy, and the decision-15 auto-close refusal.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 10 — the send pipeline and the Meta door:");
+
+  // --- Meta webhook signature (verified before parsing, always) — pure TS --
+  const metaSecret = "meta_app_secret_smoke";
+  const metaBody = JSON.stringify({ object: "page", entry: [{ id: "1", changes: [] }] });
+  const metaSig = `sha256=${createHmac("sha256", metaSecret).update(metaBody, "utf8").digest("hex")}`;
+  await expectOk("a correctly signed Meta webhook body verifies", async () => {
+    const r = verifyMetaSignature({ payload: metaBody, header: metaSig, secret: metaSecret });
+    if (!r.ok) throw new Error(r.reason);
+  });
+  await expectOk("a tampered Meta webhook body is refused", async () => {
+    const r = verifyMetaSignature({ payload: metaBody + " ", header: metaSig, secret: metaSecret });
+    if (r.ok) throw new Error("a tampered body verified");
+  });
+  await expectOk("a missing X-Hub-Signature-256 header is refused", async () => {
+    const r = verifyMetaSignature({ payload: metaBody, header: null, secret: metaSecret });
+    if (r.ok) throw new Error("no header verified");
+  });
+
+  // --- meta_webhook_events: idempotency on the provider's leadgen id -------
+  await db.query(
+    `insert into public.meta_webhook_events (leadgen_id, page_id, payload) values ('444400000000000099', '112233', '{}')`
+  );
+  await expectError(
+    "replaying the same Meta leadgen id changes nothing (webhook idempotency)",
+    /meta_webhook_events_leadgen_id_uniq|duplicate/,
+    () =>
+      db.query(
+        `insert into public.meta_webhook_events (leadgen_id, page_id, payload) values ('444400000000000099', '112233', '{}')`
+      )
+  );
+  await expectOk("raw Meta payloads are invisible to signed-in users", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    const r = await db.query<{ n: number }>(`select count(*)::int as n from public.meta_webhook_events`);
+    await db.exec(`reset role`);
+    if (r.rows[0]!.n !== 0) throw new Error(`a signed-in user read ${r.rows[0]!.n} provider payload(s)`);
+  });
+
+  // --- quiet hours: wall-clock policy, clock injected (never waited) -------
+  await expectOk("a message stamped inside quiet hours holds until 08:00 local", async () => {
+    // 20:30 in London (BST, UTC+1) on 17 Jul 2026 = 19:30Z; the window ends
+    // at 08:00 local next day = 07:00Z.
+    const held = quietHoursHoldUntil(new Date("2026-07-17T19:30:00Z"), "Europe/London", QUIET_HOURS_DEFAULT);
+    if (!held) throw new Error("20:30 local was not held");
+    if (held.toISOString() !== "2026-07-18T07:00:00.000Z") throw new Error(`held until ${held.toISOString()}`);
+  });
+  await expectOk("a message stamped in working hours dispatches now", async () => {
+    const held = quietHoursHoldUntil(new Date("2026-07-17T11:00:00Z"), "Europe/London", QUIET_HOURS_DEFAULT);
+    if (held) throw new Error(`midday was held until ${held.toISOString()}`);
+  });
+  await expectOk("quiet hours disabled (null) never hold", async () => {
+    const held = quietHoursHoldUntil(new Date("2026-07-17T19:30:00Z"), "Europe/London", null);
+    if (held) throw new Error("a null window held a message");
+  });
+
+  // --- decision 15: the auto-close refusal — pure and clock-free -----------
+  await expectOk("auto-close REFUSES when nudges were never approved (drafts died in the inbox)", async () => {
+    const v = evaluateAutoClose([
+      { communication_id: "a", status: "draft" },
+      { communication_id: "b", status: "pending_approval" },
+      { communication_id: "c", status: "draft" },
+    ]);
+    if (v.close) throw new Error("closed an enquiry whose nudges never reached the client");
+    if (!/misattribute/.test(v.reason)) throw new Error(`reason does not carry the law: ${v.reason}`);
+  });
+  await expectOk("auto-close refuses when NO nudges exist on the run", async () => {
+    const v = evaluateAutoClose([]);
+    if (v.close) throw new Error("closed with zero nudges");
+  });
+  await expectOk("auto-close proceeds when nudges were genuinely delivered and silence followed", async () => {
+    const v = evaluateAutoClose([
+      { communication_id: "a", status: "sent" },
+      { communication_id: "b", status: "draft" },
+    ]);
+    if (!v.close) throw new Error(`refused a lawful close: ${v.reason}`);
+    if (v.nudges_sent !== 1) throw new Error(`counted ${v.nudges_sent} sent nudges`);
+  });
+
+  // --- the send door (0021): approved ≠ sent, service-only, refusal-first --
+  await expectError(
+    "service_role cannot flip status to sent by direct update (the door stays shut)",
+    /permission denied/,
+    async () => {
+      await db.exec(`set role service_role`);
+      try {
+        await db.query(`update public.communications set status = 'sent' where id = $1`, [pendingCommId]);
+      } finally {
+        await db.exec(`reset role`);
+      }
+    }
+  );
+  await expectError(
+    "mark_communication_sent refuses a signed-in session (dispatch is a server act)",
+    /server|permission denied/,
+    async () => {
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(`select public.mark_communication_sent($1, 'graph', 'msg-1')`, [pendingCommId]);
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+  await expectError(
+    "mark_communication_sent refuses an unstamped draft — APPROVED ≠ SENT is structural",
+    /APPROVED/,
+    async () => {
+      const draft = await db.query<{ id: string }>(
+        `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+         values ($1, $2, $3, 'email', 'outbound', 'draft', 'Never stamped, never sent.', $2) returning id`,
+        [f.business_id, f.agent_id, thread.rows[0]!.id]
+      );
+      await db.query(`select public.mark_communication_sent($1, 'graph', 'msg-x')`, [draft.rows[0]!.id]);
+    }
+  );
+  await expectOk("the permitted path: an approved message becomes sent with its provider id on the row", async () => {
+    await db.query(`select public.mark_communication_sent($1, 'graph', '<msg-abc@firm.example>')`, [pendingCommId]);
+    const r = await db.query<{ status: string; refs: string }>(
+      `select status, external_refs::text as refs from public.communications where id = $1`,
+      [pendingCommId]
+    );
+    if (r.rows[0]!.status !== "sent") throw new Error(`status is ${r.rows[0]!.status}`);
+    if (!/msg-abc@firm\.example/.test(r.rows[0]!.refs)) throw new Error("provider message id not on the row");
+    if (!/"system": *"graph"/.test(r.rows[0]!.refs)) throw new Error("provider name not on the row");
+  });
+  await expectError("a sent message cannot be sent twice (replays re-do nothing)", /APPROVED/, () =>
+    db.query(`select public.mark_communication_sent($1, 'graph', 'msg-2')`, [pendingCommId])
+  );
+  await expectError("a failed send requires a reason", /reason/, () =>
+    db.query(`select public.mark_communication_send_failed($1, 'graph', '  ')`, [attComm.rows[0]!.id])
+  );
+  await expectOk("a provider refusal becomes the VISIBLE failed state, reason on the row", async () => {
+    await db.query(`select public.mark_communication_send_failed($1, 'graph', 'Mailbox does not exist')`, [
+      attComm.rows[0]!.id,
+    ]);
+    const r = await db.query<{ status: string; failure: string | null }>(
+      `select status, attributes -> 'send_failure' ->> 'reason' as failure from public.communications where id = $1`,
+      [attComm.rows[0]!.id]
+    );
+    if (r.rows[0]!.status !== "failed") throw new Error(`status is ${r.rows[0]!.status}`);
+    if (r.rows[0]!.failure !== "Mailbox does not exist") throw new Error("failure reason not recorded");
+  });
+  await expectError("a failed message cannot be marked sent afterwards", /APPROVED/, () =>
+    db.query(`select public.mark_communication_sent($1, 'graph', 'msg-3')`, [attComm.rows[0]!.id])
+  );
+
+  // --- the WhatsApp session window (pre-flight check 5) --------------------
+  await db.query(grantSql, [f.business_id, f.human_id, f.agent_id, "comms.whatsapp", "execute", bizScope, "standing", null, f.human_id, "chat"]);
+  const waContact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'WhatsApp Contact') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'whatsapp', '+447700900123', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, waContact.rows[0]!.id]
+  );
+  const waThread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+     values ($1, $2, $3, 'whatsapp') returning id`,
+    [f.business_id, f.agent_id, waContact.rows[0]!.id]
+  );
+
+  const draftWa = async (body: string, attributes: string) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id, attributes)
+       values ($1, $2, $3, $4, 'whatsapp', 'outbound', 'draft', $5, $2, $6::jsonb) returning id`,
+      [f.business_id, f.agent_id, waThread.rows[0]!.id, waContact.rows[0]!.id, body, attributes]
+    );
+    await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, f.agent_id]);
+    return r.rows[0]!.id;
+  };
+
+  await expectError(
+    "a free-form WhatsApp message outside the 24h session window cannot be approved",
+    /session window/,
+    async () => {
+      const id = await draftWa("Just checking in about your enquiry.", "{}");
+      await db.query(`select public.approve_communication($1, $2)`, [id, f.human_id]);
+    }
+  );
+  await expectOk("an approved TEMPLATE message passes the window any time", async () => {
+    const id = await draftWa(
+      "[template] Gentle nudge about your enquiry.",
+      JSON.stringify({ wa_template: { name: "nurture_t2_v1", language: "en_GB" } })
+    );
+    await db.query(`select public.approve_communication($1, $2)`, [id, f.human_id]);
+  });
+  await expectOk("a customer inbound OPENS the window: free-form becomes approvable", async () => {
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, occurred_at)
+       values ($1, $2, $3, $4, 'whatsapp', 'inbound', 'received', 'Salaam, yes please call me', now() - interval '1 hour')`,
+      [f.business_id, f.agent_id, waThread.rows[0]!.id, waContact.rows[0]!.id]
+    );
+    const id = await draftWa("Thanks — calling you this afternoon.", "{}");
+    await db.query(`select public.approve_communication($1, $2)`, [id, f.human_id]);
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

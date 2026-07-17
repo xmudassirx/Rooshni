@@ -18,7 +18,17 @@
         "STRIPE_WEBHOOK_SECRET",
         "STRIPE_PRICE_ID",
         "RESEND_API_KEY",
-        "PLATFORM_MAIL_FROM"
+        "PLATFORM_MAIL_FROM",
+        "CRON_SECRET",
+        "AZURE_CLIENT_ID",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_SECRET",
+        "GRAPH_SENDER_ADDRESS",
+        "META_APP_SECRET",
+        "META_VERIFY_TOKEN",
+        "META_ACCESS_TOKEN",
+        "WHATSAPP_ACCESS_TOKEN",
+        "WHATSAPP_PHONE_NUMBER_ID"
       ]
     },
     "dev": {
