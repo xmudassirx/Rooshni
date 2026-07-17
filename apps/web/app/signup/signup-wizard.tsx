@@ -160,14 +160,14 @@ export function SignupWizard({ resumed }: { resumed: ResumedSignup | null }) {
             <div className="glass overflow-hidden rounded-xl">
               <div className="px-5 pb-6 pt-5">
                 <Field label="Your name" id="su-name" value={name} onChange={setName} placeholder="Full name" autoComplete="name" />
-                <Field label="Business name" id="su-biz" value={businessName} onChange={setBusinessName} placeholder="e.g. Jurists" autoComplete="organization" />
+                <Field label="Business name" id="su-biz" value={businessName} onChange={setBusinessName} placeholder="e.g. Acme & Co" autoComplete="organization" />
                 <Field
                   label="Email"
                   id="su-email"
                   type="email"
                   value={email}
                   onChange={setEmail}
-                  placeholder="you@yourfirm.co.uk"
+                  placeholder="you@yourcompany.com"
                   autoComplete="email"
                   note="Use an email you can sign in to Google with — it becomes your sign-in."
                 />
@@ -177,7 +177,7 @@ export function SignupWizard({ resumed }: { resumed: ResumedSignup | null }) {
                   id="su-site"
                   value={websiteUrl}
                   onChange={setWebsiteUrl}
-                  placeholder="yourfirm.co.uk"
+                  placeholder="yourcompany.com"
                   note={
                     <>
                       <span className="light-spark">✦</span> The moment your payment clears, Light
@@ -243,8 +243,8 @@ export function SignupWizard({ resumed }: { resumed: ResumedSignup | null }) {
                   )}
                 </button>
                 <p className="mt-2.5 text-center font-mono text-[11px] uppercase tracking-[0.05em] text-ink-faint">
-                  Light starts reading your website only after payment clears — no spend on an
-                  unpaid signup. A failed card costs you, and us, nothing.
+                  Payment handled securely by Stripe · cancel any time. Light begins setting up
+                  your business the moment payment clears.
                 </p>
               </div>
             </div>
