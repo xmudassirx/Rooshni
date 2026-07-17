@@ -244,9 +244,17 @@ export async function dispatchApprovedCommunications(
         continue;
       }
 
-      if (!comm.contact_id) {
+      // The destination contact is the pre-flight's definition of it:
+      // coalesce(comm.contact_id, thread.contact_id) — the thread always
+      // carries one (0008: comm_threads.contact_id not null).
+      const threads = await q<{ subject: string | null; contact_id: string }[]>(
+        db.from("comm_threads").select("subject, contact_id").eq("id", comm.thread_id).limit(1),
+        "thread lookup"
+      );
+      const contactId = comm.contact_id ?? threads[0]?.contact_id ?? null;
+      if (!contactId) {
         report.skipped += 1;
-        report.errors.push(`comm ${comm.id}: no contact on the row — cannot resolve a destination`);
+        report.errors.push(`comm ${comm.id}: no contact on the row or its thread — cannot resolve a destination`);
         continue;
       }
 
@@ -257,12 +265,8 @@ export async function dispatchApprovedCommunications(
           report.errors.push(`comm ${comm.id}: email carrier not configured — it stays approved`);
           continue;
         }
-        const to = await resolveDestination(db, comm.contact_id, "email");
+        const to = await resolveDestination(db, contactId, "email");
         if (!to) throw new ProviderRejectedError("no live email channel on the contact", "graph");
-        const threads = await q<{ subject: string | null }[]>(
-          db.from("comm_threads").select("subject").eq("id", comm.thread_id).limit(1),
-          "thread lookup"
-        );
         result = await options.providers.sendEmail({
           to,
           subject: threads[0]?.subject ?? null,
@@ -275,7 +279,7 @@ export async function dispatchApprovedCommunications(
           report.errors.push(`comm ${comm.id}: WhatsApp carrier not configured — it stays approved`);
           continue;
         }
-        const to = await resolveDestination(db, comm.contact_id, "whatsapp");
+        const to = await resolveDestination(db, contactId, "whatsapp");
         if (!to) throw new ProviderRejectedError("no live WhatsApp channel on the contact", "whatsapp");
         const template = (comm.attributes?.wa_template as WaTemplateRef | undefined) ?? null;
         result = await options.providers.sendWhatsApp({ to: waNumber(to), body: comm.body, template });
@@ -298,7 +302,7 @@ export async function dispatchApprovedCommunications(
           provider: result.provider,
           provider_message_id: result.providerMessageId,
           engagement_id: comm.engagement_id,
-          contact_id: comm.contact_id,
+          contact_id: contactId,
           ...(comm.attributes?.workflow_run_id ? { workflow_run_id: comm.attributes.workflow_run_id } : {}),
         },
       });
