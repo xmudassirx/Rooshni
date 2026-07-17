@@ -219,7 +219,14 @@ export async function ingestMetaLead(
   }
 
   const fields = new Map(lead.field_data.map((f) => [f.name, f.values[0] ?? ""]));
-  const fullName = fields.get("full_name") ?? "Unknown lead";
+  // X Law's live forms vary in name shape: full_name on the older forms,
+  // first_name + last_name (one uses `surname`) on the active ones, bare
+  // `name` on the earliest. Compose in that order — the fixture contract
+  // (full_name) remains the first read.
+  const composedName = [fields.get("first_name"), fields.get("last_name") ?? fields.get("surname")]
+    .filter(Boolean)
+    .join(" ");
+  const fullName = fields.get("full_name") || composedName || fields.get("name") || "Unknown lead";
   const phone = normalisePhone(fields.get("phone_number") ?? "");
   const email = (fields.get("email") ?? "").toLowerCase();
   const [givenName, ...familyParts] = fullName.split(/\s+/);
