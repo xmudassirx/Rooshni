@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { ProviderRejectedError, type SendResult } from "./send";
 
 /**
@@ -7,8 +8,12 @@ import { ProviderRejectedError, type SendResult } from "./send";
  * from GRAPH_SENDER_ADDRESS. Tenant comms only — platform mail rides Resend
  * and the two pipes never mix (decision 87).
  *
- * Create-then-send (two calls) rather than the one-shot /sendMail so the
- * provider message id exists BEFORE dispatch — the sent row must carry it.
+ * One-shot /sendMail with a SELF-MINTED RFC 5322 internetMessageId — the
+ * least-privilege shape: only the Mail.Send application permission is
+ * needed (create-then-send would also demand Mail.ReadWrite, and its
+ * create step is what "Access is denied" refused on the first live
+ * dispatch). Graph honours a caller-supplied internetMessageId, so the
+ * sent row still carries the provider message id.
  * External calls fail; explicit timeouts, and a Graph 4xx becomes a
  * ProviderRejectedError (visible failed state) while 5xx/network stays
  * transient (row remains approved; the next tick retries).
@@ -86,33 +91,25 @@ export function createGraphEmailSender(
 
   return async (input) => {
     const token = await getGraphToken(graphEnv);
-    const message = {
-      subject: input.subject ?? "",
-      body: {
-        contentType: input.bodyFormat === "html" ? "HTML" : "Text",
-        content: input.body,
-      },
-      toRecipients: [{ emailAddress: { address: input.to } }],
-    };
-
-    const created = await graphJson<{ id?: string; internetMessageId?: string; error?: { message?: string } }>(
-      token,
-      "POST",
-      `/users/${encodeURIComponent(graphEnv.senderAddress)}/messages`,
-      message
-    );
-    if (created.status >= 400 || !created.body.id) {
-      const detail = created.body.error?.message ?? `HTTP ${created.status}`;
-      if (created.status >= 400 && created.status < 500) {
-        throw new ProviderRejectedError(`Graph refused the message: ${detail}`, "graph");
-      }
-      throw new Error(`Graph message create failed: ${detail}`);
-    }
+    const senderDomain = graphEnv.senderAddress.split("@")[1] ?? "barakah.invalid";
+    const internetMessageId = `<${randomUUID()}@${senderDomain}>`;
 
     const sent = await graphJson<{ error?: { message?: string } }>(
       token,
       "POST",
-      `/users/${encodeURIComponent(graphEnv.senderAddress)}/messages/${created.body.id}/send`
+      `/users/${encodeURIComponent(graphEnv.senderAddress)}/sendMail`,
+      {
+        message: {
+          subject: input.subject ?? "",
+          body: {
+            contentType: input.bodyFormat === "html" ? "HTML" : "Text",
+            content: input.body,
+          },
+          toRecipients: [{ emailAddress: { address: input.to } }],
+          internetMessageId,
+        },
+        saveToSentItems: true,
+      }
     );
     if (sent.status >= 400) {
       const detail = sent.body.error?.message ?? `HTTP ${sent.status}`;
@@ -124,7 +121,7 @@ export function createGraphEmailSender(
 
     return {
       provider: "graph",
-      providerMessageId: created.body.internetMessageId ?? created.body.id,
+      providerMessageId: internetMessageId,
     };
   };
 }
