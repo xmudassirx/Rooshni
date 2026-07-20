@@ -15,6 +15,7 @@ const ACTIONS = [
   "communication.drafted",
   "communication.submitted",
   "communication.approved",
+  "communication.rejected",
   "communication.sent",
   "communication.send_failed",
   "communication.queued_quiet_hours",
@@ -57,7 +58,9 @@ async function main() {
   for (const e of evts ?? []) {
     const p = (e.payload ?? {}) as Record<string, unknown>;
     const extra =
-      e.action === "communication.sent"
+      e.action === "communication.rejected"
+        ? ` reason=${String(p.reason ?? "").slice(0, 60)}`
+        : e.action === "communication.sent"
         ? ` provider=${p.provider} msgid=${p.provider_message_id}`
         : e.action === "communication.send_failed"
           ? ` reason=${p.reason}`
