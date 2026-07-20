@@ -562,6 +562,10 @@ async function executeDraftComm(
             step_run_id: stepRun.id,
             template_key: templates[0].key,
             template_version: templates[0].version,
+            // The message's own client-facing subject (founder-ruled at the
+            // first witnessed send): the dispatch path uses THIS, never the
+            // thread's internal label.
+            ...(subject ? { subject } : {}),
             ...(picked.fell_back ? { channel_fallback_from: intended } : {}),
             ...(waTemplate ? { wa_template: waTemplate } : {}),
           },

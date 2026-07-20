@@ -267,9 +267,13 @@ export async function dispatchApprovedCommunications(
         }
         const to = await resolveDestination(db, contactId, "email");
         if (!to) throw new ProviderRejectedError("no live email channel on the contact", "graph");
+        // Client-facing subject law (founder-ruled at the first witnessed
+        // send): the message's own rendered subject travels on the row;
+        // the thread's subject — which may be an internal label — is only
+        // the fallback for hand-written replies on subject-titled threads.
         result = await options.providers.sendEmail({
           to,
-          subject: threads[0]?.subject ?? null,
+          subject: (comm.attributes?.subject as string | undefined) ?? threads[0]?.subject ?? null,
           body: comm.body,
           bodyFormat: comm.body_format,
         });
