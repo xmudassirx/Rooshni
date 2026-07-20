@@ -734,8 +734,12 @@ const TEMPLATES = [
     key: "intro_v1",
     channel: "email",
     subject: "Your enquiry with {{business_name}}",
+    // Founder-ruled (Session 10 close pass): the greeting is NEUTRAL by
+    // default — behaviour-driven warmth personalisation waits for the
+    // memory era, and demographic inference is never used
+    // (LIGHT-OPERATING-DOCTRINE). Live carries this copy as version 2.
     body:
-      "Assalamu alaikum {{first_name}}, thank you for your enquiry with {{business_name}}. " +
+      "Hello {{first_name}}, thank you for your enquiry with {{business_name}}. " +
       "{{owner_name}} will call you within the next two business hours to talk through your situation and how the process works. " +
       "If another time suits you better, simply reply to this email and we will arrange the call around you. " +
       "There is nothing you need to prepare — any dates or paperwork you have to hand will help, but none of it is essential. Speak soon.",
