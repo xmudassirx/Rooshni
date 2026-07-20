@@ -124,6 +124,14 @@ Add to this list during build; check items off only at go-live.
       (already on this list; now sequence-forced — Hobby refuses sub-daily
       schedules at deploy). After merge, verify the cron appears in the
       Vercel dashboard and the tick returns ok with `CRON_SECRET` set.
+- [ ] **Exit shadow mode** (introduced Session 10 close, decision 99): real
+      Meta leads currently run BOTH pipelines — Brevo handles them, Barakah
+      ingests and drafts, and the founder rejects every draft with "shadow
+      mode — handled by existing pipeline". Exiting = the founder stops
+      rejecting and starts stamping; at that moment cancel the accumulated
+      blocked shadow runs through the gated pipeline (16 at Session 10
+      close, growing with every lead) or fold them into the demo-data
+      purge. Until this tick, the daily rejection chore recurs.
 - [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
       Session 3/6 demo drafts that were approved in the stub era carry
       `communication.send_stubbed` events; the dispatcher permanently walks

@@ -742,3 +742,25 @@ verbatim"); recorded in-session per §8. JUDGMENT comments at each site.
     an enquiry — the step skips on the ledger with its reason
     (`workflow.auto_close_refused`) and the enquiry stays open for a
     human. Cadence remains workflow data.
+
+Entries 97–99 are the founder's rulings from the witnessed-circuit close
+pass (messages of 20 July 2026, quoted in the Session 10 handover addendum),
+recorded in-session per §8.
+
+97. **The greeting is neutral by default** — "Hello {{first_name}}," on
+    `intro_v1` (live re-issued as v2, never rewritten; seed copy matches).
+    Behaviour-driven warmth personalisation waits for the memory era, and
+    demographic inference is never used (LIGHT-OPERATING-DOCTRINE).
+
+98. **Client-facing subject law** (founder-caught on the first witnessed
+    send): an outbound email's subject is the message's own rendered
+    template subject, carried on the row; the thread's subject — which may
+    be an internal label — is only a fallback for hand-written replies on
+    subject-titled threads. The internal label never titles client mail.
+
+99. **Shadow mode on real leads** — until the founder exits shadow mode
+    (a GO-LIVE tick), real Meta leads are handled by the existing Brevo
+    pipeline; Barakah ingests them fully (contact, enquiry, thread, run,
+    draft) and the founder rejects the drafts with the stated reason. The
+    parallel running is the point: the "before" pipeline operates while the
+    "after" pipeline proves itself on the same traffic.
