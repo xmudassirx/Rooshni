@@ -1,7 +1,13 @@
 import { loadEnv } from "./env";
 import { createServiceClient } from "../src/client";
 import { emitEvent } from "../src/events";
-import { evaluateConnectionPredicates, CONNECTION_PREDICATE_TOOLS } from "../src/first-light";
+import {
+  evaluateConnectionPredicates,
+  satisfyFirstLightPredicate,
+  CONNECTION_PREDICATE_TOOLS,
+  FIRST_LIGHT_PENDING_ARRIVALS,
+} from "../src/first-light";
+import type { FirstLightPredicateKey } from "../src/onboarding";
 
 /**
  * Session 11 — the DoD (2) service-side flip driver, stated honestly:
@@ -14,6 +20,13 @@ import { evaluateConnectionPredicates, CONNECTION_PREDICATE_TOOLS } from "../src
  * with its paired ledger event, and the grant rows remain on The Record.
  *
  *   npm run first-light:drive --workspace=@rooshni/db -- <business_id> <mail|whatsapp|meta>
+ *
+ * The rows whose machinery does not exist AT ALL yet (memory tray, sending
+ * domain, walkthrough) have nothing to connect — for the retirement
+ * demonstration ONLY they can be flipped with an explicit demonstration
+ * flag, and the flip's ledger event says so in plain words:
+ *
+ *   npm run first-light:drive --workspace=@rooshni/db -- <business_id> demo-flip <predicate_key>
  */
 
 const PROVIDERS = {
@@ -24,14 +37,64 @@ const PROVIDERS = {
 
 async function main() {
   loadEnv();
-  const [businessId, providerKey] = process.argv.slice(2).filter((a) => a !== "--");
-  const provider = PROVIDERS[providerKey as keyof typeof PROVIDERS];
-  if (!businessId || !provider) {
-    console.error("Usage: first-light-drive <business_id> <mail|whatsapp|meta>");
+  const [businessId, providerKey, demoKey] = process.argv.slice(2).filter((a) => a !== "--");
+  if (!businessId || !providerKey) {
+    console.error(
+      "Usage: first-light-drive <business_id> <mail|whatsapp|meta>\n" +
+        "       first-light-drive <business_id> demo-flip <predicate_key>"
+    );
     process.exit(1);
   }
 
   const db = createServiceClient();
+
+  if (providerKey === "demo-flip") {
+    // Retirement-demonstration flips for rows whose machinery does not exist
+    // yet — allowed ONLY for those keys, and the ledger event states it.
+    const key = demoKey as FirstLightPredicateKey;
+    const arrival = FIRST_LIGHT_PENDING_ARRIVALS[key];
+    if (!arrival) {
+      console.error(
+        `"${demoKey}" is not a pending-arrival row — its tick must be EARNED (use the connect drive or the product).`
+      );
+      process.exit(1);
+    }
+    const { data: wf, error: wfError } = await db
+      .from("businesses")
+      .select("account_id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (wfError || !wf) throw new Error(`business lookup failed: ${wfError?.message ?? "not found"}`);
+    const { data: wfActor } = await db
+      .from("actors")
+      .select("id")
+      .eq("account_id", wf.account_id)
+      .eq("actor_type", "workflow")
+      .is("archived_at", null)
+      .maybeSingle();
+    if (!wfActor) throw new Error("No workflow actor to attribute the flip to");
+    const { flipped, completedFirstLight } = await satisfyFirstLightPredicate(db, {
+      businessId,
+      predicateKey: key,
+      actorId: wfActor.id,
+      payload: {
+        demonstration: true,
+        note: `Service-side demonstration flip for the Session 11 DoD — the real check ${arrival}; this tick was driven, not earned.`,
+      },
+    });
+    console.log(
+      flipped
+        ? `Demo-flipped ${key}.${completedFirstLight ? " First Light is COMPLETE — the pill retires on next load." : ""}`
+        : `${key} was already satisfied.`
+    );
+    return;
+  }
+
+  const provider = PROVIDERS[providerKey as keyof typeof PROVIDERS];
+  if (!provider) {
+    console.error("Usage: first-light-drive <business_id> <mail|whatsapp|meta>");
+    process.exit(1);
+  }
 
   const { data: business, error: bizError } = await db
     .from("businesses")
