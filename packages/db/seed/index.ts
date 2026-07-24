@@ -348,7 +348,7 @@ async function seedTenant(db: SupabaseClient, ownerUserId: string): Promise<void
     "email"
   );
 
-  console.log("Tenant seeded: account Mudassir → business X Law (uk_immigration_law v1).");
+  console.log(`Tenant seeded: account Mudassir → business X Law (${defRow.key} v${defRow.version}).`);
 }
 
 /**
