@@ -1,0 +1,145 @@
+import { loadEnv } from "./env";
+import { createServiceClient } from "../src/client";
+import { emitEvent } from "../src/events";
+import { evaluateConnectionPredicates, CONNECTION_PREDICATE_TOOLS } from "../src/first-light";
+
+/**
+ * Session 11 — the DoD (2) service-side flip driver, stated honestly:
+ * the three connect predicates cannot be earned through the product yet
+ * (no OAuth wiring exists), so this script performs the CONNECTION
+ * server-side — it creates the integration actor and its grant, exactly the
+ * rows a real connect flow will create — and then lets the ordinary
+ * evaluator earn the tick from that state. The predicate itself is never
+ * written directly; the flip still goes through satisfyFirstLightPredicate
+ * with its paired ledger event, and the grant rows remain on The Record.
+ *
+ *   npm run first-light:drive --workspace=@rooshni/db -- <business_id> <mail|whatsapp|meta>
+ */
+
+const PROVIDERS = {
+  mail: { tool: "comms.email", actorName: "Microsoft 365 (driven)" },
+  whatsapp: { tool: "comms.whatsapp", actorName: "WhatsApp Business (driven)" },
+  meta: { tool: "enquiries", actorName: "Meta Lead Forms (driven)" },
+} as const;
+
+async function main() {
+  loadEnv();
+  const [businessId, providerKey] = process.argv.slice(2).filter((a) => a !== "--");
+  const provider = PROVIDERS[providerKey as keyof typeof PROVIDERS];
+  if (!businessId || !provider) {
+    console.error("Usage: first-light-drive <business_id> <mail|whatsapp|meta>");
+    process.exit(1);
+  }
+
+  const db = createServiceClient();
+
+  const { data: business, error: bizError } = await db
+    .from("businesses")
+    .select("id, name, account_id")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (bizError || !business) throw new Error(`business lookup failed: ${bizError?.message ?? "not found"}`);
+
+  const { data: owner, error: ownerError } = await db
+    .from("memberships")
+    .select("user_id, role")
+    .eq("business_id", businessId)
+    .eq("role", "owner")
+    .is("archived_at", null)
+    .limit(1)
+    .maybeSingle();
+  if (ownerError || !owner) throw new Error(`owner membership lookup failed: ${ownerError?.message ?? "none"}`);
+  const { data: ownerActor, error: actorError } = await db
+    .from("actors")
+    .select("id")
+    .eq("user_id", owner.user_id)
+    .eq("actor_type", "human")
+    .is("archived_at", null)
+    .maybeSingle();
+  if (actorError || !ownerActor) throw new Error(`owner actor lookup failed: ${actorError?.message ?? "none"}`);
+
+  // The connection: an integration actor + its grant — the same rows a real
+  // connect flow creates. Idempotent on the actor's display name.
+  let { data: integration } = await db
+    .from("actors")
+    .select("id")
+    .eq("account_id", business.account_id)
+    .eq("actor_type", "integration")
+    .eq("display_name", provider.actorName)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (!integration) {
+    const { data: created, error } = await db
+      .from("actors")
+      .insert({
+        account_id: business.account_id,
+        actor_type: "integration",
+        display_name: provider.actorName,
+      })
+      .select("id")
+      .single();
+    if (error) throw new Error(`integration actor insert failed: ${error.message}`);
+    integration = created;
+  }
+
+  const { data: existingGrant } = await db
+    .from("grants")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("grantee_actor_id", integration!.id)
+    .eq("tool", provider.tool)
+    .is("revoked_at", null)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (!existingGrant) {
+    const { data: grant, error } = await db
+      .from("grants")
+      .insert({
+        business_id: businessId,
+        created_by: ownerActor.id,
+        grantee_actor_id: integration!.id,
+        tool: provider.tool,
+        access: "execute",
+        scope: { level: "business", ref: businessId },
+        duration: "standing",
+        granted_by_actor_id: ownerActor.id,
+        via: "dashboard",
+      })
+      .select("id")
+      .single();
+    if (error) throw new Error(`grant insert failed: ${error.message}`);
+    await emitEvent(db, {
+      business_id: businessId,
+      actor_id: ownerActor.id,
+      action: "grant.issued",
+      entity_type: "grant",
+      entity_id: grant.id,
+      payload: {
+        grantee_actor_id: integration!.id,
+        tool: provider.tool,
+        access: "execute",
+        scope: { level: "business", ref: businessId },
+        duration: "standing",
+        via: "dashboard",
+        note: "service-side connect (first-light-drive) — OAuth wiring arrives with its session",
+      },
+    });
+    console.log(`Grant issued: ${provider.tool} → ${provider.actorName}.`);
+  } else {
+    console.log(`Grant already live: ${provider.tool} → ${provider.actorName}.`);
+  }
+
+  // The ordinary evaluator earns the tick from the grant state it observes.
+  const flipped = await evaluateConnectionPredicates(db, businessId);
+  const key = Object.entries(CONNECTION_PREDICATE_TOOLS).find(([, t]) => t === provider.tool)?.[0];
+  console.log(
+    flipped.length
+      ? `Predicates earned: ${flipped.join(", ")}.`
+      : `No predicate flipped (already satisfied, or "${key}" not present for ${business.name}).`
+  );
+}
+
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});

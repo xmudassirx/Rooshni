@@ -16,6 +16,7 @@
     "wire-meta": "tsx scripts/wire-meta.ts",
     "circuit:wa-draft": "tsx scripts/circuit-wa-draft.ts",
     "demo:reset": "tsx scripts/demo-reset.ts",
+    "first-light:drive": "tsx scripts/first-light-drive.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
