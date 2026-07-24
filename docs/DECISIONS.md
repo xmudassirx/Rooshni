@@ -764,3 +764,100 @@ recorded in-session per §8.
     draft) and the founder rejects the drafts with the stated reason. The
     parallel running is the point: the "before" pipeline operates while the
     "after" pipeline proves itself on the same traffic.
+
+## Session 11 (24 July 2026) — First Light and template installation, all approved
+
+Entries 100–112 are the session's thirteen Lane B calls, approved verbatim in
+the founder's message at close ("All thirteen Lane B calls approved"), with
+the founder's annotations on 100, 103, 110 and 111 recorded in place.
+JUDGMENT comments at each site.
+
+100. **The Session 11 prompt's rulings are recorded in the template doc by
+     builder addendum** — the committed v3 doc lacked the Contacted
+     stage-semantics block and the transition law the prompt referenced, so
+     both were appended as dated builder bookkeeping quoting the prompt (the
+     §8 quoted-approval pattern). **Founder annotation:** the addendum
+     stands as canonical; the founder's amended revision matches it in
+     substance; no re-commit.
+
+101. **Stage reconciliation** — the installed v3 set replaces the Session 1
+     seed set with retained keys keeping their deterministic ids;
+     `contact_attempted` and `in_conversation` archived (soft, never
+     deleted); `contacted` and `won` join with new ids; `instructed` goes
+     non-terminal with `won` as the won-terminal; labels "New", "Contacted",
+     "Lost" per the doc. Verified before live apply: zero enquiries occupied
+     the retiring stages.
+
+102. **The per-business `templates` row is an INSTALL POINTER, upgraded in
+     place and evented** (`template.installed`) — a new row would orphan the
+     active workflow definition, whose `template_id` is immutable behind the
+     workflow door; the re-issue-never-rewrite law binds the DEFINITION
+     store (`template_definitions` and the doc), not the install.
+
+103. **"Delivered" reads as provider-accepted `sent`** — no delivery
+     receipts exist for either channel yet. **Founder annotation:** when
+     delivery receipts arrive, the transition trigger TIGHTENS to
+     delivered-status; the condition tightens, never the law.
+
+104. **The Contacted transition lives in the send pipeline, not its own
+     slice** (ruled at pre-flight as the prompt invited): a trigger inside
+     the communications `sent` transition, moving through the gated
+     `move_engagement_stage()` as the account's workflow actor; when the
+     machinery is absent (no `contacted` stage, no unique workflow actor)
+     it NO-OPS — a bookkeeping gap must never block carriage of a stamped
+     message; the dispatcher events the move (law 11 — SQL never writes
+     the ledger).
+
+105. **The migration fence covers the nurture stamps** — `reminder_3d_sent_at`
+     and `nurture_unsubscribed_at` on `accounts` are read as within
+     "template storage + predicate needs": scope item 6 (nurture days 3/7,
+     unsubscribe on all three) requires both to exist, and accounts is
+     their only honest home.
+
+106. **Activation creates the workflow engine actor + its enquiries grant**
+     — decision 93's one-actor attribution and the Contacted transition
+     both require exactly one workflow actor per account; 0020 created
+     none, so a fresh tenant's first dispatch would have failed loudly on
+     attribution.
+
+107. **`template_definitions` is platform infrastructure** — no business
+     envelope (the stripe_events precedent); RLS on with an authenticated
+     SELECT policy (the definition is product content signed-in surfaces
+     render from) and NO write policy for any role: a definition changes
+     only by re-issue migration with a version bump.
+
+108. **Optional-row skip semantics** (the 0020 deferral, landed): skipping
+     an optional First Light row cancels its task with a stated reason and
+     events `first_light.row_skipped`; the predicate stays honestly
+     unsatisfied — the tick was never earned; skipped optional rows do not
+     block retirement (decision 83's condition: every row earned or
+     explicitly skipped).
+
+109. **Mockup copy claiming a live crawl was adapted to honest wording**
+     (per the prompt's no-fabricated-provenance instruction) — the
+     dashboard empty state points at First Light instead of "Light is
+     reading your website", and basics provenance lines say plainly that
+     nothing has been read ("entered by you — no crawl has read your site
+     yet"). Decision 84's honesty rule outranks mockup pixels.
+
+110. **Context-in-card renders only what the database holds** — contact
+     channels with per-channel consent, source attribution, whitelisted
+     engagement attributes; full Meta form answers are not persisted
+     anywhere today and the card says so. **Founder annotation:** storing
+     full form answers is DEFERRED to the query-aware drafting session,
+     where it becomes necessary and gets its own ruling — data minimisation
+     is a feature for a regulated firm, not a gap: we persist what we use,
+     when we use it.
+
+111. **The nurture copy ships builder-drafted** — the day-3 product story
+     and the day-7 founder's note (signed as the founder) per the template
+     doc's themes and the honest-claims law. **Founder annotation:**
+     acknowledged; the founder's own rewrite lands before any real signup
+     ages past day 3 — the GO-LIVE line holds until then.
+
+112. **`first-light:drive` is the sanctioned service-side flip driver, on
+     The Record both ways** — connect predicates are demonstrated by
+     creating a REAL integration actor + grant and letting the ordinary
+     evaluator earn the tick; pending-arrival rows flip only via an
+     explicit `demo-flip` whose ledger event states "driven, not earned";
+     driven artefacts carry their own GO-LIVE purge item.
