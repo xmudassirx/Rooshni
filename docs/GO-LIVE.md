@@ -132,6 +132,19 @@ Add to this list during build; check items off only at go-live.
       blocked shadow runs through the gated pipeline (16 at Session 10
       close, growing with every lead) or fold them into the demo-data
       purge. Until this tick, the daily rejection chore recurs.
+- [ ] **Purge first-light-drive artefacts** (introduced Session 11): the
+      `first-light:drive` script demonstrates the connect predicates by
+      creating REAL integration actors ("… (driven)") and grants on the
+      target business — the honest service-side connect the DoD asked for.
+      Before go-live, revoke those grants through the pipeline (or fold the
+      rows into the test-tenant purge) so no "(driven)" connection outlives
+      its demonstration. Real OAuth connect flows replace the script.
+- [ ] **Founder-approved nurture copy** (introduced Session 11): the day-3
+      product story and the day-7 founder's note (signed "Mudassir") ship
+      builder-drafted in `apps/web/lib/server/platform-mail.ts` — reviewed
+      at the Session 11 merge, but re-check the words before the first real
+      pre-active signup ages past day 3 with `TIME_SCALE=1`; the day-7 note
+      speaks in the founder's own voice and must actually be his.
 - [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
       Session 3/6 demo drafts that were approved in the stub era carry
       `communication.send_stubbed` events; the dispatcher permanently walks

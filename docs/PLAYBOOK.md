@@ -169,6 +169,18 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   (evaluated from communication statuses; refusal skips on the ledger with
   its reason and the enquiry stays open for a human).
 
+- The **template doors** (Session 11): `template_definitions` is re-issue-only
+  — RLS carries a read policy and NO write policy for any authenticated
+  role; a definition changes only by migration with a version bump (the
+  template-copy law made structural). Template installation happens only
+  inside the service-only `activate_signup()` (re-issued 0022). The
+  **Contacted transition law** is a trigger on the communications `sent`
+  transition: New → Contacted on the first genuinely dispatched outbound,
+  through the gated `move_engagement_stage()` as the account's workflow
+  actor — never on a draft, never on a stamp; the `first_light_predicates`
+  flip-is-evented rule (Session 9) remains the tick law First Light renders
+  from.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail
