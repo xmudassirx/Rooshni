@@ -202,9 +202,11 @@ export async function activateSignup(
   const result = opened as {
     already_active: boolean;
     business_id: string;
+    template_id?: string;
     owner_actor_id?: string;
     light_actor_id?: string;
     stripe_actor_id?: string;
+    workflow_actor_id?: string;
     grant_ids?: Record<string, string>;
     task_ids?: Record<string, string>;
   };
@@ -239,6 +241,20 @@ export async function activateSignup(
       stripe_subscription_id: params.stripeSubscriptionId,
     },
   });
+  if (result.template_id) {
+    // Session 11: the install itself is a line on The Record — platform
+    // automation installed the vertical, so the workflow actor signs.
+    await emitEvent(db, {
+      business_id: result.business_id,
+      actor_id: result.workflow_actor_id ?? result.stripe_actor_id!,
+      action: FIRST_LIGHT_EVENT_KINDS.templateInstalled,
+      entity_type: "template",
+      entity_id: result.template_id,
+      payload: {
+        note: "UK Immigration Advisory installed by activation — stages, vocabulary, no-go rules and First Light rows render from the template definition.",
+      },
+    });
+  }
   for (const [tool, grantId] of Object.entries(result.grant_ids ?? {})) {
     await emitEvent(db, {
       business_id: result.business_id,

@@ -245,6 +245,26 @@ html:not([data-theme]) .sidebar-glass {
 .light-drop:hover { border-color: var(--gold); color: var(--ink); }
 .light-focus:focus { border-color: var(--gold); }
 
+/* Session 11 — the First Light pill/panel wash: Light's channel (decision
+   81), so it wears gold by default and the prism mesh when selected. */
+.light-mesh {
+  background: var(--gold-tint);
+  border: 1px solid var(--gold-line);
+}
+[data-lightac="prism"] .light-mesh {
+  background: linear-gradient(
+    120deg,
+    rgba(240, 169, 59, 0.1),
+    rgba(232, 86, 63, 0.07) 30%,
+    rgba(180, 79, 216, 0.08) 55%,
+    rgba(63, 140, 255, 0.1) 80%,
+    rgba(46, 158, 107, 0.08)
+  );
+  background-size: 300% 300%;
+  animation: prismshift 9s ease infinite;
+  border: 1px solid rgba(180, 79, 216, 0.28);
+}
+
 [data-lightac="prism"] .light-text,
 [data-lightac="prism"] .light-spark,
 [data-lightac="prism"] .light-head {

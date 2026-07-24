@@ -3,6 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { AppearanceTab } from "./appearance-tab";
 import { GeneralTab } from "./general-tab";
+import { IntegrationsTab } from "./integrations-tab";
 import { TeamTab } from "./team-tab";
 
 export const dynamic = "force-dynamic";
@@ -10,16 +11,27 @@ export const dynamic = "force-dynamic";
 // Founder amendment (mockup review): Settings is tabbed — General, Team &
 // Access, Appearance, Integrations. Session 8 + its fix round fill General,
 // Team & Access and Appearance (the ONLY appearance door — the top-bar Aa is
-// gone by founder ruling); Integrations arrives with its wiring sessions.
+// gone by founder ruling); Session 11 fills Integrations with honest
+// connection state (the one door, decision 58 — First Light deep-links here
+// and state reflects back).
 
-export default function SettingsPage() {
+const TAB_VALUES = new Set(["general", "team", "appearance", "integrations"]);
+
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const { tab } = await searchParams;
+  const activeTab = tab && TAB_VALUES.has(tab) ? tab : "general";
+
   return (
     <>
       <PageHead
         title="Settings"
-        sub="Humans and AI, one permission system — General, Team & Access and Appearance are live"
+        sub="Humans and AI, one permission system — connections live here, once"
       />
-      <Tabs defaultValue="general">
+      <Tabs defaultValue={activeTab}>
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="team">Team &amp; Access</TabsTrigger>
@@ -36,15 +48,7 @@ export default function SettingsPage() {
           <AppearanceTab />
         </TabsContent>
         <TabsContent value="integrations">
-          <div className="glass rounded-xl border-dashed p-6">
-            <h2 className="mb-1.5 font-display text-lg font-extrabold">Integrations</h2>
-            <p className="max-w-[60ch] text-sm text-ink-soft">
-              Meta Lead Ads, mail and calendar connections, media providers over
-              MCP — connections live once, here, and each arrives with its
-              wiring session. Integrations are actors: every write is a line on
-              The Record.
-            </p>
-          </div>
+          <IntegrationsTab />
         </TabsContent>
       </Tabs>
     </>

@@ -297,6 +297,7 @@ export function AppShell({
   inboxCount,
   taskCount,
   showFeedback,
+  firstLight,
   children,
 }: {
   businessName: string;
@@ -305,6 +306,9 @@ export function AppShell({
   inboxCount: number;
   taskCount: number;
   showFeedback: boolean;
+  /** The First Light pill + panel (decision 81: top-bar, beside Ask Light,
+   * never a nav item). Null once retired. */
+  firstLight?: ReactNode;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -407,6 +411,7 @@ export function AppShell({
           {/* v2 openAsk(): the ask bar opens the MODAL — it never navigates.
               Founder amendment (fix round): the Aa control is gone; Settings →
               Appearance is the only appearance door. */}
+          {firstLight}
           <AskBar />
         </header>
         {/* Founder amendment (fix round 3): the shell is fluid — containers

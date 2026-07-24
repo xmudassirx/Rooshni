@@ -2123,3 +2123,199 @@ export async function getContactDetail(id: string): Promise<ContactDetail | null
     }),
   };
 }
+
+// --- Session 11: First Light + template content --------------------------------------
+
+export interface FirstLightRowView {
+  predicateKey: string;
+  title: string;
+  description: string;
+  optional: boolean;
+  satisfiedAt: string | null;
+  taskStatus: string;
+  /** Non-null when the earning machinery does not exist yet — "arrives with…". */
+  pendingArrival: string | null;
+}
+
+export interface FirstLightState {
+  rows: FirstLightRowView[];
+  doneCount: number;
+  totalCount: number;
+  /** True when every row is earned or (optional) skipped — the pill retires. */
+  retired: boolean;
+  /** True for businesses that predate First Light (no predicate rows at all). */
+  absent: boolean;
+}
+
+const PENDING_ARRIVALS: Record<string, string> = {
+  memory_tray_reviewed: "arrives with the crawler session",
+  sending_domain_verified: "arrives with the domain-verification session",
+  walkthrough_booked: "arrives with the booking-link session",
+};
+
+export async function getFirstLight(): Promise<FirstLightState> {
+  const { db, business } = await getAppContext();
+  const { data: predicates, error } = await db
+    .from("first_light_predicates")
+    .select("predicate_key, optional, satisfied_at, task_id")
+    .eq("business_id", business.id)
+    .is("archived_at", null);
+  if (error) throw new Error(`first_light query failed: ${error.message}`);
+  if (!predicates?.length) {
+    return { rows: [], doneCount: 0, totalCount: 0, retired: true, absent: true };
+  }
+
+  const { data: tasks, error: taskError } = await db
+    .from("tasks")
+    .select("id, title, description, status")
+    .in("id", predicates.map((p) => p.task_id));
+  if (taskError) throw new Error(`first_light task query failed: ${taskError.message}`);
+  const taskById = new Map((tasks ?? []).map((t) => [t.id, t]));
+
+  const rows: FirstLightRowView[] = predicates.map((p) => {
+    const task = taskById.get(p.task_id);
+    return {
+      predicateKey: p.predicate_key,
+      title: task?.title ?? p.predicate_key,
+      description: task?.description ?? "",
+      optional: p.optional,
+      satisfiedAt: p.satisfied_at,
+      taskStatus: task?.status ?? "open",
+      pendingArrival: p.satisfied_at ? null : (PENDING_ARRIVALS[p.predicate_key] ?? null),
+    };
+  });
+  // Stable panel order: the definition's install order is the tasks' creation
+  // order; predicates arrive unordered, so sort by the canonical key list.
+  const order = [
+    "basics_confirmed", "email_calendar_connected", "whatsapp_connected",
+    "meta_lead_forms_connected", "memory_tray_reviewed", "nogo_rules_acknowledged",
+    "sending_domain_verified", "walkthrough_booked",
+  ];
+  rows.sort((a, b) => order.indexOf(a.predicateKey) - order.indexOf(b.predicateKey));
+
+  const doneCount = rows.filter((r) => r.satisfiedAt).length;
+  const retired = rows.every(
+    (r) => r.satisfiedAt || (r.optional && r.taskStatus === "cancelled")
+  );
+  return { rows, doneCount, totalCount: rows.length, retired, absent: false };
+}
+
+export interface TemplateContent {
+  key: string;
+  version: number;
+  displayName: string;
+  signupFooter: string;
+  regulatedStatusOptions: string[];
+  standardKeys: string[];
+  quietHoursDefault: { start: string; end: string };
+  noGoRules: string[];
+  knowledgePackCategories: string[];
+}
+
+/** The signed-in business's installed template content, read from the
+ * definition store (one truth — installs point at it by key + version). */
+export async function getTemplateContent(): Promise<TemplateContent | null> {
+  const { db, business } = await getAppContext();
+  const { data: biz, error } = await db
+    .from("businesses")
+    .select("template_id, templates!businesses_template_id_fkey(vertical, version)")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (error) throw new Error(`template pointer query failed: ${error.message}`);
+  const install = (Array.isArray(biz?.templates) ? biz?.templates[0] : biz?.templates) as
+    | { vertical: string; version: number }
+    | null
+    | undefined;
+  if (!install) return null;
+
+  const { data: def, error: defError } = await db
+    .from("template_definitions")
+    .select("key, version, display_name, definition")
+    .eq("key", install.vertical)
+    .eq("version", install.version)
+    .maybeSingle();
+  if (defError) throw new Error(`template definition query failed: ${defError.message}`);
+  if (!def) return null;
+
+  const d = (def.definition ?? {}) as {
+    signup_footer?: string;
+    business_identity?: {
+      standard_keys?: string[];
+      regulated_status_options?: string[];
+      defaults?: { quiet_hours?: { start: string; end: string } };
+    };
+    no_go_rules?: string[];
+    knowledge_pack_categories?: string[];
+  };
+  return {
+    key: def.key,
+    version: def.version,
+    displayName: def.display_name,
+    signupFooter: d.signup_footer ?? "",
+    regulatedStatusOptions: d.business_identity?.regulated_status_options ?? [],
+    standardKeys: d.business_identity?.standard_keys ?? [],
+    quietHoursDefault: d.business_identity?.defaults?.quiet_hours ?? { start: "20:00", end: "08:00" },
+    noGoRules: d.no_go_rules ?? [],
+    knowledgePackCategories: d.knowledge_pack_categories ?? [],
+  };
+}
+
+export interface IntegrationState {
+  key: "mail" | "whatsapp" | "meta" | "calendar" | "stripe";
+  connected: boolean;
+  detail: string | null;
+}
+
+/** Connection state, read the way the predicates read it: a live grant to an
+ * INTEGRATION actor is a connection (decision 82); the Stripe actor exists
+ * from signup. Never a fabricated state. */
+export async function getIntegrationStates(): Promise<IntegrationState[]> {
+  const { db, business } = await getAppContext();
+
+  const { data: biz } = await db
+    .from("businesses")
+    .select("account_id")
+    .eq("id", business.id)
+    .maybeSingle();
+  const { data: actors, error: actorError } = await db
+    .from("actors")
+    .select("id, display_name")
+    .eq("account_id", biz?.account_id ?? "")
+    .eq("actor_type", "integration")
+    .is("archived_at", null);
+  if (actorError) throw new Error(`integration actors query failed: ${actorError.message}`);
+  const integrationIds = (actors ?? []).map((a) => a.id);
+
+  const { data: grants, error: grantError } = integrationIds.length
+    ? await db
+        .from("grants")
+        .select("tool, grantee_actor_id, expires_at")
+        .eq("business_id", business.id)
+        .in("grantee_actor_id", integrationIds)
+        .is("revoked_at", null)
+        .is("archived_at", null)
+    : { data: [], error: null };
+  if (grantError) throw new Error(`integration grants query failed: ${grantError.message}`);
+  const liveTools = new Set(
+    (grants ?? [])
+      .filter((g) => !g.expires_at || new Date(g.expires_at) > new Date())
+      .map((g) => g.tool)
+  );
+  const hasStripeActor = (actors ?? []).some((a) => a.display_name === "Stripe");
+
+  return [
+    { key: "mail", connected: liveTools.has("comms.email"), detail: null },
+    { key: "whatsapp", connected: liveTools.has("comms.whatsapp"), detail: null },
+    {
+      key: "meta",
+      connected: liveTools.has("enquiries"),
+      detail: liveTools.has("enquiries") ? "lead forms map to contacts + enquiries" : null,
+    },
+    { key: "calendar", connected: false, detail: null },
+    {
+      key: "stripe",
+      connected: hasStripeActor,
+      detail: hasStripeActor ? "connected at signup — your plan payment created this actor" : null,
+    },
+  ];
+}
