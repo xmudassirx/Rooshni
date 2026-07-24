@@ -160,6 +160,25 @@ function waNumber(value: string): string {
   return value.replace(/[^\d]/g, "");
 }
 
+/** The engagement's current stage (id + key), for observing the Contacted
+ * transition around a dispatch. */
+async function currentStage(
+  db: SupabaseClient,
+  engagementId: string
+): Promise<{ id: string; key: string } | null> {
+  const rows = await q<{ stage_id: string }[]>(
+    db.from("engagements").select("stage_id").eq("id", engagementId).limit(1),
+    "stage observation"
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const stages = await q<{ key: string }[]>(
+    db.from("stage_definitions").select("key").eq("id", row.stage_id).limit(1),
+    "stage key lookup"
+  );
+  return { id: row.stage_id, key: stages[0]?.key ?? "" };
+}
+
 /**
  * Dispatch every stamped outbound communication that is due. Cron-safe and
  * idempotent: the 0021 door only moves approved → sent/failed, so a second
@@ -289,12 +308,41 @@ export async function dispatchApprovedCommunications(
         result = await options.providers.sendWhatsApp({ to: waNumber(to), body: comm.body, template });
       }
 
+      // The Contacted transition law (0022): the trigger inside the `sent`
+      // transition moves a new_lead enquiry to Contacted on its first
+      // genuinely dispatched outbound. The trigger owns the truth; this
+      // dispatcher observes the move and puts it on The Record (law 11 —
+      // SQL never writes the ledger).
+      const stageBefore = comm.engagement_id
+        ? await currentStage(db, comm.engagement_id)
+        : null;
+
       const { error: sentError } = await db.rpc("mark_communication_sent", {
         p_comm: comm.id,
         p_provider: result.provider,
         p_provider_message_id: result.providerMessageId,
       });
       if (sentError) throw new Error(`mark_communication_sent failed: ${sentError.message}`);
+
+      if (comm.engagement_id && stageBefore) {
+        const stageAfter = await currentStage(db, comm.engagement_id);
+        if (stageAfter && stageAfter.id !== stageBefore.id) {
+          await emitEvent(db, {
+            business_id: comm.business_id,
+            actor_id: facts.dispatch_actor_id,
+            action: "engagement.stage_changed",
+            entity_type: "engagement",
+            entity_id: comm.engagement_id,
+            payload: {
+              from_stage: stageBefore.key,
+              to_stage: stageAfter.key,
+              reason: "first_outbound_dispatched",
+              note: "First outbound reached the client — New → Contacted (the template's transition law).",
+              communication_id: comm.id,
+            },
+          });
+        }
+      }
       await emitEvent(db, {
         business_id: comm.business_id,
         actor_id: facts.dispatch_actor_id,

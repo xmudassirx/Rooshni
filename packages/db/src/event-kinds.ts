@@ -45,4 +45,23 @@ export const SEND_EVENT_KINDS = {
   workflowAutoCloseRefused: "workflow.auto_close_refused",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 11 — First Light and template installation. Same JUDGMENT as
+ * above: kinds are TS constants, the single truth every emitter imports.
+ * first_light.completed already lives in EVENT_KINDS (reserved by Session 9,
+ * emitted by this session).
+ */
+export const FIRST_LIGHT_EVENT_KINDS = {
+  /** A vertical template's rows were installed for a business at activation. */
+  templateInstalled: "template.installed",
+  /** A First Light predicate EARNED its tick — paired to the row flip by the 0020 constraint. */
+  predicateSatisfied: "first_light.predicate_satisfied",
+  /** An OPTIONAL First Light row was skipped by the owner, with the stated reason. */
+  rowSkipped: "first_light.row_skipped",
+  /** A Settings → General value was confirmed or corrected by a human (the propose→stamp loop). */
+  settingsUpdated: "settings.updated",
+  /** Platform scope (account.*): a pre-active signup opted out of nurture mail. No personal data in the payload. */
+  accountNurtureUnsubscribed: "account.nurture_unsubscribed",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

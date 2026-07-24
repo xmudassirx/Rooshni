@@ -12,3 +12,5 @@ export * from "./send";
 export * from "./graph";
 export * from "./whatsapp";
 export * from "./meta";
+export * from "./templates";
+export * from "./first-light";

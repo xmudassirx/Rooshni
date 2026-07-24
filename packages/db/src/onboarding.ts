@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { scaleDurationMs } from "@rooshni/config";
 import { emitEvent } from "./events";
-import { EVENT_KINDS } from "./event-kinds";
+import { EVENT_KINDS, FIRST_LIGHT_EVENT_KINDS } from "./event-kinds";
 
 /**
  * Session 9 — the pre-active signup lifecycle and payment-time activation
@@ -262,14 +262,46 @@ export async function activateSignup(
 
 // --- the pre-active lifecycle sweep (rides the existing cron) ---------------
 
-/** Real-world lifecycle moments (founder-ruled: 24h, 7d, silence, 30d).
+/** Real-world lifecycle moments (founder-ruled: 24h resume reminder, then —
+ * per the v3 template's nurture section — the day-3 product story and the
+ * day-7 founder's note, then silence; hard delete at 30d).
  * Scaled through TIME_SCALE at read time like every duration in the system —
  * a compressed clock proves the sweep without waiting a month. */
 const REMINDER_24H_MS = 24 * 60 * 60 * 1000;
-const REMINDER_7D_MS = 7 * 24 * 60 * 60 * 1000;
+const NURTURE_3D_MS = 3 * 24 * 60 * 60 * 1000;
+const NURTURE_7D_MS = 7 * 24 * 60 * 60 * 1000;
 const DELETE_30D_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type ReminderKind = "24h" | "7d";
+export type ReminderKind = "24h" | "3d" | "7d";
+
+/** The stamps a nurture decision reads. */
+export interface NurtureStamps {
+  reminder_24h_sent_at: string | null;
+  reminder_3d_sent_at: string | null;
+  reminder_7d_sent_at: string | null;
+  nurture_unsubscribed_at: string | null;
+}
+
+/**
+ * Which nurture step (if any) is due for a pre-active signup of this age.
+ * Pure — the harness proves the bands at compressed time. An unsubscribed
+ * signup receives NO mail, ever; deletion at 30 days still runs (the
+ * retention ruling is about their data, not our messaging).
+ */
+export function dueNurtureStep(ageMs: number, stamps: NurtureStamps): ReminderKind | "delete" | null {
+  if (ageMs >= scaleDurationMs(DELETE_30D_MS)) return "delete";
+  if (stamps.nurture_unsubscribed_at) return null;
+  if (ageMs >= scaleDurationMs(NURTURE_7D_MS)) {
+    return stamps.reminder_7d_sent_at ? null : "7d";
+  }
+  if (ageMs >= scaleDurationMs(NURTURE_3D_MS)) {
+    return stamps.reminder_3d_sent_at ? null : "3d";
+  }
+  if (ageMs >= scaleDurationMs(REMINDER_24H_MS)) {
+    return stamps.reminder_24h_sent_at ? null : "24h";
+  }
+  return null;
+}
 
 export interface ReminderTarget {
   accountId: string;
@@ -281,10 +313,17 @@ export interface ReminderTarget {
 
 export interface SweepReport {
   reminded_24h: number;
+  reminded_3d: number;
   reminded_7d: number;
   deleted: number;
   errors: string[];
 }
+
+const REMINDER_STAMP_COLUMNS: Record<ReminderKind, string> = {
+  "24h": "reminder_24h_sent_at",
+  "3d": "reminder_3d_sent_at",
+  "7d": "reminder_7d_sent_at",
+};
 
 /**
  * One sweep pass: remind at 24h and 7d, hard-delete at 30 days with the
@@ -299,13 +338,13 @@ export async function sweepPreActiveSignups(
     nowMs?: number;
   }
 ): Promise<SweepReport> {
-  const report: SweepReport = { reminded_24h: 0, reminded_7d: 0, deleted: 0, errors: [] };
+  const report: SweepReport = { reminded_24h: 0, reminded_3d: 0, reminded_7d: 0, deleted: 0, errors: [] };
   const now = options.nowMs ?? Date.now();
 
   const { data: rows, error } = await db
     .from("accounts")
     .select(
-      "id, name, created_at, signup_email, signup_business_name, signup_resume_token, reminder_24h_sent_at, reminder_7d_sent_at"
+      "id, name, created_at, signup_email, signup_business_name, signup_resume_token, reminder_24h_sent_at, reminder_3d_sent_at, reminder_7d_sent_at, nurture_unsubscribed_at"
     )
     .eq("billing_status", "pre_active")
     .is("activated_at", null);
@@ -324,7 +363,8 @@ export async function sweepPreActiveSignups(
       resumeToken: row.signup_resume_token,
     };
     try {
-      if (ageMs >= scaleDurationMs(DELETE_30D_MS)) {
+      const due = dueNurtureStep(ageMs, row);
+      if (due === "delete") {
         const { data: deleted, error: delError } = await db.rpc("delete_unpaid_signup", {
           p_account: row.id,
         });
@@ -342,31 +382,22 @@ export async function sweepPreActiveSignups(
             payload: {
               signed_up_at: row.created_at,
               reminded_24h: row.reminder_24h_sent_at !== null,
+              reminded_3d: row.reminder_3d_sent_at !== null,
               reminded_7d: row.reminder_7d_sent_at !== null,
             },
           });
           report.deleted += 1;
         }
-      } else if (ageMs >= scaleDurationMs(REMINDER_7D_MS) && !row.reminder_7d_sent_at) {
-        await options.sendReminder("7d", target);
+      } else if (due) {
+        await options.sendReminder(due, target);
         const { error: stampError } = await db
           .from("accounts")
-          .update({ reminder_7d_sent_at: new Date(now).toISOString() })
+          .update({ [REMINDER_STAMP_COLUMNS[due]]: new Date(now).toISOString() })
           .eq("id", row.id);
-        if (stampError) throw new Error(`7d stamp failed: ${stampError.message}`);
-        report.reminded_7d += 1;
-      } else if (
-        ageMs >= scaleDurationMs(REMINDER_24H_MS) &&
-        ageMs < scaleDurationMs(REMINDER_7D_MS) &&
-        !row.reminder_24h_sent_at
-      ) {
-        await options.sendReminder("24h", target);
-        const { error: stampError } = await db
-          .from("accounts")
-          .update({ reminder_24h_sent_at: new Date(now).toISOString() })
-          .eq("id", row.id);
-        if (stampError) throw new Error(`24h stamp failed: ${stampError.message}`);
-        report.reminded_24h += 1;
+        if (stampError) throw new Error(`${due} stamp failed: ${stampError.message}`);
+        if (due === "24h") report.reminded_24h += 1;
+        else if (due === "3d") report.reminded_3d += 1;
+        else report.reminded_7d += 1;
       }
     } catch (err) {
       report.errors.push(
@@ -376,4 +407,42 @@ export async function sweepPreActiveSignups(
   }
 
   return report;
+}
+
+/**
+ * Unsubscribe a pre-active signup from nurture mail (the resume token is the
+ * unsubscribe token — it already reaches only this signup's inbox).
+ * Idempotent; the fact lands platform-scope on the ledger with NO personal
+ * data. Deletion at 30 days is unaffected.
+ */
+export async function unsubscribeSignupNurture(
+  db: SupabaseClient,
+  token: string
+): Promise<boolean> {
+  const { data, error } = await db
+    .from("accounts")
+    .select("id, nurture_unsubscribed_at")
+    .eq("signup_resume_token", token)
+    .eq("billing_status", "pre_active")
+    .is("activated_at", null)
+    .maybeSingle();
+  if (error) throw new Error(`unsubscribe lookup failed: ${error.message}`);
+  if (!data) return false;
+  if (data.nurture_unsubscribed_at) return true;
+
+  const { error: stampError } = await db
+    .from("accounts")
+    .update({ nurture_unsubscribed_at: new Date().toISOString() })
+    .eq("id", data.id);
+  if (stampError) throw new Error(`unsubscribe stamp failed: ${stampError.message}`);
+
+  await emitEvent(db, {
+    business_id: null,
+    actor_id: PLATFORM_ACTOR_ID,
+    action: FIRST_LIGHT_EVENT_KINDS.accountNurtureUnsubscribed,
+    entity_type: "account",
+    entity_id: data.id,
+    payload: { note: "Pre-active nurture opt-out — no further platform mail before activation." },
+  });
+  return true;
 }

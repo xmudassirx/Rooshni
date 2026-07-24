@@ -70,29 +70,40 @@ const INBOX_DEMO = {
   commInboundReply: "01980000-0000-7000-8000-000000000521",
 } as const;
 
-// Spec 1 §6 — the X Law pipeline (provisional pending the two-week lead log).
-const STAGES = [
-  { key: "new_lead", label: "New lead" },
-  { key: "contact_attempted", label: "Contact attempted" },
-  { key: "in_conversation", label: "In conversation" },
-  { key: "qualified", label: "Qualified" },
-  { key: "consultation_booked", label: "Consultation booked" },
-  { key: "consultation_held", label: "Consultation held" },
-  { key: "instructed", label: "Instructed", terminal: "won" },
-  { key: "closed_lost", label: "Closed-lost", terminal: "lost" },
-  { key: "unresponsive", label: "Unresponsive", terminal: "unresponsive" },
-  { key: "disqualified", label: "Disqualified", terminal: "disqualified" },
-] as const;
+// Session 11: the stage set, fields and vocabulary now render FROM the
+// installed template definition (template_definitions, 0022 — UK Immigration
+// Advisory v3 with the founder-ruled `contacted` rename). The seed's job is
+// deterministic-id mapping and the reconciliation of the Session 1 install:
+// retained keys keep their ids; `contact_attempted` and `in_conversation`
+// are archived (soft, never deleted); `contacted` and `won` join with new
+// ids; `instructed` goes non-terminal with `won` as the new won-terminal.
+// JUDGMENT: the per-business templates row is an INSTALL POINTER, upgraded
+// in place and evented — the re-issue-never-rewrite law binds the
+// DEFINITION store (and the doc), not the install; minting a new templates
+// row would orphan the active workflow definition, whose template_id is
+// immutable behind the workflow door.
+const STAGE_ID_INDEX: Record<string, number> = {
+  new_lead: 1,
+  // 2 was contact_attempted, 3 was in_conversation — archived by v3.
+  qualified: 4,
+  consultation_booked: 5,
+  consultation_held: 6,
+  instructed: 7,
+  closed_lost: 8,
+  unresponsive: 9,
+  disqualified: 10,
+  contacted: 11,
+  won: 12,
+};
+const RETIRED_STAGE_KEYS = ["contact_attempted", "in_conversation"] as const;
 
-// Spec 1 §6 custom fields, declared in field_definitions (§2.3): every key in
-// an attributes column must correspond to one of these rows.
-const FIELDS = [
-  { entity: "contact", key: "nationality", label: "Nationality", data_type: "text" },
-  { entity: "contact", key: "current_visa_status", label: "Current visa status", data_type: "text" },
-  { entity: "contact", key: "visa_expiry", label: "Visa expiry", data_type: "date" },
-  { entity: "engagement", key: "visa_route", label: "Visa route", data_type: "text" },
-  { entity: "engagement", key: "urgency", label: "Urgency", data_type: "text" },
-] as const;
+const VOCAB_ID_INDEX: Record<string, number> = {
+  engagement: 1,
+  engagements: 2,
+  client: 3,
+  prospective_client: 4,
+  consultation: 5,
+};
 
 function stageId(index: number): string {
   return `01980000-0000-7000-8000-0000000001${String(index).padStart(2, "0")}`;
@@ -100,6 +111,10 @@ function stageId(index: number): string {
 
 function fieldId(index: number): string {
   return `01980000-0000-7000-8000-0000000002${String(index).padStart(2, "0")}`;
+}
+
+function vocabId(index: number): string {
+  return `01980000-0000-7000-8000-0000000003${String(index).padStart(2, "0")}`;
 }
 
 /** 00-prefixed international numbers become E.164 (+…), per §4.1. */
@@ -157,16 +172,47 @@ async function seedTenant(db: SupabaseClient, ownerUserId: string): Promise<void
     default_locale: "en-GB",
   });
 
+  // The installable definition (0022) is the single content truth — the
+  // seed installs FROM it, exactly as activate_signup does for fresh
+  // tenants (the session-9 addendum rule made real).
+  const { data: defRow, error: defError } = await db
+    .from("template_definitions")
+    .select("key, version, definition")
+    .eq("key", "uk_immigration_advisory")
+    .is("archived_at", null)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (defError || !defRow) {
+    throw new Error(`template definition lookup failed: ${defError?.message ?? "no row — apply 0022 first"}`);
+  }
+  const defn = defRow.definition as {
+    vocabulary: { term_key: string; label: string }[];
+    engagement_types: {
+      key: string;
+      label: string;
+      stages: { key: string; label: string; sort_order: number; terminal_outcome?: string }[];
+    }[];
+    field_definitions: { entity: string; key: string; label: string; data_type: string }[];
+    no_go_rules: string[];
+  };
+
+  // Upgrade-in-place detection, so the re-issue is evented exactly once.
+  const { data: existingTemplate } = await db
+    .from("templates")
+    .select("id, vertical, version")
+    .eq("id", IDS.template)
+    .maybeSingle();
+  const isUpgrade =
+    existingTemplate != null &&
+    (existingTemplate.vertical !== defRow.key || existingTemplate.version !== defRow.version);
+
   await upsert(db, "templates", {
     id: IDS.template,
     business_id: IDS.business,
-    vertical: "uk_immigration_law",
-    version: 1,
-    no_go_rules: [
-      "No immigration advice in outbound drafts beyond IAA Level 1 scope.",
-      "No fee promises without human approval.",
-      "Regulated-advice phrasing blocklist applies to every outbound draft.",
-    ],
+    vertical: defRow.key,
+    version: defRow.version,
+    no_go_rules: defn.no_go_rules,
   });
 
   // Close the circular reference now the template exists.
@@ -176,26 +222,43 @@ async function seedTenant(db: SupabaseClient, ownerUserId: string): Promise<void
     .eq("id", IDS.business);
   if (linkError) throw new Error(`linking business to template failed: ${linkError.message}`);
 
+  const enquiryDef = defn.engagement_types.find((t) => t.key === "enquiry");
+  if (!enquiryDef) throw new Error("Definition carries no 'enquiry' engagement type");
   await upsert(db, "engagement_types", {
     id: IDS.enquiryType,
     template_id: IDS.template,
-    key: "enquiry",
-    label: "Enquiry",
+    key: enquiryDef.key,
+    label: enquiryDef.label,
   });
 
-  for (const [i, stage] of STAGES.entries()) {
+  for (const stage of enquiryDef.stages) {
+    const idx = STAGE_ID_INDEX[stage.key];
+    if (!idx) throw new Error(`No deterministic id mapped for stage "${stage.key}" — extend STAGE_ID_INDEX`);
     await upsert(db, "stage_definitions", {
-      id: stageId(i + 1),
+      id: stageId(idx),
       engagement_type_id: IDS.enquiryType,
       key: stage.key,
       label: stage.label,
-      sort_order: i + 1,
-      is_terminal: "terminal" in stage,
-      terminal_outcome: "terminal" in stage ? stage.terminal : null,
+      sort_order: stage.sort_order,
+      is_terminal: stage.terminal_outcome != null,
+      terminal_outcome: stage.terminal_outcome ?? null,
+      archived_at: null,
     });
   }
 
-  for (const [i, field] of FIELDS.entries()) {
+  // v3 retires two Session 1 stages — archived (soft), never deleted; any
+  // history pointing at them stays legible.
+  for (const retired of RETIRED_STAGE_KEYS) {
+    const { error: archiveError } = await db
+      .from("stage_definitions")
+      .update({ archived_at: new Date().toISOString() })
+      .eq("engagement_type_id", IDS.enquiryType)
+      .eq("key", retired)
+      .is("archived_at", null);
+    if (archiveError) throw new Error(`archiving stage ${retired} failed: ${archiveError.message}`);
+  }
+
+  for (const [i, field] of defn.field_definitions.entries()) {
     await upsert(db, "field_definitions", {
       id: fieldId(i + 1),
       template_id: IDS.template,
@@ -206,29 +269,32 @@ async function seedTenant(db: SupabaseClient, ownerUserId: string): Promise<void
     });
   }
 
-  // X Law vocabulary (§6): pre-instruction engagements are enquiries.
-  await upsert(
-    db,
-    "vocabulary",
-    {
-      id: "01980000-0000-7000-8000-000000000301",
+  for (const term of defn.vocabulary) {
+    const idx = VOCAB_ID_INDEX[term.term_key];
+    if (!idx) throw new Error(`No deterministic id mapped for vocabulary "${term.term_key}" — extend VOCAB_ID_INDEX`);
+    await upsert(db, "vocabulary", {
+      id: vocabId(idx),
       template_id: IDS.template,
-      term_key: "engagement",
-      label: "enquiry",
-    },
-    "id"
-  );
-  await upsert(
-    db,
-    "vocabulary",
-    {
-      id: "01980000-0000-7000-8000-000000000302",
-      template_id: IDS.template,
-      term_key: "engagements",
-      label: "enquiries",
-    },
-    "id"
-  );
+      term_key: term.term_key,
+      label: term.label,
+    });
+  }
+
+  if (isUpgrade) {
+    await emitEvent(db, {
+      business_id: IDS.business,
+      actor_id: IDS.actorMudassir,
+      action: "template.installed",
+      entity_type: "template",
+      entity_id: IDS.template,
+      payload: {
+        from: `${existingTemplate!.vertical} v${existingTemplate!.version}`,
+        to: `${defRow.key} v${defRow.version}`,
+        note: "Install upgraded in place from the re-issued definition; retained stages kept their ids, retired stages archived.",
+      },
+    });
+    console.log(`Template upgraded: ${existingTemplate!.vertical} v${existingTemplate!.version} → ${defRow.key} v${defRow.version}.`);
+  }
 
   // Actors — every row in the system attributes to one of these (§5.1).
   await upsert(db, "actors", {
@@ -433,7 +499,7 @@ async function ingestMetaLead(db: SupabaseClient, fixture: MetaLeadFixture): Pro
     payload: { source: "meta_lead_ads", lead_id: lead.id, display_name: fullName },
   });
 
-  // 2. Engagement at stage New lead, attribution on the engagement (§4.2).
+  // 2. Engagement at stage New, attribution on the engagement (§4.2).
   const newLeadStage = stageId(1);
   const { data: engagement, error: engagementError } = await db
     .from("engagements")
@@ -484,7 +550,7 @@ async function ingestMetaLead(db: SupabaseClient, fixture: MetaLeadFixture): Pro
   // workflow engine's step 2 (create_task) now owns it, spawned by the run
   // with workflow_run_id set. Existing seeded tasks on live are untouched
   // (they sit on the GO-LIVE purge list with the rest of the fixture data).
-  console.log(`Lead ingested: ${fullName} (${phone}) → enquiry at "New lead".`);
+  console.log(`Lead ingested: ${fullName} (${phone}) → enquiry at "New".`);
 }
 
 async function findLeadEngagement(

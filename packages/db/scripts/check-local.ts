@@ -7,6 +7,7 @@ import { verifyStripeSignature } from "../src/stripe";
 import { verifyMetaSignature } from "../src/meta";
 import { quietHoursHoldUntil, QUIET_HOURS_DEFAULT } from "../src/quiet-hours";
 import { evaluateAutoClose } from "../src/auto-close";
+import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -1382,8 +1383,11 @@ async function main() {
        union all select 'optional', count(*)::int from public.first_light_predicates p join public.businesses b on b.id = p.business_id where b.account_id = $1 and p.optional`,
       [signupId, ownerUserId]
     );
+    // Session 11: activation additionally creates the workflow engine actor
+    // (dispatch attribution + the Contacted transition need it) and its
+    // enquiries grant — 3 actors/grants became 4.
     const expected: Record<string, number> = {
-      business: 1, actors: 3, membership: 1, allowlist: 1, grants: 3, tasks: 8, predicates: 8, optional: 1,
+      business: 1, actors: 4, membership: 1, allowlist: 1, grants: 4, tasks: 8, predicates: 8, optional: 1,
     };
     for (const row of checks.rows) {
       if (row.n !== expected[row.label]) {
@@ -1754,6 +1758,208 @@ async function main() {
     );
     const id = await draftWa("Thanks — calling you this afternoon.", "{}");
     await db.query(`select public.approve_communication($1, $2)`, [id, f.human_id]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 11 — First Light: template installation (0022), the Contacted
+  // transition law, and the nurture bands at compressed time.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 11 — template installation and the transition law:");
+
+  // --- template_definitions: readable content, re-issue-only writes -------
+  await expectOk("the v3 definition ships with the schema and is readable by a signed-in user", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    const r = await db.query<{ key: string; version: number; stages: number; nogos: number }>(
+      `select key, version,
+              jsonb_array_length(definition -> 'engagement_types' -> 0 -> 'stages')::int as stages,
+              jsonb_array_length(definition -> 'no_go_rules')::int as nogos
+       from public.template_definitions where key = 'uk_immigration_advisory'`
+    );
+    await db.exec(`reset role`);
+    const d = r.rows[0];
+    if (!d) throw new Error("no definition row visible");
+    if (d.version !== 3 || d.stages !== 10 || d.nogos !== 4) {
+      throw new Error(`definition is not v3/10 stages/4 no-gos: ${JSON.stringify(d)}`);
+    }
+  });
+  await expectError(
+    "a signed-in user cannot write a template definition (re-issue by migration only)",
+    /row-level security|permission denied/,
+    async () => {
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(
+          `insert into public.template_definitions (key, version, display_name) values ('rogue', 1, 'Rogue')`
+        );
+      } finally {
+        await db.exec(`reset role`);
+      }
+    }
+  );
+
+  // --- activation installs the template ------------------------------------
+  let installedTypeId = "";
+  let installedNewLeadId = "";
+  let installedContactedId = "";
+  await expectOk("activation installed UK Immigration Advisory v3 — businesses.template_id is real", async () => {
+    const r = await db.query<{ template_id: string | null; vertical: string; version: number; nogos: number }>(
+      `select b.template_id, t.vertical, t.version, jsonb_array_length(t.no_go_rules)::int as nogos
+       from public.businesses b join public.templates t on t.id = b.template_id
+       where b.id = $1`,
+      [activation!.business_id]
+    );
+    const row = r.rows[0];
+    if (!row?.template_id) throw new Error("businesses.template_id is null after activation");
+    if (row.vertical !== "uk_immigration_advisory" || row.version !== 3 || row.nogos !== 4) {
+      throw new Error(`installed template is not v3 with the four no-gos: ${JSON.stringify(row)}`);
+    }
+  });
+  await expectOk("the installed stage set is the v3 semantic set — Contacted in, pending_qualification out", async () => {
+    const r = await db.query<{ id: string; key: string; label: string; is_terminal: boolean; terminal_outcome: string | null; engagement_type_id: string }>(
+      `select s.id, s.key, s.label, s.is_terminal, s.terminal_outcome, s.engagement_type_id
+       from public.stage_definitions s
+       join public.engagement_types et on et.id = s.engagement_type_id
+       join public.businesses b on b.template_id = et.template_id
+       where b.id = $1
+       order by s.sort_order`,
+      [activation!.business_id]
+    );
+    const keys = r.rows.map((s) => s.key);
+    const expectedKeys = [
+      "new_lead", "contacted", "qualified", "consultation_booked", "consultation_held",
+      "instructed", "won", "closed_lost", "unresponsive", "disqualified",
+    ];
+    if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
+      throw new Error(`stage keys: ${keys.join(", ")}`);
+    }
+    const byKey = Object.fromEntries(r.rows.map((s) => [s.key, s]));
+    if (byKey.new_lead!.label !== "New") throw new Error(`new_lead label: ${byKey.new_lead!.label}`);
+    if (byKey.contacted!.label !== "Contacted") throw new Error(`contacted label: ${byKey.contacted!.label}`);
+    if (byKey.instructed!.is_terminal) throw new Error("instructed is terminal — v3 splits instructed from won");
+    if (byKey.won!.terminal_outcome !== "won") throw new Error("won is not the won-terminal");
+    installedTypeId = byKey.new_lead!.engagement_type_id;
+    installedNewLeadId = byKey.new_lead!.id;
+    installedContactedId = byKey.contacted!.id;
+  });
+  await expectOk("vocabulary and field definitions installed from the definition", async () => {
+    const r = await db.query<{ label: string; n: number }>(
+      `select 'vocab' as label, count(*)::int as n from public.vocabulary v
+         join public.businesses b on b.template_id = v.template_id where b.id = $1
+       union all
+       select 'fields', count(*)::int from public.field_definitions fd
+         join public.businesses b on b.template_id = fd.template_id where b.id = $1`,
+      [activation!.business_id]
+    );
+    for (const row of r.rows) {
+      const want = row.label === "vocab" ? 5 : 5;
+      if (row.n !== want) throw new Error(`${row.label}: expected ${want}, got ${row.n}`);
+    }
+  });
+
+  // --- the Contacted transition law (0022 trigger) -------------------------
+  // Machinery on the activated business: v3 stages, Light's comms grant, the
+  // workflow actor. Seed → stamp → observe: the stamp alone must NOT move
+  // the stage; the genuine dispatch must.
+  await db.exec(`set request.jwt.claim.sub = ''`); // server path: no signed-in subject
+  const tlContact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Transition Lead') returning id`,
+    [activation!.business_id, activation!.light_actor_id]
+  );
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'transition@lead.test', true, '{"transactional": true}'::jsonb)`,
+    [activation!.business_id, activation!.light_actor_id, tlContact.rows[0]!.id]
+  );
+  const tlEngagement = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, stage_entered_at, owner_actor_id)
+     values ($1, $2, $3, 'Transition Lead — enquiry', $4, now(), $5) returning id`,
+    [activation!.business_id, activation!.light_actor_id, installedTypeId, installedNewLeadId, activation!.owner_actor_id]
+  );
+  const tlThread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, engagement_id, channel)
+     values ($1, $2, $3, $4, 'email') returning id`,
+    [activation!.business_id, activation!.light_actor_id, tlContact.rows[0]!.id, tlEngagement.rows[0]!.id]
+  );
+  const tlDraft = async (body: string) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, $5, 'email', 'outbound', 'draft', $6, $2) returning id`,
+      [activation!.business_id, activation!.light_actor_id, tlThread.rows[0]!.id, tlContact.rows[0]!.id, tlEngagement.rows[0]!.id, body]
+    );
+    await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.light_actor_id]);
+    await db.query(`select public.approve_communication($1, $2)`, [r.rows[0]!.id, activation!.owner_actor_id]);
+    return r.rows[0]!.id;
+  };
+
+  const tlStage = async () => {
+    const r = await db.query<{ stage_id: string }>(
+      `select stage_id from public.engagements where id = $1`,
+      [tlEngagement.rows[0]!.id]
+    );
+    return r.rows[0]!.stage_id;
+  };
+
+  const tlComm1 = await tlDraft("Hello — thank you for your enquiry. Booking link inside.");
+  await expectOk("a draft and a STAMP alone never move the stage (not draft, not stamp)", async () => {
+    if ((await tlStage()) !== installedNewLeadId) throw new Error("the enquiry left New before any outbound was dispatched");
+  });
+  await expectOk("the first genuinely dispatched outbound moves New → Contacted through the gated pipeline", async () => {
+    await db.query(`select public.mark_communication_sent($1, 'graph', '<transition-1@firm.example>')`, [tlComm1]);
+    if ((await tlStage()) !== installedContactedId) throw new Error("the enquiry did not move to Contacted on first dispatch");
+    const hist = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.stage_history where engagement_id = $1 and to_stage = $2`,
+      [tlEngagement.rows[0]!.id, installedContactedId]
+    );
+    if (hist.rows[0]!.n !== 1) throw new Error(`stage_history rows to Contacted: ${hist.rows[0]!.n}`);
+    const mover = await db.query<{ actor_type: string }>(
+      `select a.actor_type from public.stage_history h join public.actors a on a.id = h.moved_by
+       where h.engagement_id = $1 and h.to_stage = $2`,
+      [tlEngagement.rows[0]!.id, installedContactedId]
+    );
+    if (mover.rows[0]!.actor_type !== "workflow") throw new Error(`the move attributes to ${mover.rows[0]!.actor_type}, not the workflow actor`);
+  });
+  await expectOk("a second dispatched outbound moves nothing — the law fires once", async () => {
+    const tlComm2 = await tlDraft("A follow-up note.");
+    await db.query(`select public.mark_communication_sent($1, 'graph', '<transition-2@firm.example>')`, [tlComm2]);
+    if ((await tlStage()) !== installedContactedId) throw new Error("the stage moved again");
+    const hist = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.stage_history where engagement_id = $1`,
+      [tlEngagement.rows[0]!.id]
+    );
+    if (hist.rows[0]!.n !== 1) throw new Error(`stage_history rows: ${hist.rows[0]!.n} (expected the single Contacted move)`);
+  });
+
+  // --- nurture bands at compressed time (TIME_SCALE pinned above) ----------
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+  const noStamps: NurtureStamps = {
+    reminder_24h_sent_at: null, reminder_3d_sent_at: null, reminder_7d_sent_at: null, nurture_unsubscribed_at: null,
+  };
+  await expectOk("nurture bands: 24h resume → day-3 story → day-7 founder's note → 30d delete (compressed clock)", async () => {
+    const cases: [number, NurtureStamps, string | null][] = [
+      [scaleDurationMs(25 * HOUR), noStamps, "24h"],
+      [scaleDurationMs(25 * HOUR), { ...noStamps, reminder_24h_sent_at: "x" }, null],
+      [scaleDurationMs(3 * DAY + HOUR), noStamps, "3d"],
+      [scaleDurationMs(3 * DAY + HOUR), { ...noStamps, reminder_3d_sent_at: "x" }, null],
+      [scaleDurationMs(8 * DAY), noStamps, "7d"],
+      [scaleDurationMs(8 * DAY), { ...noStamps, reminder_7d_sent_at: "x" }, null],
+      [scaleDurationMs(31 * DAY), noStamps, "delete"],
+      [scaleDurationMs(HOUR), noStamps, null],
+    ];
+    for (const [age, stamps, want] of cases) {
+      const got = dueNurtureStep(age, stamps);
+      if (got !== want) throw new Error(`age ${age}ms with ${JSON.stringify(stamps)}: got ${got}, want ${want}`);
+    }
+  });
+  await expectOk("an unsubscribed signup receives NO nurture mail — deletion at 30 days still runs", async () => {
+    const unsub: NurtureStamps = { ...noStamps, nurture_unsubscribed_at: "x" };
+    if (dueNurtureStep(scaleDurationMs(25 * HOUR), unsub) !== null) throw new Error("24h mailed an unsubscribed signup");
+    if (dueNurtureStep(scaleDurationMs(4 * DAY), unsub) !== null) throw new Error("3d mailed an unsubscribed signup");
+    if (dueNurtureStep(scaleDurationMs(8 * DAY), unsub) !== null) throw new Error("7d mailed an unsubscribed signup");
+    if (dueNurtureStep(scaleDurationMs(31 * DAY), unsub) !== "delete") throw new Error("30d retention stopped applying");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
