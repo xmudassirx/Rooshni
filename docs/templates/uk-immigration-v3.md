@@ -108,3 +108,29 @@ v3 supersedes the informal v1 (X Law seed) and the unshipped v2 sketch.
 Changes to this template are re-issues with a version bump, evented,
 never rewrites — the template-copy law from Session 10's greeting fix
 applies to the whole template.
+
+## Session 11 installation addendum — builder bookkeeping (24 July 2026)
+
+<!-- Appended by the Session 11 builder quoting the founder's session
+     prompt (the §8 quoted-approval pattern) — the prompt referenced a
+     Contacted stage-semantics block and transition law this document did
+     not yet carry; the rulings are recorded here so the repo stays the
+     only truth. Not part of the signed 20 July text above. -->
+
+Two rulings from the Session 11 prompt, applied by the installed v3:
+
+1. **Stage rename (founder-ruled):** `contacted` / "Contacted" replaces
+   `pending_qualification` in the §Pipeline stage set. Stage 1's display is
+   "New". Installed set: New → Contacted → Qualified → Consultation booked
+   → Consultation held → Instructed, terminals Won · Lost · Unresponsive ·
+   Disqualified.
+
+2. **The Contacted transition law (founder-ruled):** New → Contacted fires
+   automatically on the first DELIVERED outbound — not on a draft, not on
+   a stamp. Enforced in the database on the `sent` transition (0022);
+   "delivered" currently reads as provider-accepted `sent` — no delivery
+   receipts exist yet; when they arrive the condition tightens, not the law.
+
+Where this document lives in the product: the installable definition is a
+`template_definitions` row (0022), re-issued by migration with a version
+bump, never rewritten; per-business installs render from it.
