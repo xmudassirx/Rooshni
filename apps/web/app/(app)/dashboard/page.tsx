@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { EmptyState } from "@/components/shell/empty-state";
+import { OpenFirstLightButton } from "@/components/shell/open-first-light";
 import { PageHead } from "@/components/shell/page-head";
 import { Button } from "@/components/ui/button";
 import { durationSince, formatTime } from "@/lib/format";
@@ -128,6 +130,33 @@ export default async function DashboardPage() {
   const pipelineTotal = stageCounts.reduce((sum, s) => sum + s.count, 0);
 
   const monitorsClear = inbox.length === 0 && (dash.stuck?.length ?? 0) === 0;
+
+  // Day one, before the first enquiry or stamp: the true empty state
+  // (Session 11 mockup). It never shows an invented number — and it points
+  // honestly at First Light instead of claiming a crawl that hasn't run.
+  if (pipelineTotal === 0 && inbox.length === 0) {
+    return (
+      <>
+        <PageHead title="Dashboard" sub="Your day, once there is one" />
+        <EmptyState
+          icon="▦"
+          title="Nothing needs you yet — and that's the truth"
+          action={<OpenFirstLightButton>Open First Light</OpenFirstLightButton>}
+        >
+          <p>
+            This screen fills itself from real rows: enquiries that arrive,
+            approvals waiting for your stamp, tasks due today. It will never
+            show you an invented number.
+          </p>
+          <p>
+            <span className="light-spark">✦</span> Your setup lives in{" "}
+            <b>First Light</b>, top right — each row you finish brings your
+            first enquiry closer.
+          </p>
+        </EmptyState>
+      </>
+    );
+  }
 
   return (
     <>

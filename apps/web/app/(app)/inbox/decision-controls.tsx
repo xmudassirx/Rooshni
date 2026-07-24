@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { Ban, Stamp } from "lucide-react";
+import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Ban, Check, Stamp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +33,26 @@ export function DecisionControls({
   const [rejectState, reject, rejecting] = useActionState(rejectAction, initialState);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const router = useRouter();
+
+  // Session 11 (founder-ruled): a stamped row never disappears instantly —
+  // it shows its transient state, then leaves for History on the refresh.
+  useEffect(() => {
+    if (!approveState.stamped) return;
+    const t = window.setTimeout(() => router.refresh(), 2200);
+    return () => window.clearTimeout(t);
+  }, [approveState.stamped, router]);
+
+  if (approveState.stamped) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-ledger/40 bg-ledger/10 px-3 py-2 text-[13px] font-semibold text-ledger">
+        <Check className="size-4" strokeWidth={3} /> Stamped — on The Record
+        <span className="font-mono text-[10px] font-normal tracking-wide uppercase opacity-80">
+          dispatching now · find it again under History
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-2">

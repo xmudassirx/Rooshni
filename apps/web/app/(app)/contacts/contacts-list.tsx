@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { HonestButton } from "@/components/ui/honest-button";
 import { formatWhen } from "@/lib/format";
 import type { ContactListRow } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
@@ -240,11 +241,32 @@ export function ContactsList({ contacts }: { contacts: ContactListRow[] }) {
       )}
 
       {visible.length === 0 ? (
-        <div className="glass rounded-xl border-dashed p-8 text-center font-mono text-xs tracking-wide text-ink-faint uppercase">
-          {contacts.length === 0
-            ? "No contacts yet — they arrive by themselves from leads and forms"
-            : "No contacts match the search"}
-        </div>
+        contacts.length === 0 ? (
+          // Session 11 true empty state — consent law up front, no invented rows.
+          <div className="glass mx-auto mt-6 max-w-[560px] rounded-2xl border-dashed p-8 text-center">
+            <div className="mb-2 text-[28px]">◉</div>
+            <h3 className="mb-1.5 font-display text-[19px] font-extrabold">Nobody here yet</h3>
+            <p className="mx-auto max-w-[46ch] text-[13.5px] text-ink-soft">
+              Contacts arrive from lead forms, conversations, or an import. When
+              you import, consent is mapped per channel, per person — unknown
+              means not consented, and Light will not message anyone it
+              can&rsquo;t prove said yes.
+            </p>
+            <div className="mt-3.5">
+              <HonestButton
+                size="sm"
+                variant="default"
+                notice="Import opens the consent-mapping screen — per channel, explicit, enforced at pre-flight. It arrives with the import session and fires only when there are contacts to map."
+              >
+                ⇪ Import contacts
+              </HonestButton>
+            </div>
+          </div>
+        ) : (
+          <div className="glass rounded-xl border-dashed p-8 text-center font-mono text-xs tracking-wide text-ink-faint uppercase">
+            No contacts match the search
+          </div>
+        )
       ) : null}
 
       <p className="mt-3 font-mono text-xs text-ink-faint">

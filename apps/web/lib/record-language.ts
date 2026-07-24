@@ -33,8 +33,33 @@ export function describeEvent(action: string, payload: Record<string, unknown>):
         .filter(Boolean)
         .join(" ");
     }
-    case "engagement.stage_changed":
-      return "stage moved" + (str("to_stage_key") ? ` → ${str("to_stage_key")!.replace(/_/g, " ")}` : "");
+    case "engagement.stage_changed": {
+      const to = str("to_stage_key") ?? str("to_stage");
+      const auto = str("reason") === "first_outbound_dispatched";
+      return (
+        "stage moved" +
+        (to ? ` → ${to.replace(/_/g, " ")}` : "") +
+        (auto ? " — first outbound reached the client (the template's transition law)" : "")
+      );
+    }
+    case "template.installed": {
+      const note = str("note");
+      return note ?? "vertical template installed — stages, vocabulary and no-go rules now render from it";
+    }
+    case "settings.updated": {
+      const key = str("key");
+      return `settings confirmed${key ? ` — ${key.replace(/_/g, " ")}` : ""} · a human stamp, on the record`;
+    }
+    case "first_light.predicate_satisfied": {
+      const key = str("predicate_key");
+      return `First Light tick earned${key ? ` — ${key.replace(/_/g, " ")}` : ""}`;
+    }
+    case "first_light.row_skipped": {
+      const reason = str("reason");
+      return "First Light optional row skipped" + (reason ? ` — "${reason}"` : "");
+    }
+    case "first_light.completed":
+      return "First Light complete — every tick earned; the pill has retired itself";
     case "task.created": {
       const due = str("due_at");
       return "task created" + (due ? ` · due ${formatWhen(due)}` : "");

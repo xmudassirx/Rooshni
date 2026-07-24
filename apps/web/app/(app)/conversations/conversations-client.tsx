@@ -152,8 +152,19 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
   );
 }
 
-export function ConversationsClient({ threads }: { threads: ConversationThread[] }) {
-  const [selectedId, setSelectedId] = useState<string | null>(threads[0]?.id ?? null);
+export function ConversationsClient({
+  threads,
+  initialThreadId = null,
+}: {
+  threads: ConversationThread[];
+  /** Deep-link target (Session 11 — the inbox History tab links here). */
+  initialThreadId?: string | null;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(
+    (initialThreadId && threads.some((t) => t.id === initialThreadId)
+      ? initialThreadId
+      : null) ?? threads[0]?.id ?? null
+  );
   const [filter, setFilter] = useState<"all" | "you" | "light">("all");
   const [query, setQuery] = useState("");
   // Founder amendment (fix round 4, decision 77): the header quick-switch is
@@ -221,13 +232,26 @@ export function ConversationsClient({ threads }: { threads: ConversationThread[]
   const lightCount = threads.filter((t) => t.lightHandling || t.hasPendingDraft).length;
 
   if (!threads.length) {
+    // Session 11 true empty state — teaches the surface and points at the
+    // one door (decision 58).
     return (
       <div className="glass mx-auto mt-10 max-w-[560px] rounded-2xl border-dashed p-9 text-center">
-        <h2 className="mb-2 font-display text-xl font-extrabold">No conversations yet</h2>
-        <p className="mx-auto max-w-[42ch] text-sm text-ink-soft">
-          Threads appear here the moment a message rides a channel — every one a
-          row on The Record, nothing deletable.
+        <div className="mb-2 text-[28px]">◧</div>
+        <h2 className="mb-2 font-display text-xl font-extrabold">
+          No conversations yet — no channels connected
+        </h2>
+        <p className="mx-auto max-w-[46ch] text-sm text-ink-soft">
+          Once email and WhatsApp are connected, every message lands here,
+          threaded per contact. Light drafts; nothing sends without your stamp.
         </p>
+        <div className="mt-3.5">
+          <Link
+            href="/settings?tab=integrations"
+            className="inline-block rounded-md bg-accent px-3.5 py-2 text-[13px] font-semibold text-white shadow-panel"
+          >
+            Connect a channel — Settings → Integrations
+          </Link>
+        </div>
       </div>
     );
   }

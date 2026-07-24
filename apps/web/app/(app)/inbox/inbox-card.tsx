@@ -14,6 +14,16 @@ export interface CardCheck {
   detail: string | null;
 }
 
+export interface CardContext {
+  engagementId: string | null;
+  engagementTitle: string | null;
+  stageLabel: string | null;
+  answers: { label: string; value: string }[];
+  source: string | null;
+  formId: string | null;
+  channels: { channel: string; value: string; consented: boolean }[];
+}
+
 export interface InboxCardProps {
   itemType: "communication" | "content" | "task";
   itemId: string;
@@ -30,6 +40,8 @@ export interface InboxCardProps {
   /** Checks that actually ran — nothing else may show a tick. */
   checks: CardCheck[];
   preflightPass: boolean | null;
+  /** Session 11 — the lead's context, expandable above the draft. */
+  context: CardContext | null;
 }
 
 /** Short names for the facts line, per pre-flight check key. */
@@ -76,6 +88,68 @@ function PreflightLine({
   );
 }
 
+function ContextSection({ context }: { context: CardContext }) {
+  const [open, setOpen] = useState(false);
+  const hasFacts =
+    context.answers.length > 0 || context.channels.length > 0 || context.source !== null;
+  if (!hasFacts) return null;
+
+  return (
+    <div className="mt-2 rounded-lg border border-dashed border-rule">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-[10px] tracking-wide text-ink-soft uppercase"
+      >
+        Lead context {context.engagementTitle ? `· ${context.engagementTitle}` : ""}
+        <span className="ml-auto text-ink-faint">{open ? "− collapse" : "+ expand"}</span>
+      </button>
+      {open ? (
+        <div className="border-t border-dashed border-rule px-3 py-2.5 text-[12.5px]">
+          <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+            {context.stageLabel ? (
+              <>
+                <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">Stage</span>
+                <span>{context.stageLabel}</span>
+              </>
+            ) : null}
+            {context.answers.map((a) => (
+              <span key={a.label} className="contents">
+                <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">{a.label}</span>
+                <span>{a.value}</span>
+              </span>
+            ))}
+            {context.source ? (
+              <>
+                <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">Source</span>
+                <span>
+                  {context.source === "meta" ? "Meta lead form" : context.source}
+                  {context.formId ? ` · form ${context.formId}` : ""}
+                </span>
+              </>
+            ) : null}
+            {context.channels.map((c) => (
+              <span key={`${c.channel}-${c.value}`} className="contents">
+                <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">{c.channel}</span>
+                <span>
+                  {c.value}{" "}
+                  <span className={c.consented ? "text-ledger" : "text-stamp"}>
+                    {c.consented ? "· consented" : "· no consent"}
+                  </span>
+                </span>
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+            Full form answers arrive with query-aware drafting (Phase 2) — shown here: everything the database holds.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function InboxCard(props: InboxCardProps) {
   const [open, setOpen] = useState(false);
   const failures = props.checks.filter((c) => !c.pass && c.detail);
@@ -103,6 +177,10 @@ export function InboxCard(props: InboxCardProps) {
           waiting {props.waitingFor}
         </span>
       </div>
+
+      {/* The lead's form answers and consent, above the draft (Session 11 —
+          glance and stamp without leaving the inbox). */}
+      {props.context ? <ContextSection context={props.context} /> : null}
 
       {/* The message, readable in place; clicking opens the full text. */}
       <button

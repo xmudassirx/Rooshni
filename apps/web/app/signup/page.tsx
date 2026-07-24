@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
-import { createServiceClient, getSignupByResumeToken } from "@rooshni/db";
+import {
+  createServiceClient,
+  getDefaultTemplateDefinition,
+  getSignupByResumeToken,
+} from "@rooshni/db";
 
 import { SignupWizard, type ResumedSignup } from "./signup-wizard";
 
@@ -48,5 +52,17 @@ export default async function SignupPage({
     }
   }
 
-  return <SignupWizard resumed={resumed} />;
+  // Session 11: the vertical footer renders FROM the template definition
+  // (the session-9 addendum rule) — no business exists pre-payment, so the
+  // service client reads the platform definition store directly.
+  let verticalFooter = "";
+  try {
+    const def = await getDefaultTemplateDefinition(createServiceClient());
+    verticalFooter = def.content.signup_footer;
+  } catch {
+    // A missing definition never blocks a person trying to sign up; the
+    // footer simply stays absent rather than inventing a vertical.
+  }
+
+  return <SignupWizard resumed={resumed} verticalFooter={verticalFooter} />;
 }

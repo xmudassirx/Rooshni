@@ -9,6 +9,9 @@ import { dispatchAfterApproval } from "@/lib/server/outbound";
 
 export interface DecisionState {
   error: string | null;
+  /** Session 11: the stamp landed — the card shows its transient
+   * "✓ Stamped — on The Record" state before leaving the view. */
+  stamped?: boolean;
 }
 
 /**
@@ -38,8 +41,10 @@ export async function approveAction(
   // the tick sweep). APPROVED ≠ SENT: a carriage problem never unwinds the
   // approval.
   await dispatchAfterApproval(communicationId);
-  revalidatePath("/", "layout");
-  redirect("/inbox");
+  // Session 11 (founder-ruled at the Session 10 close): no redirect — the
+  // card shows "✓ Stamped — on The Record" briefly, then the client
+  // refreshes and the row leaves the stamps-owed view for History.
+  return { error: null, stamped: true };
 }
 
 /**

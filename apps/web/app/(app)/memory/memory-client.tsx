@@ -31,7 +31,9 @@ export function MemoryClient({ businessName }: { businessName: string }) {
   // v2 ships the paste box prefilled with a sample — editable input material
   // for the stub, never displayed as data.
   const [pasteText, setPasteText] = useState(
-    "Prefers concise answers without preamble. Runs an immigration law firm in Manchester. Interested in AI tools for business automation. Writes in British English."
+    // Session 11 vertical sweep: the sample stays vertical-neutral — the
+    // firm's own vertical lives in template content, never in chrome copy.
+    "Prefers concise answers without preamble. Runs a regulated advisory firm in Manchester. Interested in AI tools for business automation. Writes in British English."
   );
   const [notice, setNotice] = useState<string | null>(null);
   const [scope, setScope] = useState(0);

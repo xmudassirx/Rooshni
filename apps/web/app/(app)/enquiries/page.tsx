@@ -1,7 +1,9 @@
 import Link from "next/link";
 
+import { EmptyState } from "@/components/shell/empty-state";
 import { PageHead } from "@/components/shell/page-head";
 import { Badge } from "@/components/ui/badge";
+import { HonestButton } from "@/components/ui/honest-button";
 import { durationSince } from "@/lib/format";
 import { getPipeline, type PipelineCard } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
@@ -52,6 +54,47 @@ function Card({ card }: { card: PipelineCard }) {
 export default async function EnquiriesPage() {
   const stages = await getPipeline();
 
+  // Day one, before the first enquiry: the true empty state (Session 11
+  // mockup). The stage line renders FROM the installed template's own
+  // stage set — never a hardcoded vocabulary.
+  if (stages.every((s) => s.cards.length === 0)) {
+    const stageLine = [
+      ...stages.filter((s) => !s.isTerminal).map((s) => s.label),
+      "Closed",
+    ].join(" → ");
+    return (
+      <>
+        <PageHead
+          title="Enquiries"
+          sub="Every enquiry moves left to right — one stage vocabulary, every surface"
+        />
+        <EmptyState
+          icon="☰"
+          title="Your pipeline, before its first enquiry"
+          action={
+            <HonestButton
+              size="sm"
+              variant="default"
+              notice="Manual entry always works — Light is the fast path, never the only path. The add-by-hand form arrives with its session."
+            >
+              + Add an enquiry by hand
+            </HonestButton>
+          }
+        >
+          <p>
+            {stageLine}. The moment a lead form, WhatsApp message or email
+            arrives, it lands here as a card — captured by Light, moved only
+            through gates.
+          </p>
+          <p>
+            Connect Meta Lead Forms and WhatsApp in First Light and this board
+            starts filling itself.
+          </p>
+        </EmptyState>
+      </>
+    );
+  }
+
   return (
     <>
       <PageHead
@@ -66,11 +109,13 @@ export default async function EnquiriesPage() {
             <div
               className={cn(
                 "relative flex items-center gap-2 rounded-t-lg px-3 py-1.5 font-mono text-[11px] font-semibold tracking-wide text-paper uppercase",
-                stage.key === "instructed" ? "bg-ledger" : "bg-ink"
+                // v3 splits Instructed from the Won terminal — green stays
+                // done-semantics only (decision 61).
+                stage.key === "won" ? "bg-ledger" : "bg-ink"
               )}
             >
               {stage.label}
-              {stage.key === "instructed" ? " ✓" : ""}
+              {stage.key === "won" ? " ✓" : ""}
               <span className="ml-auto rounded-lg bg-paper/20 px-1.5 text-[10.5px]">
                 {stage.cards.length}
               </span>

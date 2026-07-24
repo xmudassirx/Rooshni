@@ -174,6 +174,17 @@ export async function getInboxCount(): Promise<number> {
   return count ?? 0;
 }
 
+export interface CommunicationContext {
+  engagementId: string | null;
+  engagementTitle: string | null;
+  stageLabel: string | null;
+  /** Whitelisted engagement attributes, labelled via field_definitions. */
+  answers: { label: string; value: string }[];
+  source: string | null;
+  formId: string | null;
+  channels: { channel: string; value: string; consented: boolean }[];
+}
+
 export interface CommunicationDetail {
   id: string;
   body: string;
@@ -181,6 +192,9 @@ export interface CommunicationDetail {
   subject: string | null;
   contactName: string | null;
   scheduledFor: string | null;
+  /** Session 11 — context-in-card: what the database holds about the lead,
+   * so the founder can glance and stamp without leaving the inbox. */
+  context: CommunicationContext | null;
 }
 
 /** Full draft for the inbox detail panel — the view carries only a preview. */
@@ -191,15 +205,84 @@ export async function getCommunicationDetail(
   const { data, error } = await db
     .from("communications")
     .select(
-      "id, body, channel, scheduled_for, comm_threads(subject), contacts(display_name)"
+      "id, body, channel, scheduled_for, engagement_id, contact_id, comm_threads(subject, contact_id), contacts(display_name)"
     )
     .eq("id", id)
     .eq("business_id", business.id)
     .maybeSingle();
   if (error) throw new Error(`communication lookup failed: ${error.message}`);
   if (!data) return null;
-  const thread = data.comm_threads as unknown as { subject: string | null } | null;
+  const thread = data.comm_threads as unknown as {
+    subject: string | null;
+    contact_id: string | null;
+  } | null;
   const contact = data.contacts as unknown as { display_name: string } | null;
+
+  const contactId = data.contact_id ?? thread?.contact_id ?? null;
+  let context: CommunicationContext | null = null;
+  if (data.engagement_id || contactId) {
+    const [engagementRes, channelsRes] = await Promise.all([
+      data.engagement_id
+        ? db
+            .from("engagements")
+            .select("id, title, attributes, attribution, stage_definitions(label)")
+            .eq("id", data.engagement_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      contactId
+        ? db
+            .from("contact_channels")
+            .select("channel, value, consent")
+            .eq("contact_id", contactId)
+            .is("archived_at", null)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    const engagement = engagementRes.data as unknown as {
+      id: string;
+      title: string;
+      attributes: Record<string, unknown> | null;
+      attribution: Record<string, unknown> | null;
+      stage_definitions: { label: string } | { label: string }[] | null;
+    } | null;
+
+    // Attribute labels come from the template's field_definitions — the
+    // whitelist is the vocabulary (§2.3).
+    let answers: { label: string; value: string }[] = [];
+    const attrs = (engagement?.attributes ?? {}) as Record<string, unknown>;
+    const attrKeys = Object.keys(attrs).filter((k) => typeof attrs[k] === "string");
+    if (attrKeys.length) {
+      const { data: fields } = await db
+        .from("field_definitions")
+        .select("key, label")
+        .eq("entity", "engagement")
+        .in("key", attrKeys);
+      const labelByKey = new Map((fields ?? []).map((f) => [f.key, f.label]));
+      answers = attrKeys.map((k) => ({
+        label: labelByKey.get(k) ?? k.replace(/_/g, " "),
+        value: String(attrs[k]),
+      }));
+    }
+    const attribution = (engagement?.attribution ?? {}) as Record<string, unknown>;
+    const stageRel = engagement?.stage_definitions;
+    context = {
+      engagementId: engagement?.id ?? null,
+      engagementTitle: engagement?.title ?? null,
+      stageLabel: Array.isArray(stageRel) ? (stageRel[0]?.label ?? null) : (stageRel?.label ?? null),
+      answers,
+      source: typeof attribution.source === "string" ? attribution.source : null,
+      formId: typeof attribution.form_id === "string" ? attribution.form_id : null,
+      channels: ((channelsRes.data ?? []) as {
+        channel: string;
+        value: string;
+        consent: Record<string, unknown> | null;
+      }[]).map((c) => ({
+        channel: c.channel,
+        value: c.value,
+        consented: Boolean(c.consent && (c.consent.transactional || c.consent.marketing)),
+      })),
+    };
+  }
+
   return {
     id: data.id,
     body: data.body,
@@ -207,7 +290,90 @@ export async function getCommunicationDetail(
     subject: thread?.subject ?? null,
     contactName: contact?.display_name ?? null,
     scheduledFor: data.scheduled_for,
+    context,
   };
+}
+
+export interface InboxHistoryRow {
+  eventId: string;
+  action: "approved" | "rejected";
+  occurredAt: string;
+  actorName: string | null;
+  reason: string | null;
+  communicationId: string;
+  channel: string | null;
+  preview: string | null;
+  contactName: string | null;
+  threadId: string | null;
+  engagementId: string | null;
+}
+
+/** Session 11 — the inbox History tab: stamped and refused decisions read
+ * from The Record (the events ARE the history; the default view stays
+ * stamps-owed-only). */
+export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> {
+  const { db, business } = await getAppContext();
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: events, error } = await db
+    .from("events")
+    .select("id, action, occurred_at, entity_id, payload, actors(display_name)")
+    .eq("business_id", business.id)
+    .in("action", ["communication.approved", "communication.rejected"])
+    .gte("occurred_at", since)
+    .order("occurred_at", { ascending: false })
+    .limit(200);
+  if (error) throw new Error(`inbox history query failed: ${error.message}`);
+  if (!events?.length) return [];
+
+  const commIds = [...new Set(events.map((e) => e.entity_id).filter(Boolean))] as string[];
+  const { data: comms, error: commError } = commIds.length
+    ? await db
+        .from("communications")
+        .select("id, channel, body, thread_id, engagement_id, contact_id, comm_threads(contact_id), contacts(display_name)")
+        .in("id", commIds)
+    : { data: [], error: null };
+  if (commError) throw new Error(`history communications query failed: ${commError.message}`);
+  const commById = new Map((comms ?? []).map((c) => [c.id, c]));
+
+  return events.flatMap((e) => {
+    if (!e.entity_id) return [];
+    const comm = commById.get(e.entity_id) as
+      | {
+          id: string;
+          channel: string;
+          body: string;
+          thread_id: string | null;
+          engagement_id: string | null;
+          contacts: { display_name: string } | { display_name: string }[] | null;
+        }
+      | undefined;
+    const actorRel = e.actors as unknown as
+      | { display_name: string }
+      | { display_name: string }[]
+      | null;
+    const contactRel = comm?.contacts;
+    const payload = (e.payload ?? {}) as Record<string, unknown>;
+    return [
+      {
+        eventId: e.id,
+        action: e.action === "communication.approved" ? ("approved" as const) : ("rejected" as const),
+        occurredAt: e.occurred_at,
+        actorName: Array.isArray(actorRel)
+          ? (actorRel[0]?.display_name ?? null)
+          : (actorRel?.display_name ?? null),
+        reason: typeof payload.reason === "string" ? payload.reason : null,
+        communicationId: e.entity_id,
+        channel: comm?.channel ?? null,
+        preview: comm?.body ? comm.body.slice(0, 140) : null,
+        contactName: Array.isArray(contactRel)
+          ? (contactRel[0]?.display_name ?? null)
+          : (contactRel?.display_name ?? null),
+        threadId: comm?.thread_id ?? null,
+        engagementId: comm?.engagement_id ?? null,
+      },
+    ];
+  });
 }
 
 // --- Dashboard ---------------------------------------------------------------

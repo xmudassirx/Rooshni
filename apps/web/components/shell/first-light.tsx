@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 
@@ -76,7 +76,24 @@ export function FirstLight({
   const [skipReason, setSkipReason] = useState("");
   const [, startTransition] = useTransition();
 
-  if (state.absent || state.retired) return null;
+  const live = !state.absent && !state.retired;
+
+  // Surfaces open the panel by event (the dashboard's empty-state CTA) —
+  // panel state lives here alone.
+  useEffect(() => {
+    if (!live) return;
+    const handler = () => {
+      setOpen(true);
+      startTransition(async () => {
+        await runFirstLightEvaluation();
+        router.refresh();
+      });
+    };
+    window.addEventListener("first-light:open", handler);
+    return () => window.removeEventListener("first-light:open", handler);
+  }, [live, router]);
+
+  if (!live) return null;
 
   const openPanel = () => {
     setOpen(true);

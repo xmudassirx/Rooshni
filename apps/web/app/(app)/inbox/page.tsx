@@ -1,8 +1,17 @@
+import Link from "next/link";
 import type { ApprovalInboxRow } from "@rooshni/db";
 
 import { PageHead } from "@/components/shell/page-head";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { durationSince, formatWhen } from "@/lib/format";
-import { getCommunicationDetail, getInbox } from "@/lib/server/queries";
+import {
+  getCommunicationDetail,
+  getInbox,
+  getInboxHistory,
+  type InboxHistoryRow,
+} from "@/lib/server/queries";
+import { cn } from "@/lib/utils";
 import { InboxCard, type InboxCardProps } from "./inbox-card";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +29,7 @@ async function toCardProps(row: ApprovalInboxRow): Promise<InboxCardProps> {
   const scheduledNote = `Waiting since ${formatWhen(row.awaiting_since)}${
     row.scheduled_for
       ? ` · sends ${formatWhen(row.scheduled_for)} on approval`
-      : " · sends when the send pipeline exists — approved ≠ sent"
+      : " · dispatches on approval — quiet hours hold it"
   }`;
 
   return {
@@ -37,11 +46,70 @@ async function toCardProps(row: ApprovalInboxRow): Promise<InboxCardProps> {
     scheduledNote,
     checks: row.preflight?.checks ?? [],
     preflightPass: row.preflight_pass,
+    context: detail?.context ?? null,
   };
 }
 
-export default async function InboxPage() {
-  const rows = await getInbox();
+function HistoryRow({ row }: { row: InboxHistoryRow }) {
+  return (
+    <div className="glass flex flex-wrap items-start gap-2.5 rounded-xl px-4 py-3">
+      <span
+        className={cn(
+          "mt-0.5 rounded-md border px-2 py-0.5 font-mono text-[9.5px] font-semibold tracking-wide uppercase",
+          row.action === "approved"
+            ? "border-ledger/40 bg-ledger/10 text-ledger"
+            : "border-stamp/40 bg-stamp/10 text-stamp"
+        )}
+      >
+        {row.action === "approved" ? "✓ Approved" : "✗ Rejected"}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
+          <Badge variant="source">{channelLabel(row.channel)}</Badge>
+          {row.contactName ? <span className="font-semibold">→ {row.contactName}</span> : null}
+          <span className="ml-auto font-mono text-[10px] text-ink-faint">
+            {formatWhen(row.occurredAt)}
+            {row.actorName ? ` · by ${row.actorName}` : ""}
+          </span>
+        </div>
+        {row.preview ? (
+          <p className="mt-1 line-clamp-1 text-[12.5px] text-ink-soft">{row.preview}</p>
+        ) : null}
+        {row.reason ? (
+          <p className="mt-1 text-[12px] text-stamp">&ldquo;{row.reason}&rdquo;</p>
+        ) : null}
+        <div className="mt-1.5 flex gap-3 font-mono text-[10px] tracking-wide uppercase">
+          {row.threadId ? (
+            <Link href={`/conversations?thread=${row.threadId}`} className="text-accent hover:underline">
+              Open thread →
+            </Link>
+          ) : null}
+          <Link
+            href={
+              row.engagementId
+                ? `/record?entity_type=engagement&entity_id=${row.engagementId}`
+                : "/record"
+            }
+            className="text-accent hover:underline"
+          >
+            On The Record →
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default async function InboxPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string; days?: string }>;
+}) {
+  const params = await searchParams;
+  const days: 7 | 30 = params.days === "30" ? 30 : 7;
+  const activeTab = params.tab === "history" ? "history" : "owed";
+
+  const [rows, history] = await Promise.all([getInbox(), getInboxHistory(days)]);
   const cards = await Promise.all(rows.map(toCardProps));
 
   return (
@@ -50,21 +118,68 @@ export default async function InboxPage() {
         title="Approval Inbox"
         sub="Only stamps owed live here — incoming client email belongs to Conversations"
       />
-      {cards.length === 0 ? (
-        <div className="glass mx-auto mt-10 max-w-[560px] rounded-2xl border-dashed p-9 text-center">
-          <h2 className="mb-2 font-display text-xl font-extrabold">Nothing owed</h2>
-          <p className="text-sm text-ink-soft">
-            No stamps are waiting. New drafts from Light land here the moment
-            they are submitted.
-          </p>
-        </div>
-      ) : (
-        <div className="flex max-w-[860px] flex-col gap-3">
-          {cards.map((card) => (
-            <InboxCard key={`${card.itemType}-${card.itemId}`} {...card} />
-          ))}
-        </div>
-      )}
+      <Tabs defaultValue={activeTab}>
+        <TabsList>
+          <TabsTrigger value="owed">
+            Stamps owed{cards.length ? ` · ${cards.length}` : ""}
+          </TabsTrigger>
+          <TabsTrigger value="history">History</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="owed">
+          {cards.length === 0 ? (
+            <div className="glass mx-auto mt-6 max-w-[560px] rounded-2xl border-dashed p-9 text-center">
+              <h2 className="mb-2 font-display text-xl font-extrabold">Nothing owed</h2>
+              <p className="text-sm text-ink-soft">
+                No stamps are waiting. New drafts from Light land here the moment
+                they are submitted.
+              </p>
+            </div>
+          ) : (
+            <div className="flex max-w-[860px] flex-col gap-3">
+              {cards.map((card) => (
+                <InboxCard key={`${card.itemType}-${card.itemId}`} {...card} />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="history">
+          <div className="mb-3 flex items-center gap-2 font-mono text-[10.5px] tracking-wide text-ink-faint uppercase">
+            Decisions from The Record ·
+            <Link
+              href="/inbox?tab=history&days=7"
+              className={cn("hover:underline", days === 7 ? "font-bold text-accent" : "")}
+            >
+              last 7 days
+            </Link>
+            ·
+            <Link
+              href="/inbox?tab=history&days=30"
+              className={cn("hover:underline", days === 30 ? "font-bold text-accent" : "")}
+            >
+              last 30 days
+            </Link>
+          </div>
+          {history.length === 0 ? (
+            <div className="glass mx-auto mt-6 max-w-[560px] rounded-2xl border-dashed p-9 text-center">
+              <h2 className="mb-2 font-display text-xl font-extrabold">
+                No decisions in the last {days} days
+              </h2>
+              <p className="text-sm text-ink-soft">
+                Approved and rejected drafts appear here, read straight from The
+                Record — nothing is ever deleted, only decided.
+              </p>
+            </div>
+          ) : (
+            <div className="flex max-w-[860px] flex-col gap-2.5">
+              {history.map((row) => (
+                <HistoryRow key={row.eventId} row={row} />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
       <p className="mt-4 font-mono text-xs text-ink-faint">
         Approving here writes communication.approved to the ledger — the inbox
         is a view over pending states, not a place things live.

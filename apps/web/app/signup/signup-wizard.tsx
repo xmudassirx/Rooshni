@@ -81,7 +81,14 @@ function Brand({ sub }: { sub: string }) {
   );
 }
 
-export function SignupWizard({ resumed }: { resumed: ResumedSignup | null }) {
+export function SignupWizard({
+  resumed,
+  verticalFooter = "",
+}: {
+  resumed: ResumedSignup | null;
+  /** Rendered from the template definition, never hardcoded (Session 11). */
+  verticalFooter?: string;
+}) {
   const [step, setStep] = useState<1 | 2>(resumed ? 2 : 1);
   const [name, setName] = useState("");
   const [businessName, setBusinessName] = useState(resumed?.businessName ?? "");
@@ -196,10 +203,13 @@ export function SignupWizard({ resumed }: { resumed: ResumedSignup | null }) {
                 </button>
               </div>
             </div>
-            <p className="mt-3 text-center font-mono text-[11px] uppercase tracking-[0.05em] text-ink-faint">
-              UK Immigration Advisory · v3 applies — Barakah is built for immigration firms first.
-              Vertical settings live in Settings → General.
-            </p>
+            {/* Session 11: rendered FROM the template definition — the
+                hardcoded vertical line is gone (session-9 addendum rule). */}
+            {verticalFooter ? (
+              <p className="mt-3 text-center font-mono text-[11px] uppercase tracking-[0.05em] text-ink-faint">
+                {verticalFooter}
+              </p>
+            ) : null}
           </>
         ) : (
           <>

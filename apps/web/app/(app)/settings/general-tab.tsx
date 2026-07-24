@@ -1,5 +1,5 @@
 import { HonestButton } from "@/components/ui/honest-button";
-import { getBusinessConfig } from "@/lib/server/queries";
+import { getBusinessConfig, getTemplateContent } from "@/lib/server/queries";
 
 /*
  * Settings → General, master mockup v2 (setSTab 'general'): identity and
@@ -44,7 +44,9 @@ const EDIT_NOTICE =
   "Editable with the settings session — saved as business config, and the change itself is a line on The Record (settings.updated).";
 
 export async function GeneralTab() {
-  const config = await getBusinessConfig();
+  // Session 11: vertical content (display name, pack categories, no-go
+  // rules) renders FROM the installed template definition.
+  const [config, template] = await Promise.all([getBusinessConfig(), getTemplateContent()]);
   const s = config.settings;
 
   const edit = (
@@ -102,11 +104,13 @@ export async function GeneralTab() {
         <Row
           k="Vertical template"
           v={
-            config.template
-              ? `${config.template.vertical} · v${config.template.version}`
-              : "None"
+            template
+              ? `${template.displayName} · v${template.version}`
+              : config.template
+                ? `${config.template.vertical} · v${config.template.version}`
+                : "None"
           }
-          small="Vocabulary (“enquiry”), pipeline stages, no-go rules, knowledge pack — one bundle over the six primitives"
+          small="Vocabulary (“enquiry”), pipeline stages, no-go rules, knowledge pack — one bundle over the six primitives, installed from the definition"
           action={
             <HonestButton
               size="sm"
@@ -119,8 +123,16 @@ export async function GeneralTab() {
         />
         <Row
           k="Knowledge pack"
-          v="Not yet built"
-          small="What Light may answer from — advice beyond the pack always deflects to booking. The pack store arrives with its session."
+          v={
+            template?.knowledgePackCategories.length
+              ? `Store not yet built · expects ${template.knowledgePackCategories.length} categories`
+              : "Not yet built"
+          }
+          small={
+            template?.knowledgePackCategories.length
+              ? `${template.knowledgePackCategories.join(" · ")} — the store itself arrives with its session; advice beyond the pack always deflects to booking.`
+              : "What Light may answer from — advice beyond the pack always deflects to booking. The pack store arrives with its session."
+          }
           action={
             <HonestButton
               size="sm"
@@ -134,16 +146,22 @@ export async function GeneralTab() {
         <Row
           k="No-go rules"
           v={
-            config.template
-              ? `${config.template.noGoRules} active`
-              : "None"
+            template
+              ? `${template.noGoRules.length} active`
+              : config.template
+                ? `${config.template.noGoRules} active`
+                : "None"
           }
-          small="e.g. never advise before instruction · never promise outcomes — enforced at pre-flight, not by hope"
+          small={
+            template?.noGoRules.length
+              ? template.noGoRules.map((r, i) => `${i + 1}. ${r}`).join("  ")
+              : "Enforced at pre-flight, not by hope"
+          }
           action={
             <HonestButton
               size="sm"
               variant="ghost"
-              notice="No-go rules are readable and editable in plain English with their session; each edit is evented."
+              notice="No-go rules are firm-editable in plain English with their session; each edit is evented. Reviewing them in First Light earns that row's tick."
             >
               view
             </HonestButton>

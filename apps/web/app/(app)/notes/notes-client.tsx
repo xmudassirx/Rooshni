@@ -75,6 +75,29 @@ export function NotesClient({ data }: { data: NotesData }) {
       active ? "bg-accent font-semibold text-white" : "text-ink hover:bg-paper-deep"
     );
 
+  // Session 11 true empty state — the mockup's "empty page, on purpose".
+  // The + New note button IS the real quick-capture composer.
+  if (notes.length === 0 && !capture) {
+    return (
+      <div className="glass mx-auto mt-9 max-w-[560px] rounded-2xl border-dashed p-8 text-center">
+        <div className="mb-2 text-[28px]">✎</div>
+        <h3 className="mb-1.5 font-display text-[19px] font-extrabold">
+          An empty page, on purpose
+        </h3>
+        <p className="mx-auto max-w-[46ch] text-[13.5px] text-ink-soft">
+          No folders to set up — structure is generated from what each note
+          links to. Write anything; link it to a contact or enquiry later, or
+          let Light propose the link.
+        </p>
+        <div className="mt-3.5">
+          <Button variant="primary" onClick={() => setCapture("quick")}>
+            + New note
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
