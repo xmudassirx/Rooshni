@@ -181,6 +181,13 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   flip-is-evented rule (Session 9) remains the tick law First Light renders
   from.
 
+- The **individual stamp** (Session 12, decision 113): approval has no bulk
+  path — no select-all, multi-select or batch behaviour may ever attach to
+  Approve, in any surface. Bulk REJECTION exists and is the only bulk act:
+  the single `reject_communication` pipeline looped per draft, each refusal
+  its own evented entry with its reason. A session asked to "speed up
+  approvals" with any batch mechanism is a Lane C stop by definition.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail

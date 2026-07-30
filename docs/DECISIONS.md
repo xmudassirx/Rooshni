@@ -861,3 +861,18 @@ JUDGMENT comments at each site.
      evaluator earn the tick; pending-arrival rows flip only via an
      explicit `demo-flip` whose ledger event states "driven, not earned";
      driven artefacts carry their own GO-LIVE purge item.
+
+## Session 12 (30 July 2026) — bulk rejection, law ordered in-prompt
+
+Entry 113 was ordered verbatim in the Session 12 prompt ("LAW (DECISIONS line
+at close)"); it is recorded on that in-prompt authority, the Session 7
+precedent. The session's own Lane B calls await sign-off in its close report.
+
+113. **Bulk REJECTION exists; bulk APPROVAL never does.** The Approval
+     Inbox's selection mode (checkboxes + select-all-visible) attaches only
+     to Reject: one shared reason, applied by looping the single
+     `reject_communication` pipeline per draft, so every refusal lands as
+     its own `communication.rejected` event with the reason on its row and
+     The Record — identical in shape to a single rejection. Approvals are
+     individual stamps by constitution; no select-all behaviour may ever
+     attach to Approve, in any surface, ever.
