@@ -794,12 +794,27 @@ async function seedInboundReply(db: SupabaseClient): Promise<void> {
 // The nurture and acknowledgement messages, each referencing a template (§3).
 // British English; the intro follows the 80-word standard; no advice, no fee
 // promises. Every draft rendered from these is still stamped individually.
+// WhatsApp template mapping (founder chore, 30 Jul 2026): enquiry_intro
+// (Utility) and enquiry_nudge (Marketing — Meta's classifier ruling)
+// approved on the Test WABA, en_GB, numbered variables. JUDGMENT: params
+// are the body's {{placeholders}} in order of first appearance — the
+// numbered-variable convention; a count mismatch fails VISIBLY at dispatch
+// (Meta refuses, mark_communication_send_failed events it), never silently.
+// consultation_reminder joins when it clears review. Production WABA
+// re-submission is on GO-LIVE.
 const TEMPLATES = [
   {
     id: "01980000-0000-7000-8000-000000000601",
     key: "intro_v1",
     channel: "email",
     subject: "Your enquiry with {{business_name}}",
+    attributes: {
+      wa_template: {
+        name: "enquiry_intro",
+        language: "en_GB",
+        params: ["first_name", "business_name", "owner_name"],
+      },
+    },
     // Founder-ruled (Session 10 close pass): the greeting is NEUTRAL by
     // default — behaviour-driven warmth personalisation waits for the
     // memory era, and demographic inference is never used
@@ -815,6 +830,7 @@ const TEMPLATES = [
     key: "missed_call_v1",
     channel: "email",
     subject: "Sorry we missed you — {{business_name}}",
+    attributes: {},
     body:
       "Assalamu alaikum {{first_name}}, we tried to call you today about your enquiry but could not get through. " +
       "No trouble at all — reply to this email with a time that suits you, or call us back whenever you are free, " +
@@ -825,6 +841,13 @@ const TEMPLATES = [
     key: "nurture_t2_v1",
     channel: "whatsapp",
     subject: null,
+    attributes: {
+      wa_template: {
+        name: "enquiry_nudge",
+        language: "en_GB",
+        params: ["first_name", "business_name", "owner_name"],
+      },
+    },
     body:
       "Assalamu alaikum {{first_name}}, just a gentle nudge about your enquiry with {{business_name}}. " +
       "{{owner_name}} would still be glad to talk it through with you — reply here, or tell us a time that suits and we will call you.",
@@ -832,6 +855,7 @@ const TEMPLATES = [
   {
     id: "01980000-0000-7000-8000-000000000604",
     key: "nurture_t5_v1",
+    attributes: {},
     channel: "email",
     subject: "What the financial requirement actually means",
     body:
@@ -843,6 +867,7 @@ const TEMPLATES = [
   {
     id: "01980000-0000-7000-8000-000000000605",
     key: "nurture_t9_v1",
+    attributes: {},
     channel: "email",
     subject: "Shall we close your file?",
     body:
@@ -945,6 +970,7 @@ async function seedWorkflow(db: SupabaseClient): Promise<void> {
       channel: template.channel,
       subject: template.subject,
       body: template.body,
+      attributes: template.attributes,
       locale: "en-GB",
       version: 1,
     });

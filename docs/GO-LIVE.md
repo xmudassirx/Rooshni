@@ -118,6 +118,14 @@ Add to this list during build; check items off only at go-live.
       {"name": "...", "language": "...", "params": ["first_name", ...]}`
       on `nurture_t2_v1` so drafts carry it. Until then the nudge falls
       back to email (decision 50) — WhatsApp nudges silently don't exist.
+      *Progress 30 Jul 2026 (founder chore): `enquiry_intro` (Utility) and
+      `enquiry_nudge` (Marketing — Meta's classifier ruling; approved body
+      opens "An update on your enquiry…") approved on the TEST WABA, en_GB,
+      numbered variables — mapped onto `intro_v1` and `nurture_t2_v1` (seed
+      + live, evented); hello_world is no longer load-bearing. Still open
+      before this line ticks: map `consultation_reminder` (Utility) when it
+      clears review, and RE-SUBMIT all three on the production WABA at
+      cutover with the regulated-status footer per Settings → General.*
 - [ ] **Vercel cron is live cadence** (introduced Session 10):
       `apps/web/vercel.json` ships a per-minute cron for
       `GET /api/workflows/tick` — per-minute cadence requires Vercel Pro
