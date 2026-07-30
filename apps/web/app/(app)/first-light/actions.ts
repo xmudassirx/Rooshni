@@ -7,6 +7,8 @@ import {
   evaluateBasicsPredicate,
   evaluateConnectionPredicates,
   FIRST_LIGHT_EVENT_KINDS,
+  readBasicsStamps,
+  resolveBasicsRequiredKeys,
   satisfyFirstLightPredicate,
   skipFirstLightRow,
 } from "@rooshni/db";
@@ -97,6 +99,7 @@ export async function confirmBasicsRow(input: ConfirmBasicsInput): Promise<{ ok:
     basics_confirmed: {
       ...confirmed,
       [input.key]: {
+        state: "confirmed",
         confirmed_at: new Date().toISOString(),
         confirmed_by: actor.id,
         provenance,
@@ -124,9 +127,84 @@ export async function confirmBasicsRow(input: ConfirmBasicsInput): Promise<{ ok:
     },
   });
 
+  // Session 13 fix round: the required set resolves through the ONE shared
+  // resolver — never empty — and the evaluator itself fails closed besides.
   await evaluateBasicsPredicate(service, {
     businessId: business.id,
-    requiredKeys: template?.standardKeys ?? [],
+    requiredKeys: resolveBasicsRequiredKeys(template?.standardKeys),
+    actorId: actor.id,
+  });
+
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/**
+ * Session 13 fix round (decision 84's per-row law): a row holding no value
+ * is never confirmed silently — it is either given an entry or explicitly
+ * marked not applicable, and that state is recorded honestly: on the stamp
+ * store, and as its own line on The Record.
+ */
+export async function markBasicsRowNotApplicable(
+  key: string
+): Promise<{ ok: boolean; error?: string }> {
+  // JUDGMENT: only the free-text rows can be "not applicable" — business
+  // name and quiet hours always hold a visible value, so they are confirmed
+  // or corrected, never skipped.
+  if (!(BASICS_TEXT_KEYS as readonly string[]).includes(key)) {
+    return { ok: false, error: "This row always holds a value — confirm or correct it." };
+  }
+
+  const { business, actor } = await getAppContext();
+  const template = await getTemplateContent();
+  const service = createServiceClient();
+
+  const { data: biz, error: bizError } = await service
+    .from("businesses")
+    .select("id, settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (bizError || !biz) return { ok: false, error: bizError?.message ?? "business not found" };
+
+  const settings = (biz.settings ?? {}) as Record<string, unknown>;
+  const stored = settings[key];
+  if (typeof stored === "string" && stored.trim()) {
+    return { ok: false, error: "This row holds a value — confirm or correct it instead." };
+  }
+  const stamps = readBasicsStamps(settings);
+  if (stamps[key]) return { ok: false, error: "This row is already addressed." };
+
+  const provenance = "marked not applicable by you — nothing was entered";
+  const nextSettings = {
+    ...settings,
+    basics_confirmed: {
+      ...stamps,
+      [key]: {
+        state: "not_applicable",
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: actor.id,
+        provenance,
+      },
+    },
+  };
+  const { error: updateError } = await service
+    .from("businesses")
+    .update({ settings: nextSettings })
+    .eq("id", business.id);
+  if (updateError) return { ok: false, error: updateError.message };
+
+  await emitEvent(service, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: FIRST_LIGHT_EVENT_KINDS.basicsRowNotApplicable,
+    entity_type: "business",
+    entity_id: business.id,
+    payload: { key, provenance, via: "first_light_basics" },
+  });
+
+  await evaluateBasicsPredicate(service, {
+    businessId: business.id,
+    requiredKeys: resolveBasicsRequiredKeys(template?.standardKeys),
     actorId: actor.id,
   });
 

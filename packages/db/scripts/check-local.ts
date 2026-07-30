@@ -8,6 +8,7 @@ import { verifyMetaSignature } from "../src/meta";
 import { quietHoursHoldUntil, QUIET_HOURS_DEFAULT } from "../src/quiet-hours";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
+import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -1960,6 +1961,53 @@ async function main() {
     if (dueNurtureStep(scaleDurationMs(4 * DAY), unsub) !== null) throw new Error("3d mailed an unsubscribed signup");
     if (dueNurtureStep(scaleDurationMs(8 * DAY), unsub) !== null) throw new Error("7d mailed an unsubscribed signup");
     if (dueNurtureStep(scaleDurationMs(31 * DAY), unsub) !== "delete") throw new Error("30d retention stopped applying");
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 13 fix round — decision 84's per-row law in the basics
+  // evaluator (pure TS, the Meta-signature precedent): the founder's
+  // unearned-tick repro is the refusal case, held forever.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 13 — the basics per-row law:");
+
+  const SIX = [...CANONICAL_BASICS_KEYS];
+  await expectOk("the Jurists repro is refused: one confirmed row of six is NOT ready", async () => {
+    const r = evaluateBasicsReadiness(SIX, {
+      basics_confirmed: { business_name: { state: "confirmed" } },
+    });
+    if (r.ready) throw new Error("one addressed row earned the tick");
+    if (r.missing.length !== 5) throw new Error(`missing: ${r.missing.join(", ")}`);
+  });
+  await expectOk("an EMPTY required set fails closed — stamps present, still never ready", async () => {
+    const r = evaluateBasicsReadiness([], {
+      basics_confirmed: { business_name: { state: "confirmed" } },
+    });
+    if (r.ready) throw new Error("an empty required set read as nothing-missing (the root cause)");
+  });
+  await expectOk("the required-set resolver never returns empty — no template means the canonical six", async () => {
+    if (resolveBasicsRequiredKeys(undefined).length !== 6) throw new Error("undefined did not resolve to the canonical six");
+    if (resolveBasicsRequiredKeys([]).length !== 6) throw new Error("[] did not resolve to the canonical six");
+    const own = ["business_name", "address"];
+    if (resolveBasicsRequiredKeys(own) !== own) throw new Error("an installed set was not honoured");
+  });
+  await expectOk("every row individually addressed — confirms and explicit not-applicables — IS ready, honestly split", async () => {
+    const r = evaluateBasicsReadiness(SIX, {
+      basics_confirmed: {
+        business_name: { state: "confirmed" },
+        regulated_status: { state: "confirmed" },
+        address: {}, // a Session 11 stamp without `state` is a confirm
+        business_hours: { state: "not_applicable" },
+        languages: { state: "not_applicable" },
+        quiet_hours: { state: "confirmed" },
+      },
+    });
+    if (!r.ready) throw new Error(`not ready: missing ${r.missing.join(", ")}`);
+    if (JSON.stringify(r.confirmedKeys) !== JSON.stringify(["business_name", "regulated_status", "address", "quiet_hours"])) {
+      throw new Error(`confirmed split: ${r.confirmedKeys.join(", ")}`);
+    }
+    if (JSON.stringify(r.notApplicableKeys) !== JSON.stringify(["business_hours", "languages"])) {
+      throw new Error(`not-applicable split: ${r.notApplicableKeys.join(", ")}`);
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
