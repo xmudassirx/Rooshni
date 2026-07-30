@@ -894,3 +894,27 @@ the founder's message at close ("merged, three calls approved").
      no checkbox until their rejection pipeline exists (their cards already
      say they are read-only). A control that cannot act is never offered —
      decision 19's unearned-tick rule applied to controls.
+
+## Session 13 (30 July 2026) — the per-row basics law, approved at close
+
+Entry 117 consolidates the session's three Lane B calls, approved in the
+founder's close order ("Merged. Close session 13: DECISIONS line for
+per-row basics semantics").
+
+117. **Basics-confirm is per-row, and the required set is never empty.**
+     The basics predicate satisfies ONLY when every required row is
+     individually addressed — confirmed, corrected, or explicitly marked
+     not applicable. The required set resolves through one shared resolver
+     (`resolveBasicsRequiredKeys`): the installed template's
+     `standard_keys`, else the canonical six (0022 v3's exact set) — and
+     the evaluator additionally FAILS CLOSED on an empty set, so "cannot
+     name the rows" can never again read as "nothing missing" (the Jurists
+     root cause, now a permanent regression test). Facets: not-applicable
+     is an explicit act restricted to free-text rows holding no value,
+     recorded on the stamp store and as its own ledger line, rendered
+     neutral, never green; "Confirm all remaining" reaches only rows
+     already holding a visible value and is the per-row confirm looped —
+     one act, one ledger line each; a tick recorded in error is struck via
+     `unearnFirstLightPredicate` — the strike carries its reason and the
+     struck flip's event id BEFORE the row clears, attributed to the
+     workflow actor when one exists, else the owner's human actor.
