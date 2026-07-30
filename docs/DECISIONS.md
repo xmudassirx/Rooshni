@@ -866,7 +866,8 @@ JUDGMENT comments at each site.
 
 Entry 113 was ordered verbatim in the Session 12 prompt ("LAW (DECISIONS line
 at close)"); it is recorded on that in-prompt authority, the Session 7
-precedent. The session's own Lane B calls await sign-off in its close report.
+precedent. Entries 114–116 are the session's three Lane B calls, approved in
+the founder's message at close ("merged, three calls approved").
 
 113. **Bulk REJECTION exists; bulk APPROVAL never does.** The Approval
      Inbox's selection mode (checkboxes + select-all-visible) attaches only
@@ -876,3 +877,20 @@ precedent. The session's own Lane B calls await sign-off in its close report.
      The Record — identical in shape to a single rejection. Approvals are
      individual stamps by constitution; no select-all behaviour may ever
      attach to Approve, in any surface, ever.
+
+114. **The bulk refusal is the single refusal looped — no batch RPC, no
+     migration.** `bulkRejectAction` calls `reject_communication` per draft
+     in concurrent chunks of 8, so ~78 refusals fit in one server action;
+     a failure in one draft (e.g. it stopped being pending meanwhile) never
+     stops the rest, and the tally reports honestly ("N rejected · M
+     failed", first error shown). No new write path exists.
+
+115. **The standing shadow-mode chip serves both reject dialogs** — bulk
+     and single-card. The prompt named the chip without confining it to the
+     bulk dialog, and the reason is the same act wherever the refusal is
+     entered; the wording lives in one module (`standing-reason.ts`).
+
+116. **Only communications are selectable** — content and task rows carry
+     no checkbox until their rejection pipeline exists (their cards already
+     say they are read-only). A control that cannot act is never offered —
+     decision 19's unearned-tick rule applied to controls.
