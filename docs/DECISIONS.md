@@ -918,3 +918,14 @@ per-row basics semantics").
      `unearnFirstLightPredicate` — the strike carries its reason and the
      struck flip's event id BEFORE the row clears, attributed to the
      workflow actor when one exists, else the owner's human actor.
+
+## Chores (30 July 2026) — founder rulings between sessions
+
+118. **WYSIWYS — a draft that may dispatch via an approved template shows
+     the template's exact wording at stamp time; the stamp never approves
+     words the client won't receive.** Recorded verbatim on the founder's
+     ruling (the WhatsApp template-mapping chore: Meta's approved
+     `enquiry_nudge` body differs from the seeded draft copy). The seed
+     draft bodies re-issue to the approved templates' exact wording
+     wherever the template path may carry the send — the nudge now, the
+     intro if drifted. This law binds the query-aware drafting session.

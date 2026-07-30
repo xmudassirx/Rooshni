@@ -120,12 +120,17 @@ Add to this list during build; check items off only at go-live.
       back to email (decision 50) — WhatsApp nudges silently don't exist.
       *Progress 30 Jul 2026 (founder chore): `enquiry_intro` (Utility) and
       `enquiry_nudge` (Marketing — Meta's classifier ruling; approved body
-      opens "An update on your enquiry…") approved on the TEST WABA, en_GB,
-      numbered variables — mapped onto `intro_v1` and `nurture_t2_v1` (seed
-      + live, evented); hello_world is no longer load-bearing. Still open
-      before this line ticks: map `consultation_reminder` (Utility) when it
-      clears review, and RE-SUBMIT all three on the production WABA at
-      cutover with the regulated-status footer per Settings → General.*
+      opens "An update on your enquiry…") approved on the TEST WABA, en_GB —
+      mapped onto `intro_v1` and `nurture_t2_v1` (seed + live, evented);
+      hello_world is no longer load-bearing. Params founder-ruled to match
+      the APPROVED bodies: intro and nudge carry ONE variable ({{1}} =
+      client first name; firm name baked in); `consultation_reminder`
+      carries THREE ({{1}} name, {{2}} date, {{3}} time). Still open before
+      this line ticks: the WYSIWYS copy re-issue (decision 118 — needs the
+      approved bodies' exact text or a `WHATSAPP_WABA_ID` to read them),
+      map `consultation_reminder` when it clears review, and RE-SUBMIT all
+      three on the production WABA at cutover with the regulated-status
+      footer per Settings → General.*
 - [ ] **Vercel cron is live cadence** (introduced Session 10):
       `apps/web/vercel.json` ships a per-minute cron for
       `GET /api/workflows/tick` — per-minute cadence requires Vercel Pro

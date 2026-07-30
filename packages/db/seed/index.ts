@@ -794,14 +794,16 @@ async function seedInboundReply(db: SupabaseClient): Promise<void> {
 // The nurture and acknowledgement messages, each referencing a template (§3).
 // British English; the intro follows the 80-word standard; no advice, no fee
 // promises. Every draft rendered from these is still stamped individually.
-// WhatsApp template mapping (founder chore, 30 Jul 2026): enquiry_intro
-// (Utility) and enquiry_nudge (Marketing — Meta's classifier ruling)
-// approved on the Test WABA, en_GB, numbered variables. JUDGMENT: params
-// are the body's {{placeholders}} in order of first appearance — the
-// numbered-variable convention; a count mismatch fails VISIBLY at dispatch
-// (Meta refuses, mark_communication_send_failed events it), never silently.
-// consultation_reminder joins when it clears review. Production WABA
-// re-submission is on GO-LIVE.
+// WhatsApp template mapping (founder chore + ruling, 30 Jul 2026):
+// enquiry_intro (Utility) and enquiry_nudge (Marketing — Meta's classifier
+// ruling) approved on the Test WABA, en_GB. Params are FOUNDER-RULED per
+// template, matching the APPROVED bodies: intro and nudge carry exactly ONE
+// variable ({{1}} = client first name; the firm name is baked into the
+// approved text). consultation_reminder carries THREE ({{1}} name,
+// {{2}} date, {{3}} time) and maps when it clears review. Production WABA
+// re-submission is on GO-LIVE. Copy law: decision 118 (WYSIWYS) — these
+// bodies re-issue to the approved templates' exact wording wherever the
+// template path may carry the send.
 const TEMPLATES = [
   {
     id: "01980000-0000-7000-8000-000000000601",
@@ -809,11 +811,7 @@ const TEMPLATES = [
     channel: "email",
     subject: "Your enquiry with {{business_name}}",
     attributes: {
-      wa_template: {
-        name: "enquiry_intro",
-        language: "en_GB",
-        params: ["first_name", "business_name", "owner_name"],
-      },
+      wa_template: { name: "enquiry_intro", language: "en_GB", params: ["first_name"] },
     },
     // Founder-ruled (Session 10 close pass): the greeting is NEUTRAL by
     // default — behaviour-driven warmth personalisation waits for the
@@ -842,11 +840,7 @@ const TEMPLATES = [
     channel: "whatsapp",
     subject: null,
     attributes: {
-      wa_template: {
-        name: "enquiry_nudge",
-        language: "en_GB",
-        params: ["first_name", "business_name", "owner_name"],
-      },
+      wa_template: { name: "enquiry_nudge", language: "en_GB", params: ["first_name"] },
     },
     body:
       "Assalamu alaikum {{first_name}}, just a gentle nudge about your enquiry with {{business_name}}. " +
