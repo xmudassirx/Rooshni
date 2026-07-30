@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles } from "lucide-react";
+import { Check, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,9 @@ export interface InboxCardProps {
   preflightPass: boolean | null;
   /** Session 11 — the lead's context, expandable above the draft. */
   context: CardContext | null;
+  /** Session 12 — selection mode, for bulk REJECTION only. Approval never
+   * takes a selection: the stamp is individual by constitution. */
+  selection?: { selected: boolean; onToggle: () => void } | null;
 }
 
 /** Short names for the facts line, per pre-flight check key. */
@@ -157,9 +160,33 @@ export function InboxCard(props: InboxCardProps) {
   const canExpand = props.fullBody !== null && props.fullBody !== props.preview;
 
   return (
-    <div className="glass rounded-xl px-4 py-3.5">
+    <div
+      className={cn(
+        "glass rounded-xl px-4 py-3.5",
+        props.selection?.selected && "ring-1 ring-accent"
+      )}
+    >
       {/* The facts line: channel, who drafted, for whom, waiting how long. */}
       <div className="flex flex-wrap items-center gap-1.5">
+        {props.selection ? (
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={props.selection.selected}
+            aria-label={`Select for rejection: ${props.subject ?? props.preview}`}
+            onClick={props.selection.onToggle}
+            className={cn(
+              "mr-1 flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded border transition-colors",
+              props.selection.selected
+                ? "border-accent bg-accent text-white"
+                : "border-rule bg-paper hover:border-accent"
+            )}
+          >
+            {props.selection.selected ? (
+              <Check className="size-3" strokeWidth={3.5} />
+            ) : null}
+          </button>
+        ) : null}
         <Badge variant="source">{props.channelLabel}</Badge>
         {props.draftedByAgent ? (
           <Badge variant="gold">

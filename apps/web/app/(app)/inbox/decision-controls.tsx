@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { approveAction, rejectAction, type DecisionState } from "./actions";
+import { STANDING_REASON } from "./standing-reason";
 
 const initialState: DecisionState = { error: null };
 
@@ -95,6 +96,16 @@ export function DecisionControls({
               }}
             >
               <input type="hidden" name="communicationId" value={communicationId} />
+              {/* JUDGMENT: the Session 12 standing chip also serves single
+                  rejection — the scope names the chip without confining it
+                  to the bulk dialog, and the reason is the same act. */}
+              <button
+                type="button"
+                onClick={() => setReason(STANDING_REASON)}
+                className="self-start cursor-pointer rounded-full border border-rule bg-paper px-2.5 py-1 font-mono text-[10px] tracking-wide text-ink-soft uppercase transition-colors hover:border-accent hover:text-ink"
+              >
+                shadow mode — handled by existing pipeline
+              </button>
               <Textarea
                 name="reason"
                 value={reason}

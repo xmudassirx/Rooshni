@@ -12,7 +12,8 @@ import {
   type InboxHistoryRow,
 } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
-import { InboxCard, type InboxCardProps } from "./inbox-card";
+import { type InboxCardProps } from "./inbox-card";
+import { OwedList } from "./owed-list";
 
 export const dynamic = "force-dynamic";
 
@@ -136,11 +137,9 @@ export default async function InboxPage({
               </p>
             </div>
           ) : (
-            <div className="flex max-w-[860px] flex-col gap-3">
-              {cards.map((card) => (
-                <InboxCard key={`${card.itemType}-${card.itemId}`} {...card} />
-              ))}
-            </div>
+            // Session 12: selection mode + bulk Reject live in the client
+            // list. Approve keeps no bulk path — see docs/DECISIONS.md.
+            <OwedList cards={cards} />
           )}
         </TabsContent>
 
