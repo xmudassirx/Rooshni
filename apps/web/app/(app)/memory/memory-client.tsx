@@ -193,13 +193,13 @@ export function MemoryClient({ businessName }: { businessName: string }) {
           <button
             type="button"
             aria-label="Close"
-            className="fixed inset-0 z-80 bg-ink/45"
+            className="modal-scrim fixed inset-0 z-80"
             onClick={() => setImportOpen(false)}
           />
           <div
             role="dialog"
             aria-label="Import memories"
-            className="glass fixed top-1/2 left-1/2 z-81 w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-[0_20px_60px_rgba(32,43,56,.3)]"
+            className="modal-surface fixed top-1/2 left-1/2 z-81 w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-[0_20px_60px_rgba(32,43,56,.3)]"
           >
             <h3 className="font-display text-[19px] font-extrabold">Import memories</h3>
             <p className="mt-1.5 mb-3.5 text-[13px] text-ink-soft">

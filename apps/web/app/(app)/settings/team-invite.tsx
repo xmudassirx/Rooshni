@@ -33,13 +33,13 @@ export function InviteButton() {
           <button
             type="button"
             aria-label="Close"
-            className="fixed inset-0 z-90 bg-ink/40 backdrop-blur-xs"
+            className="modal-scrim fixed inset-0 z-90"
             onClick={() => setOpen(false)}
           />
           <div
             role="dialog"
             aria-label="Invite a member"
-            className="glass fixed top-1/2 left-1/2 z-91 w-[min(480px,93vw)] -translate-x-1/2 -translate-y-1/2 rounded-[28px] text-left font-normal normal-case shadow-[0_24px_80px_rgba(32,43,56,.22)]"
+            className="modal-surface fixed top-1/2 left-1/2 z-91 w-[min(480px,93vw)] -translate-x-1/2 -translate-y-1/2 rounded-[28px] text-left font-normal normal-case shadow-[0_24px_80px_rgba(32,43,56,.22)]"
           >
             <div className="px-6 pt-4 font-mono text-[9.5px] font-bold tracking-[.16em] text-ink-faint uppercase">
               Invite a member · sign-in stays behind the allowlist door

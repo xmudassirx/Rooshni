@@ -279,8 +279,8 @@ export function FirstLight({
       ) : null}
 
       {nogoOpen && template ? (
-        <div className="fixed inset-0 z-80 flex items-center justify-center bg-ink/35 p-4">
-          <div className="glass max-h-[85vh] w-[min(560px,94vw)] overflow-y-auto rounded-2xl">
+        <div className="modal-scrim fixed inset-0 z-80 flex items-center justify-center p-4">
+          <div className="modal-surface max-h-[85vh] w-[min(560px,94vw)] overflow-y-auto rounded-2xl">
             <div className="px-5 pt-4 pb-2">
               <div className="text-[15.5px] font-extrabold">
                 Your no-go rules — {template.displayName} v{template.version}
@@ -433,8 +433,10 @@ function BasicsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-80 flex items-center justify-center bg-ink/35 p-4">
-      <div className="glass max-h-[88vh] w-[min(640px,94vw)] overflow-y-auto rounded-2xl">
+    // The founder-screenshotted bleed: this modal was glass over a weak
+    // scrim. Modals are opaque paper over the one shared scrim, both themes.
+    <div className="modal-scrim fixed inset-0 z-80 flex items-center justify-center p-4">
+      <div className="modal-surface max-h-[88vh] w-[min(640px,94vw)] overflow-y-auto rounded-2xl">
         <div className="px-5 pt-4 pb-2">
           <div className="text-[15.5px] font-extrabold">
             <span className="light-spark">✦</span> Your business basics — proposed, confirmed by you

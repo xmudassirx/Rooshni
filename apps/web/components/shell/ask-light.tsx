@@ -68,13 +68,13 @@ export function AskLightProvider({ children }: { children: ReactNode }) {
           <button
             type="button"
             aria-label="Close"
-            className="fixed inset-0 z-90 bg-ink/40 backdrop-blur-xs"
+            className="modal-scrim fixed inset-0 z-90"
             onClick={() => setOpen(false)}
           />
           <div
             role="dialog"
             aria-label="Ask Light"
-            className="glass fixed top-1/2 left-1/2 z-91 w-[min(620px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[28px] shadow-[0_24px_80px_rgba(32,43,56,.22)]"
+            className="modal-surface fixed top-1/2 left-1/2 z-91 w-[min(620px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[28px] shadow-[0_24px_80px_rgba(32,43,56,.22)]"
           >
             <div className="flex items-center gap-2 px-6 pt-4 font-mono text-[9.5px] font-bold tracking-[.16em] text-ink-faint uppercase">
               <span className="light-spark text-[13px]">✦</span>

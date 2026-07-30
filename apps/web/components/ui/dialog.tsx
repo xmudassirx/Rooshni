@@ -35,7 +35,7 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
-      className={cn("fixed inset-0 z-80 bg-ink/45", className)}
+      className={cn("modal-scrim fixed inset-0 z-80", className)}
       {...props}
     />
   );
@@ -52,7 +52,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "glass fixed top-1/2 left-1/2 z-81 grid w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl p-5",
+          "modal-surface fixed top-1/2 left-1/2 z-81 grid w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl p-5",
           className
         )}
         {...props}
