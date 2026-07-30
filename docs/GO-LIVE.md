@@ -139,12 +139,16 @@ Add to this list during build; check items off only at go-live.
       Before go-live, revoke those grants through the pipeline (or fold the
       rows into the test-tenant purge) so no "(driven)" connection outlives
       its demonstration. Real OAuth connect flows replace the script.
-- [ ] **Founder-approved nurture copy** (introduced Session 11): the day-3
+- [x] **Founder-approved nurture copy** (introduced Session 11): the day-3
       product story and the day-7 founder's note (signed "Mudassir") ship
       builder-drafted in `apps/web/lib/server/platform-mail.ts` — reviewed
       at the Session 11 merge, but re-check the words before the first real
       pre-active signup ages past day 3 with `TIME_SCALE=1`; the day-7 note
       speaks in the founder's own voice and must actually be his.
+      *Ticked 30 Jul 2026 on the founder's order (copy chore): the day-7
+      note is now his own words verbatim; day-3 aligned, no new claims. The
+      note's "[link]" is wired to the signup resume link until a real
+      booking URL exists (see the walkthrough-booking session).*
 - [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
       Session 3/6 demo drafts that were approved in the stub era carry
       `communication.send_stubbed` events; the dispatcher permanently walks

@@ -18,6 +18,10 @@ import type { ReminderKind, ReminderTarget } from "@rooshni/db";
  * three — the link stops nurture mail immediately; the 30-day retention
  * clock (and its deletion promise) is unaffected.
  *
+ * Founder copy chore (30 Jul 2026): the day-7 note is the founder's own
+ * words, approved verbatim; day-3's voice aligned with it (no new claims).
+ * The GO-LIVE nurture-copy line is ticked on the founder's order.
+ *
  * Public-surface naming: the platform is BARAKAH (the naming ruling);
  * production sending domain barakahx.com is a GO-LIVE item.
  */
@@ -30,7 +34,7 @@ interface ReminderCopy {
   body: string;
 }
 
-function reminderCopy(kind: ReminderKind, businessName: string): ReminderCopy {
+function reminderCopy(kind: ReminderKind, businessName: string, resumeUrl: string): ReminderCopy {
   if (kind === "24h") {
     return {
       subject: `${businessName} — your Barakah setup is one step from done`,
@@ -43,13 +47,16 @@ function reminderCopy(kind: ReminderKind, businessName: string): ReminderCopy {
   }
   if (kind === "3d") {
     // The day-3 product story — the 2-hours-a-day problem and the stamp loop.
+    // Voice aligned with the founder's day-7 note (chore, 30 Jul 2026): the
+    // "most firms we talk to" soft claim is gone — direct address, no new
+    // claims; the mechanics description already matches his words.
     return {
       subject: `${businessName} — the two hours a day your inbox is taking`,
       heading: "The problem isn't the enquiries. It's the two hours they cost.",
       body:
-        "Most firms we talk to spend a couple of hours every day on the same loop: " +
-        "a lead arrives, someone copies it into a spreadsheet, someone drafts the same " +
-        "first reply for the tenth time, someone forgets the follow-up.\n\n" +
+        "You'll know the loop: a lead arrives, someone copies it into a spreadsheet, " +
+        "someone drafts the same first reply for the tenth time, someone forgets the " +
+        "follow-up — and hours slip away every day to work that never changes.\n\n" +
         "Barakah runs that loop differently. Light — the AI that works inside it — " +
         "captures the lead, opens the enquiry, and drafts the reply. Then it stops. " +
         "Nothing reaches a client until you stamp it: the database itself refuses an " +
@@ -58,21 +65,24 @@ function reminderCopy(kind: ReminderKind, businessName: string): ReminderCopy {
         "Your signup is still saved — the link below picks up at the plan page.",
     };
   }
-  // Day 7 — the founder's note. DRAFTED BY THE BUILDER for founder review at
-  // the session close; re-issue with the founder's own words if preferred.
+  // Day 7 — the founder's note, HIS OWN WORDS, approved verbatim (chore,
+  // 30 Jul 2026). Paragraph breaks are presentational only; the words are
+  // untouched. JUDGMENT: the approved copy's "[link]" placeholder is wired
+  // to the signup resume link — the only booking door that exists today
+  // (the walkthrough booking lives behind signup until the booking-link
+  // session); swap to a real booking URL on the founder's word.
   return {
     subject: `${businessName} — a note from the founder`,
-    heading: "A week on — an honest note, then we go quiet.",
+    heading: "A note from the founder",
     body:
-      "I'm Mudassir — I built Barakah, and I run its first pilot inside a real " +
-      "immigration firm, on real enquiries, every day.\n\n" +
-      "If the timing wasn't right, no harm — we hold your details for 30 days from " +
-      "signup, then delete them entirely, and this is the last email either way.\n\n" +
-      "But if the idea landed — an AI that does the work while every client-facing " +
-      "act still waits for your stamp — I'd rather show you than describe it. Every " +
-      "pilot includes a walkthrough with me personally: your setup, your cases, your " +
-      "questions, a person not a video. Finish signing up below and the walkthrough " +
-      "booking is one of the first things you'll see.",
+      "I'm Mudassir. I've run businesses myself — an immigration firm among them — " +
+      "and I built Barakah because I kept losing hours every day to the same work: " +
+      "chasing enquiries, drafting the same follow-ups, worrying about what slipped.\n\n" +
+      "Barakah works alongside you around the clock: it watches your enquiries, " +
+      "drafts the responses, and queues everything for your approval — nothing is " +
+      "ever sent without your stamp. You tell it how you work once; it handles the " +
+      "routine; you stay in charge.\n\n" +
+      `If you'd like, I'll walk you through it personally — book a time here: ${resumeUrl}.`,
   };
 }
 
@@ -91,9 +101,9 @@ export async function sendSignupReminder(
   const from = requireEnv("PLATFORM_MAIL_FROM");
   const resumeUrl = `${origin}/signup?resume=${target.resumeToken}`;
   const unsubscribeUrl = `${origin}/api/signup/unsubscribe?token=${target.resumeToken}`;
-  const copy = reminderCopy(kind, target.businessName);
+  const copy = reminderCopy(kind, target.businessName, resumeUrl);
 
-  const signoff = kind === "7d" ? "— Mudassir, founder · Barakah" : "— Barakah";
+  const signoff = kind === "7d" ? "— Mudassir, founder of Barakah" : "— Barakah";
 
   const response = await fetch(RESEND_API_URL, {
     method: "POST",
@@ -110,7 +120,9 @@ export async function sendSignupReminder(
       },
       text:
         `${copy.heading}\n\n${copy.body}\n\n` +
-        `Finish signing up: ${resumeUrl}\n\n` +
+        // The 7d note carries its link inside the founder's own words — no
+        // second copy of the same URL. Unsubscribe mechanics unchanged below.
+        (kind === "7d" ? "" : `Finish signing up: ${resumeUrl}\n\n`) +
         `${signoff}\n` +
         `You're receiving this because ${target.email} started a Barakah signup for ` +
         `${target.businessName}. We send at most three of these, then stop.\n` +
