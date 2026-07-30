@@ -287,7 +287,7 @@ export async function evaluateConnectionPredicates(
  * declared here as the ONE fallback both the evaluator and the modal resolve
  * to when a business has no template install (the Session-9-era tenants).
  *
- * JUDGMENT (Session 13 fix round, decision 84): the founder's unearned tick
+ * JUDGMENT: (Session 13 fix round, decision 84) the founder's unearned tick
  * came from the evaluator and the modal disagreeing — the modal fell back to
  * six displayed rows while the evaluator fell back to an EMPTY required set,
  * which read as "nothing missing". One resolver, shared, ends the split; an
