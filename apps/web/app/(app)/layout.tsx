@@ -32,7 +32,7 @@ export default async function ShellLayout({ children }: { children: ReactNode })
     const settings = config.settings;
     const confirmedRaw = (settings.basics_confirmed ?? {}) as Record<
       string,
-      { provenance?: string }
+      { state?: "confirmed" | "not_applicable"; provenance?: string }
     >;
     const basics: FirstLightBasicsProp = {
       name: config.name,
@@ -46,11 +46,19 @@ export default async function ShellLayout({ children }: { children: ReactNode })
         settings.quiet_hours && typeof settings.quiet_hours === "object"
           ? (settings.quiet_hours as { start: string; end: string })
           : null,
+      // Session 13: a stamp without `state` is a Session 11 confirm.
       confirmed: Object.fromEntries(
-        Object.entries(confirmedRaw).map(([k, v]) => [
-          k,
-          v?.provenance ? `Confirmed — ${v.provenance}` : "Confirmed — on The Record",
-        ])
+        Object.entries(confirmedRaw).map(([k, v]) =>
+          v?.state === "not_applicable"
+            ? [k, { state: "not_applicable" as const, text: "Marked not applicable by you — on The Record" }]
+            : [
+                k,
+                {
+                  state: "confirmed" as const,
+                  text: v?.provenance ? `Confirmed — ${v.provenance}` : "Confirmed — on The Record",
+                },
+              ]
+        )
       ),
     };
     firstLightSlot = (

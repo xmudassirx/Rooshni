@@ -44,6 +44,7 @@ export interface FirstLightPredicateRow {
   predicate_key: FirstLightPredicateKey;
   optional: boolean;
   satisfied_at: string | null;
+  satisfied_event_id: string | null;
 }
 
 async function loadPredicates(
@@ -52,7 +53,7 @@ async function loadPredicates(
 ): Promise<FirstLightPredicateRow[]> {
   const { data, error } = await db
     .from("first_light_predicates")
-    .select("id, business_id, task_id, predicate_key, optional, satisfied_at")
+    .select("id, business_id, task_id, predicate_key, optional, satisfied_at, satisfied_event_id")
     .eq("business_id", businessId)
     .is("archived_at", null);
   if (error) throw new Error(`first_light_predicates lookup failed: ${error.message}`);
@@ -281,19 +282,92 @@ export async function evaluateConnectionPredicates(
   return flipped;
 }
 
-/** The basics stamp store: businesses.settings.basics_confirmed —
- * { [key]: { confirmed_at, confirmed_by, provenance } }. */
-export function confirmedBasicsKeys(settings: Record<string, unknown> | null | undefined): string[] {
+/**
+ * The canonical basics rows — 0022 v3 `business_identity.standard_keys`,
+ * declared here as the ONE fallback both the evaluator and the modal resolve
+ * to when a business has no template install (the Session-9-era tenants).
+ *
+ * JUDGMENT (Session 13 fix round, decision 84): the founder's unearned tick
+ * came from the evaluator and the modal disagreeing — the modal fell back to
+ * six displayed rows while the evaluator fell back to an EMPTY required set,
+ * which read as "nothing missing". One resolver, shared, ends the split; an
+ * empty resolved set can no longer occur, and the evaluator additionally
+ * fails closed on one (`evaluateBasicsReadiness`).
+ */
+export const CANONICAL_BASICS_KEYS = [
+  "business_name",
+  "regulated_status",
+  "address",
+  "business_hours",
+  "languages",
+  "quiet_hours",
+] as const;
+
+/** The required basics set: the template's standard_keys when installed,
+ * else the canonical six. Never empty. */
+export function resolveBasicsRequiredKeys(
+  templateStandardKeys: string[] | null | undefined
+): string[] {
+  return templateStandardKeys && templateStandardKeys.length > 0
+    ? templateStandardKeys
+    : [...CANONICAL_BASICS_KEYS];
+}
+
+/** One entry in the basics stamp store: businesses.settings.basics_confirmed.
+ * `state` absent (Session 11 entries) means confirmed. */
+export interface BasicsRowStamp {
+  state?: "confirmed" | "not_applicable";
+  confirmed_at?: string;
+  confirmed_by?: string;
+  provenance?: string;
+}
+
+export function readBasicsStamps(
+  settings: Record<string, unknown> | null | undefined
+): Record<string, BasicsRowStamp> {
   const raw = settings?.basics_confirmed;
-  if (!raw || typeof raw !== "object") return [];
-  return Object.keys(raw as Record<string, unknown>);
+  if (!raw || typeof raw !== "object") return {};
+  return raw as Record<string, BasicsRowStamp>;
+}
+
+/** The basics stamp store's addressed keys (confirmed OR marked not
+ * applicable — every one an explicit human act). */
+export function confirmedBasicsKeys(settings: Record<string, unknown> | null | undefined): string[] {
+  return Object.keys(readBasicsStamps(settings));
 }
 
 /**
- * Evaluate the basics predicate: all General rows stamped (decision 82).
- * The required set is the template definition's business_identity
- * standard_keys; the flip attributes to the human whose confirm completed
- * the set.
+ * The decision core, pure and testable: the basics predicate is ready ONLY
+ * when the required set is non-empty and EVERY required row is individually
+ * addressed — confirmed, corrected, or explicitly marked not applicable
+ * (decision 84's per-row law; Session 13 fix round). An empty required set
+ * fails closed: if we cannot name the rows, no tick can be earned.
+ */
+export function evaluateBasicsReadiness(
+  requiredKeys: string[],
+  settings: Record<string, unknown> | null | undefined
+): {
+  ready: boolean;
+  missing: string[];
+  confirmedKeys: string[];
+  notApplicableKeys: string[];
+} {
+  const stamps = readBasicsStamps(settings);
+  const addressed = new Set(Object.keys(stamps));
+  const missing = requiredKeys.filter((k) => !addressed.has(k));
+  const inRequired = requiredKeys.filter((k) => addressed.has(k));
+  return {
+    ready: requiredKeys.length > 0 && missing.length === 0,
+    missing,
+    confirmedKeys: inRequired.filter((k) => stamps[k]?.state !== "not_applicable"),
+    notApplicableKeys: inRequired.filter((k) => stamps[k]?.state === "not_applicable"),
+  };
+}
+
+/**
+ * Evaluate the basics predicate (decision 82, per-row law of decision 84).
+ * The flip attributes to the human whose act completed the set; the payload
+ * splits confirmed from not-applicable honestly.
  */
 export async function evaluateBasicsPredicate(
   db: SupabaseClient,
@@ -305,14 +379,81 @@ export async function evaluateBasicsPredicate(
     .eq("id", input.businessId)
     .maybeSingle();
   if (error || !business) throw new Error(`business lookup failed: ${error?.message ?? "not found"}`);
-  const confirmed = new Set(confirmedBasicsKeys(business.settings as Record<string, unknown>));
-  const missing = input.requiredKeys.filter((k) => !confirmed.has(k));
-  if (missing.length > 0) return false;
+  const readiness = evaluateBasicsReadiness(
+    input.requiredKeys,
+    business.settings as Record<string, unknown>
+  );
+  if (!readiness.ready) return false;
   const { flipped } = await satisfyFirstLightPredicate(db, {
     businessId: input.businessId,
     predicateKey: "basics_confirmed",
     actorId: input.actorId,
-    payload: { confirmed_keys: input.requiredKeys },
+    payload: {
+      required_keys: input.requiredKeys,
+      confirmed_keys: readiness.confirmedKeys,
+      not_applicable_keys: readiness.notApplicableKeys,
+    },
   });
   return flipped;
+}
+
+/**
+ * Strike a recorded tick (Session 13 fix round — the Jurists correction).
+ * The un-earn is itself on The Record BEFORE the row clears: the event
+ * carries the reason and the struck flip's own event id, then satisfied_at
+ * and satisfied_event_id return to null together (the 0020 all-or-none
+ * shape) and the task reopens. Requires the SERVICE client.
+ */
+export async function unearnFirstLightPredicate(
+  db: SupabaseClient,
+  input: {
+    businessId: string;
+    predicateKey: FirstLightPredicateKey;
+    actorId: string;
+    reason: string;
+  }
+): Promise<{ unearned: boolean }> {
+  if (!input.reason.trim()) throw new Error("Un-earning needs a stated reason — it goes on The Record.");
+  const rows = await loadPredicates(db, input.businessId);
+  const row = rows.find((r) => r.predicate_key === input.predicateKey);
+  if (!row) throw new Error(`No "${input.predicateKey}" predicate for business ${input.businessId}`);
+  if (!row.satisfied_at) return { unearned: false };
+
+  await emitEvent(db, {
+    business_id: input.businessId,
+    actor_id: input.actorId,
+    action: FIRST_LIGHT_EVENT_KINDS.predicateUnearned,
+    entity_type: "first_light_predicate",
+    entity_id: row.id,
+    payload: {
+      predicate_key: input.predicateKey,
+      reason: input.reason.trim(),
+      struck_satisfied_at: row.satisfied_at,
+      struck_satisfied_event_id: row.satisfied_event_id,
+    },
+  });
+
+  const { error: clearError } = await db
+    .from("first_light_predicates")
+    .update({ satisfied_at: null, satisfied_event_id: null })
+    .eq("id", row.id)
+    .not("satisfied_at", "is", null);
+  if (clearError) throw new Error(`predicate un-earn failed: ${clearError.message}`);
+
+  const { error: taskError } = await db
+    .from("tasks")
+    .update({ status: "open" })
+    .eq("id", row.task_id)
+    .eq("status", "done");
+  if (taskError) throw new Error(`task reopen failed: ${taskError.message}`);
+  await emitEvent(db, {
+    business_id: input.businessId,
+    actor_id: input.actorId,
+    action: "task.reopened",
+    entity_type: "task",
+    entity_id: row.task_id,
+    payload: { via: "first_light_unearn", predicate_key: input.predicateKey },
+  });
+
+  return { unearned: true };
 }

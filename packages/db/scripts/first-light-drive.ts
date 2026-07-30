@@ -4,6 +4,7 @@ import { emitEvent } from "../src/events";
 import {
   evaluateConnectionPredicates,
   satisfyFirstLightPredicate,
+  unearnFirstLightPredicate,
   CONNECTION_PREDICATE_TOOLS,
   FIRST_LIGHT_PENDING_ARRIVALS,
 } from "../src/first-light";
@@ -27,6 +28,12 @@ import type { FirstLightPredicateKey } from "../src/onboarding";
  * flag, and the flip's ledger event says so in plain words:
  *
  *   npm run first-light:drive --workspace=@rooshni/db -- <business_id> demo-flip <predicate_key>
+ *
+ * Session 13 fix round: a tick recorded in error can be STRUCK — unearned,
+ * with the stated reason on The Record before the row clears; the task
+ * reopens. Used for the Jurists correction (decision 84's per-row law).
+ *
+ *   npm run first-light:drive --workspace=@rooshni/db -- <business_id> unearn <predicate_key> "<reason>"
  */
 
 const PROVIDERS = {
@@ -47,6 +54,67 @@ async function main() {
   }
 
   const db = createServiceClient();
+
+  if (providerKey === "unearn") {
+    const args = process.argv.slice(2).filter((a) => a !== "--");
+    const key = demoKey as FirstLightPredicateKey;
+    const reason = args.slice(3).join(" ").trim();
+    if (!key || !reason) {
+      console.error('Usage: first-light-drive <business_id> unearn <predicate_key> "<reason>"');
+      process.exit(1);
+    }
+    // JUDGMENT: attribution — the business's workflow actor when it exists
+    // (platform automation correcting observed state, the evaluator
+    // precedent); a Session-9-era tenant without one attributes to the
+    // owner's human actor, named in the event payload either way.
+    const { data: biz, error: bizError } = await db
+      .from("businesses")
+      .select("id, account_id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizError || !biz) throw new Error(`business lookup failed: ${bizError?.message ?? "not found"}`);
+    const { data: wfActor } = await db
+      .from("actors")
+      .select("id")
+      .eq("account_id", biz.account_id)
+      .eq("actor_type", "workflow")
+      .is("archived_at", null)
+      .maybeSingle();
+    let actorId = wfActor?.id as string | undefined;
+    if (!actorId) {
+      const { data: ownerMembership } = await db
+        .from("memberships")
+        .select("user_id")
+        .eq("business_id", businessId)
+        .eq("role", "owner")
+        .is("archived_at", null)
+        .limit(1)
+        .maybeSingle();
+      const { data: ownerActor } = ownerMembership
+        ? await db
+            .from("actors")
+            .select("id")
+            .eq("user_id", ownerMembership.user_id)
+            .eq("actor_type", "human")
+            .is("archived_at", null)
+            .maybeSingle()
+        : { data: null };
+      actorId = ownerActor?.id;
+    }
+    if (!actorId) throw new Error("No workflow or owner actor to attribute the un-earn to");
+    const { unearned } = await unearnFirstLightPredicate(db, {
+      businessId,
+      predicateKey: key,
+      actorId,
+      reason,
+    });
+    console.log(
+      unearned
+        ? `Unearned ${key} — the strike and its reason are on The Record; the task reopened.`
+        : `${key} was not satisfied — nothing to unearn.`
+    );
+    return;
+  }
 
   if (providerKey === "demo-flip") {
     // Retirement-demonstration flips for rows whose machinery does not exist

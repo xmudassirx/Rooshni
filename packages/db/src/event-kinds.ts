@@ -62,6 +62,10 @@ export const FIRST_LIGHT_EVENT_KINDS = {
   settingsUpdated: "settings.updated",
   /** Platform scope (account.*): a pre-active signup opted out of nurture mail. No personal data in the payload. */
   accountNurtureUnsubscribed: "account.nurture_unsubscribed",
+  /** Session 13 fix round: a basics row was explicitly marked not applicable — an addressed row, never a silent confirm. */
+  basicsRowNotApplicable: "first_light.basics_not_applicable",
+  /** Session 13 fix round: a previously recorded tick was struck — unearned, with the stated reason; the row returns to open. */
+  predicateUnearned: "first_light.predicate_unearned",
 } as const satisfies Record<string, EventAction>;
 
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

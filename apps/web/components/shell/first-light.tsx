@@ -7,6 +7,7 @@ import { Check } from "lucide-react";
 import {
   acknowledgeNogoRules,
   confirmBasicsRow,
+  markBasicsRowNotApplicable,
   runFirstLightEvaluation,
   skipMetaRow,
   type ConfirmBasicsInput,
@@ -46,8 +47,9 @@ export interface FirstLightBasicsProp {
   name: string;
   values: Record<string, string>;
   quietHours: { start: string; end: string } | null;
-  /** key → provenance line for already-confirmed rows. */
-  confirmed: Record<string, string>;
+  /** key → addressed state + provenance line (Session 13: a row is addressed
+   * by an explicit confirm OR an explicit not-applicable — never silently). */
+  confirmed: Record<string, { state: "confirmed" | "not_applicable"; text: string }>;
 }
 
 const BASICS_LABELS: Record<string, string> = {
@@ -354,13 +356,19 @@ function BasicsModal({
   );
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [qh, setQh] = useState(basics.quietHours ?? qhDefault);
-  const [confirmed, setConfirmed] = useState<Record<string, string>>(basics.confirmed);
+  const [confirmed, setConfirmed] = useState(basics.confirmed);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const keys = template?.standardKeys ?? Object.keys(BASICS_LABELS);
+  // Session 13: the displayed rows and the server's required set resolve
+  // identically — template standard_keys when installed, else the canonical
+  // six (resolveBasicsRequiredKeys in @rooshni/db carries the same fallback).
+  const keys = template?.standardKeys?.length ? template.standardKeys : Object.keys(BASICS_LABELS);
+
+  const valueFor = (key: string): string =>
+    key === "quiet_hours" ? `${qh.start}–${qh.end}` : (values[key] ?? "").trim();
 
   const provenanceFor = (key: string): { text: string; read: boolean } => {
-    if (confirmed[key]) return { text: confirmed[key]!, read: false };
+    if (confirmed[key]) return { text: confirmed[key]!.text, read: false };
     if (key === "business_name") return { text: "From your signup — already yours", read: true };
     if (key === "quiet_hours")
       return {
@@ -371,19 +379,55 @@ function BasicsModal({
     return { text: "Not read — no crawl has run yet. Yours to enter.", read: false };
   };
 
-  const confirm = (key: string) => {
-    setErrors((e) => ({ ...e, [key]: "" }));
+  const confirmOne = async (key: string): Promise<boolean> => {
     const input: ConfirmBasicsInput =
       key === "quiet_hours"
         ? { key, value: "", quietHours: qh }
         : { key: key as ConfirmBasicsInput["key"], value: values[key] ?? "" };
+    const r = await confirmBasicsRow(input);
+    if (!r.ok) {
+      setErrors((e) => ({ ...e, [key]: r.error ?? "That did not save." }));
+      return false;
+    }
+    setConfirmed((c) => ({
+      ...c,
+      [key]: { state: "confirmed", text: "Confirmed just now — on The Record" },
+    }));
+    return true;
+  };
+
+  const confirm = (key: string) => {
+    setErrors((e) => ({ ...e, [key]: "" }));
     startTransition(async () => {
-      const r = await confirmBasicsRow(input);
+      if (await confirmOne(key)) router.refresh();
+    });
+  };
+
+  const notApplicable = (key: string) => {
+    setErrors((e) => ({ ...e, [key]: "" }));
+    startTransition(async () => {
+      const r = await markBasicsRowNotApplicable(key);
       if (!r.ok) {
         setErrors((e) => ({ ...e, [key]: r.error ?? "That did not save." }));
         return;
       }
-      setConfirmed((c) => ({ ...c, [key]: "Confirmed just now — on The Record" }));
+      setConfirmed((c) => ({
+        ...c,
+        [key]: { state: "not_applicable", text: "Marked not applicable — on The Record" },
+      }));
+      router.refresh();
+    });
+  };
+
+  // "Confirm all remaining" reaches ONLY rows holding a visible value the
+  // founder has seen (the Session 13 law) — and it is the per-row confirm
+  // looped, one act and one ledger line each, never a single blanket write.
+  const confirmableRemaining = keys.filter((k) => !confirmed[k] && valueFor(k) !== "");
+  const confirmAllRemaining = () => {
+    startTransition(async () => {
+      for (const key of confirmableRemaining) {
+        if (!(await confirmOne(key))) break;
+      }
       router.refresh();
     });
   };
@@ -401,7 +445,10 @@ function BasicsModal({
         </div>
         {keys.map((key) => {
           const prov = provenanceFor(key);
-          const isConfirmed = Boolean(confirmed[key]);
+          const stamp = confirmed[key];
+          const isConfirmed = Boolean(stamp);
+          const canBeNotApplicable =
+            !isConfirmed && key !== "business_name" && key !== "quiet_hours" && valueFor(key) === "";
           return (
             <div
               key={key}
@@ -467,20 +514,40 @@ function BasicsModal({
                   <span className="mt-0.5 block text-[11px] text-stamp">{errors[key]}</span>
                 ) : null}
               </span>
-              <span className="self-center">
-                {isConfirmed ? (
-                  <span className="rounded-md border border-ledger/40 bg-ledger/10 px-2 py-1 font-mono text-[9.5px] tracking-wide text-ledger uppercase">
-                    Confirmed
-                  </span>
+              <span className="flex flex-col items-end gap-1 self-center">
+                {stamp ? (
+                  stamp.state === "not_applicable" ? (
+                    // Addressed but never confirmed — an honest neutral state,
+                    // deliberately NOT the green of a done thing.
+                    <span className="rounded-md border border-ink/15 bg-paper px-2 py-1 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+                      Not applicable
+                    </span>
+                  ) : (
+                    <span className="rounded-md border border-ledger/40 bg-ledger/10 px-2 py-1 font-mono text-[9.5px] tracking-wide text-ledger uppercase">
+                      Confirmed
+                    </span>
+                  )
                 ) : (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => confirm(key)}
-                    className="rounded-md border border-ink/15 bg-panel px-2.5 py-1.5 text-[12px] font-semibold disabled:opacity-60"
-                  >
-                    Confirm
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => confirm(key)}
+                      className="rounded-md border border-ink/15 bg-panel px-2.5 py-1.5 text-[12px] font-semibold disabled:opacity-60"
+                    >
+                      Confirm
+                    </button>
+                    {canBeNotApplicable ? (
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() => notApplicable(key)}
+                        className="cursor-pointer font-mono text-[9.5px] tracking-wide text-ink-faint uppercase underline-offset-2 hover:underline disabled:opacity-60"
+                      >
+                        not applicable
+                      </button>
+                    ) : null}
+                  </>
                 )}
               </span>
             </div>
@@ -490,6 +557,17 @@ function BasicsModal({
           <span className="flex-1 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
             Locale en-GB · Europe/London · GBP set from your signup. Every confirm is a stamped write to Settings → General, on The Record.
           </span>
+          {confirmableRemaining.length > 0 ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={confirmAllRemaining}
+              title="Only rows already holding a visible value — empty rows need an entry or an explicit not-applicable"
+              className="rounded-md border border-ink/15 bg-panel px-3 py-1.5 text-[12.5px] font-semibold disabled:opacity-60"
+            >
+              Confirm all remaining ({confirmableRemaining.length})
+            </button>
+          ) : null}
           <button
             type="button"
             className="rounded-md bg-accent px-3.5 py-1.5 text-[12.5px] font-semibold text-white"
