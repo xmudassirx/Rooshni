@@ -159,6 +159,20 @@ async function main() {
   );
   const f = fixture.rows[0]!;
 
+  // Session 15 (0026): agent-drafted rows created after the migration earn
+  // the stamp only with a recorded compliance check — heuristics + a
+  // generation-time attestation, on exactly the stamped wording. Tests that
+  // lawfully approve agent drafts record the check first, precisely as the
+  // drafting engine does at generation.
+  const TEST_ATTESTATION = JSON.stringify({
+    attested: true,
+    mode: "approved_template",
+    statement: "harness fixture attestation",
+  });
+  const recordCompliance = async (commId: string, actorId: string = f.agent_id) => {
+    await db.query(`select public.run_compliance_check($1, $2, $3::jsonb)`, [commId, actorId, TEST_ATTESTATION]);
+  };
+
   // Session 2 fixtures: a non-owner human (member) and a second agent that
   // holds no grants at all — the refusal cases of Spec 3.
   const fixture2 = await db.query<{ human2_id: string; agent2_id: string }>(
@@ -290,13 +304,20 @@ async function main() {
         [f.business_id, f.agent_id, thread.rows[0]!.id, f.agent_id]
       )
   );
-  await expectOk("outbound comm sends with a human approver", () =>
-    db.query(
-      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, approved_by_actor_id)
-       values ($1, $2, $3, 'email', 'outbound', 'sent', 'hello', $4)`,
-      [f.business_id, f.agent_id, thread.rows[0]!.id, f.human_id]
-    )
-  );
+  await expectOk("outbound comm sends with a human approver", async () => {
+    // Session 15: born as a draft, compliance-checked, then sent — the
+    // agent-drafted insert-at-sent shortcut now correctly demands a check.
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'hello') returning id`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    );
+    await recordCompliance(r.rows[0]!.id);
+    await db.query(
+      `update public.communications set status = 'sent', approved_by_actor_id = $2 where id = $1`,
+      [r.rows[0]!.id, f.human_id]
+    );
+  });
 
   // Content: publishing needs a human
   await expectError("content cannot be published by an agent", /HUMAN actor/, () =>
@@ -512,10 +533,15 @@ async function main() {
 
   await expectOk("with approvals.comms granted, the same human's stamp lands", async () => {
     await db.query(grantSql, [f.business_id, f.human_id, h2.human2_id, "approvals.comms", "execute", bizScope, "standing", null, f.human_id, "dashboard"]);
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'hello again') returning id`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    );
+    await recordCompliance(r.rows[0]!.id);
     await db.query(
-      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, approved_by_actor_id)
-       values ($1, $2, $3, 'email', 'outbound', 'approved', 'hello again', $4)`,
-      [f.business_id, f.agent_id, thread.rows[0]!.id, h2.human2_id]
+      `update public.communications set status = 'approved', approved_by_actor_id = $2 where id = $1`,
+      [r.rows[0]!.id, h2.human2_id]
     );
   });
 
@@ -660,6 +686,9 @@ async function main() {
       [f.business_id, f.agent_id, thread.rows[0]!.id, engagementId]
     );
     pendingCommId = r.rows[0]!.id;
+    // Session 15: the engine records the compliance check at generation —
+    // mirrored here so the submitted draft's pre-flight reads green below.
+    await recordCompliance(pendingCommId);
     const v = await db.query<{ n: number }>(
       `select count(*)::int as n from public.approval_inbox where item_id = $1`,
       [pendingCommId]
@@ -706,6 +735,19 @@ async function main() {
   await expectOk("the body stays editable (Refine is an edit, not a stamp)", () =>
     db.query(`update public.communications set body = body || ' We look forward to speaking with you.' where id = $1`, [pendingCommId])
   );
+  // Session 15 / WYSIWYS: the edit above made the recorded compliance check
+  // stale — the stamp must refuse the old check and demand a re-screen of
+  // exactly these words (the fail-closed edit contract, decision 117).
+  await expectError(
+    "an edited body cannot ride the old compliance check (WYSIWYS holds)",
+    /wording changed/,
+    () => db.query(`select public.approve_communication($1, $2)`, [pendingCommId, f.human_id])
+  );
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await recordCompliance(pendingCommId);
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
   await expectOk("approve_communication stamps the owner's approval and the item leaves the inbox", async () => {
     await db.query(`select public.approve_communication($1, $2)`, [pendingCommId, f.human_id]);
     const r = await db.query<{ status: string; approved_by_actor_id: string }>(
@@ -789,6 +831,7 @@ async function main() {
     [f.business_id, f.agent_id, ncThread.rows[0]!.id]
   );
   await db.query(`select public.submit_communication($1, $2)`, [ncComm.rows[0]!.id, f.agent_id]);
+  await recordCompliance(ncComm.rows[0]!.id);
 
   await expectError("pre-flight blocks approval without channel consent", /consent/i, () =>
     db.query(`select public.approve_communication($1, $2)`, [ncComm.rows[0]!.id, f.human_id])
@@ -808,6 +851,7 @@ async function main() {
     [f.business_id, f.agent_id, thread.rows[0]!.id]
   );
   await db.query(`select public.submit_communication($1, $2)`, [attComm.rows[0]!.id, f.agent_id]);
+  await recordCompliance(attComm.rows[0]!.id);
 
   await expectError("pre-flight blocks a referenced attachment that is not attached", /attach/, () =>
     db.query(`select public.approve_communication($1, $2)`, [attComm.rows[0]!.id, f.human_id])
@@ -1734,6 +1778,7 @@ async function main() {
       [f.business_id, f.agent_id, waThread.rows[0]!.id, waContact.rows[0]!.id, body, attributes]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, f.agent_id]);
+    await recordCompliance(r.rows[0]!.id);
     return r.rows[0]!.id;
   };
 
@@ -1855,7 +1900,10 @@ async function main() {
       [activation!.business_id]
     );
     for (const row of r.rows) {
-      const want = row.label === "vocab" ? 5 : 5;
+      // Session 15 (0024): the definition's five field declarations plus the
+      // three drafting declarations (knowledge category, content route,
+      // engagement form_answers) — installed from birth.
+      const want = row.label === "vocab" ? 5 : 8;
       if (row.n !== want) throw new Error(`${row.label}: expected ${want}, got ${row.n}`);
     }
   });
@@ -1892,6 +1940,7 @@ async function main() {
       [activation!.business_id, activation!.light_actor_id, tlThread.rows[0]!.id, tlContact.rows[0]!.id, tlEngagement.rows[0]!.id, body]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.light_actor_id]);
+    await recordCompliance(r.rows[0]!.id, activation!.light_actor_id);
     await db.query(`select public.approve_communication($1, $2)`, [r.rows[0]!.id, activation!.owner_actor_id]);
     return r.rows[0]!.id;
   };
@@ -2081,6 +2130,233 @@ async function main() {
       guardId.get(1),
     ]);
   });
+
+  // ---------------------------------------------------------------------
+  // Session 15 — the compliance pre-flight (0026, ruling C-2) and
+  // draft_feedback (0025, PR-4). Refusal-first: the forbidden thing is
+  // attempted and the database throws.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 15 — compliance pre-flight and draft_feedback:");
+
+  // All on the ACTIVATED tenant: a real v3 install with the four no-go
+  // rules on its templates row and businesses.template_id set.
+  const s15Contact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Compliance Lead') returning id`,
+    [activation!.business_id, activation!.light_actor_id]
+  );
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'compliance@lead.test', true, '{"transactional": true}'::jsonb)`,
+    [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
+  );
+  const s15Thread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+     values ($1, $2, $3, 'email') returning id`,
+    [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
+  );
+  const s15Draft = async (body: string) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, 'email', 'outbound', 'draft', $5, $2) returning id`,
+      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id, s15Contact.rows[0]!.id, body]
+    );
+    await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.light_actor_id]);
+    return r.rows[0]!.id;
+  };
+  const s15Check = async (commId: string, attested = true) => {
+    const r = await db.query<{ out: { result: string; rule_matched: string | null; attested: boolean } }>(
+      `select public.run_compliance_check($1, $2, $3::jsonb) as out`,
+      [commId, activation!.light_actor_id, attested ? TEST_ATTESTATION : null]
+    );
+    return r.rows[0]!.out;
+  };
+
+  await expectOk("an agent draft is born compliance-required; a human draft is not (C-2: the gate binds the machine)", async () => {
+    const a = await db.query<{ id: string; required: boolean }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'agent words', $2) returning id, compliance_required as required`,
+      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id]
+    );
+    const h = await db.query<{ id: string; required: boolean }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'human words') returning id, compliance_required as required`,
+      [activation!.business_id, activation!.owner_actor_id, s15Thread.rows[0]!.id]
+    );
+    if (!a.rows[0]!.required) throw new Error("an agent draft was born exempt");
+    if (h.rows[0]!.required) throw new Error("a human draft was born bound — decision-21 behaviour changed");
+  });
+
+  await expectOk("compliance_required is immutable after birth, whatever code writes", async () => {
+    const a = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'immutable stamp', $2) returning id`,
+      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id]
+    );
+    await db.query(`update public.communications set compliance_required = false where id = $1`, [a.rows[0]!.id]);
+    const after = await db.query<{ required: boolean }>(
+      `select compliance_required as required from public.communications where id = $1`,
+      [a.rows[0]!.id]
+    );
+    if (!after.rows[0]!.required) throw new Error("the requiredness stamp was overwritten");
+  });
+
+  await expectError(
+    "fail closed: an unrun compliance check blocks the stamp — pending, never green",
+    /has not run/,
+    async () => {
+      const id = await s15Draft("Thank you for your enquiry — happy to help.");
+      await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectOk("the DoD provocation reads CLEAN: declining to guarantee is the lawful wording", async () => {
+    const id = await s15Draft(
+      "We cannot guarantee any visa outcome — no honest adviser can — but we can assess your situation properly in a consultation."
+    );
+    const out = await s15Check(id);
+    if (out.result !== "clean") throw new Error(`the refusal wording read as ${out.result}: ${out.rule_matched}`);
+    await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+  });
+
+  await expectError(
+    "guarantee language breaches rule 1 and the stamp is REFUSED with the rule named",
+    /No-go rule breached: Light never states or implies a guarantee/,
+    async () => {
+      const id = await s15Draft("Good news — we guarantee your visa will be approved.");
+      const out = await s15Check(id);
+      if (out.result !== "breach") throw new Error("guarantee language read as clean");
+      await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectOk("fee amounts the firm has published read clean; unpublished amounts breach rule 3", async () => {
+    await db.query(
+      `insert into public.content_items (business_id, created_by, content_type, title, slug, body, state, published_by_actor_id, published_at, attributes)
+       values ($1, $2, 'knowledge_entry', 'Published fees', 'published-fees',
+               '[{"type":"paragraph","text":"Initial consultation: £150, credited against instruction."}]'::jsonb,
+               'published', $3, now(), '{"knowledge_category":"published_fees"}'::jsonb)`,
+      [activation!.business_id, activation!.owner_actor_id, activation!.owner_actor_id]
+    );
+    const cleanId = await s15Draft("Our consultation is £150, credited if you instruct us.");
+    const clean = await s15Check(cleanId);
+    if (clean.result !== "clean") throw new Error(`published fee read as ${clean.result}: ${clean.rule_matched}`);
+    const breachId = await s15Draft("For the full application our fee is £2,500.");
+    const breach = await s15Check(breachId);
+    if (breach.result !== "breach") throw new Error("an unpublished fee read as clean");
+    if (!/published consultation fee/.test(breach.rule_matched ?? "")) {
+      throw new Error(`rule named: ${breach.rule_matched}`);
+    }
+  });
+
+  await expectError(
+    "heuristics alone never earn the tick — a clean check without attestation still blocks",
+    /attestation/,
+    async () => {
+      const id = await s15Draft("A perfectly clean body with no attestation recorded.");
+      const out = await s15Check(id, false);
+      if (out.result !== "clean") throw new Error("fixture body was not clean");
+      await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectError(
+    "a signed-in session cannot RUN a compliance check (the runner is server-only)",
+    /permission denied/,
+    async () => {
+      const id = await s15Draft("Forgery attempt one.");
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(`select public.run_compliance_check($1, $2, null)`, [id, f.human_id]);
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  await expectError(
+    "a signed-in session cannot FORGE a check row (no authenticated insert door exists)",
+    /row-level security|permission denied/,
+    async () => {
+      const id = await s15Draft("Forgery attempt two.");
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(
+          `insert into public.communication_compliance_checks
+             (business_id, created_by, communication_id, body, result, heuristics, attestation)
+           values ($1, $2, $3, 'Forgery attempt two.', 'clean', '{}'::jsonb, '{"attested":true}'::jsonb)`,
+          [activation!.business_id, f.human_id, id]
+        );
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  await expectOk("a recorded check is append-only history", async () => {
+    const id = await s15Draft("A body whose check becomes history.");
+    await s15Check(id);
+    let threw = false;
+    try {
+      await db.query(`update public.communication_compliance_checks set result = 'clean' where communication_id = $1`, [id]);
+    } catch (err) {
+      threw = /append-only/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!threw) throw new Error("a check row accepted an update");
+  });
+
+  // --- draft_feedback (0025, PR-4) ----------------------------------------
+  let feedbackId = "";
+  let feedbackCommId = "";
+  await expectOk("an edit and a rejection land as draft_feedback rows, template-queryable", async () => {
+    const commId = await s15Draft("Feedback fixture body.");
+    feedbackCommId = commId;
+    const tpl = await db.query<{ template_id: string }>(
+      `select template_id from public.businesses where id = $1`,
+      [activation!.business_id]
+    );
+    const r = await db.query<{ id: string }>(
+      `insert into public.draft_feedback
+         (business_id, created_by, communication_id, template_id, kind, body_before, body_after, reason, pack_entry_ids)
+       values ($1, $2, $3, $4, 'edit', 'Feedback fixture body.', 'Feedback fixture body, tightened.', 'Too long.', '["00000000-0000-4000-8000-00000000aaaa"]'::jsonb)
+       returning id`,
+      [activation!.business_id, activation!.owner_actor_id, commId, tpl.rows[0]!.template_id]
+    );
+    feedbackId = r.rows[0]!.id;
+    await db.query(
+      `insert into public.draft_feedback
+         (business_id, created_by, communication_id, template_id, kind, body_before, reason)
+       values ($1, $2, $3, $4, 'rejection', 'Feedback fixture body.', 'Shadow mode — handled by existing pipeline')`,
+      [activation!.business_id, activation!.owner_actor_id, commId, tpl.rows[0]!.template_id]
+    );
+    const n = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.draft_feedback where template_id = $1`,
+      [tpl.rows[0]!.template_id]
+    );
+    if (n.rows[0]!.n !== 2) throw new Error(`template query found ${n.rows[0]!.n} rows`);
+  });
+
+  await expectError("draft_feedback is append-only — the signal cannot be rewritten", /append-only/, () =>
+    db.query(`update public.draft_feedback set reason = 'revised history' where id = $1`, [feedbackId])
+  );
+  await expectError("draft_feedback cannot be deleted", /append-only/, () =>
+    db.query(`delete from public.draft_feedback where id = $1`, [feedbackId])
+  );
+  await expectError(
+    "a rejection row must carry its reason and no after-body (the 0017 reason law, mirrored)",
+    /draft_feedback_shape/,
+    () =>
+      db.query(
+        `insert into public.draft_feedback
+           (business_id, created_by, communication_id, kind, body_before, body_after)
+         values ($1, $2, $3, 'rejection', 'before', 'after')`,
+        [activation!.business_id, activation!.owner_actor_id, feedbackCommId]
+      )
+  );
 
   console.log(`\n${passed} passed, ${failed} failed.`);
   process.exit(failed > 0 ? 1 : 0);
