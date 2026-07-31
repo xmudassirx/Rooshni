@@ -801,9 +801,13 @@ async function seedInboundReply(db: SupabaseClient): Promise<void> {
 // variable ({{1}} = client first name; the firm name is baked into the
 // approved text). consultation_reminder carries THREE ({{1}} name,
 // {{2}} date, {{3}} time) and maps when it clears review. Production WABA
-// re-submission is on GO-LIVE. Copy law: decision 118 (WYSIWYS) — these
-// bodies re-issue to the approved templates' exact wording wherever the
-// template path may carry the send.
+// re-submission is on GO-LIVE. Copy law: decisions 118/119 (WYSIWYS,
+// per-channel): attributes.bodies carries channel-specific bodies — the
+// whatsapp entry is the APPROVED template text VERBATIM (read off WABA
+// 270272332844358, 30 Jul 2026; the firm name is baked in — a second
+// tenant's approved templates carry that tenant's name); email keeps its
+// own copy in the body column. The drafter renders the picked channel's
+// body, so the stamp approves exactly the words the client receives.
 const TEMPLATES = [
   {
     id: "01980000-0000-7000-8000-000000000601",
@@ -812,6 +816,10 @@ const TEMPLATES = [
     subject: "Your enquiry with {{business_name}}",
     attributes: {
       wa_template: { name: "enquiry_intro", language: "en_GB", params: ["first_name"] },
+      bodies: {
+        whatsapp:
+          "Hello {{first_name}},\n\nThank you for your enquiry with *X Law*. One of our legal experts will call you as soon as possible to talk through your situation and how the process works. If another time suits you better, just reply here and we will arrange the call around you.\n\nThere is nothing you need to prepare, anything you have to hand will help, but none of it is essential.",
+      },
     },
     // Founder-ruled (Session 10 close pass): the greeting is NEUTRAL by
     // default — behaviour-driven warmth personalisation waits for the
@@ -841,6 +849,10 @@ const TEMPLATES = [
     subject: null,
     attributes: {
       wa_template: { name: "enquiry_nudge", language: "en_GB", params: ["first_name"] },
+      bodies: {
+        whatsapp:
+          'Hello {{first_name}},\n\nAn update on your enquiry with *X Law*. It is still open and one of our legal experts is ready to talk your situation through with you.\n\nReply here with a time that suits, or just say "call me" and we will ring you today.',
+      },
     },
     body:
       "Assalamu alaikum {{first_name}}, just a gentle nudge about your enquiry with {{business_name}}. " +

@@ -125,12 +125,14 @@ Add to this list during build; check items off only at go-live.
       hello_world is no longer load-bearing. Params founder-ruled to match
       the APPROVED bodies: intro and nudge carry ONE variable ({{1}} =
       client first name; firm name baked in); `consultation_reminder`
-      carries THREE ({{1}} name, {{2}} date, {{3}} time). Still open before
-      this line ticks: the WYSIWYS copy re-issue (decision 118 — needs the
-      approved bodies' exact text or a `WHATSAPP_WABA_ID` to read them),
+      carries THREE ({{1}} name, {{2}} date, {{3}} time). WYSIWYS re-issue
+      DONE 30 Jul (decisions 118/119): per-channel bodies live as intro_v1
+      v3 + nurture_t2_v1 v2, whatsapp bodies verbatim from the Test WABA
+      (`WHATSAPP_WABA_ID`, now in env). Still open before this line ticks:
       map `consultation_reminder` when it clears review, and RE-SUBMIT all
       three on the production WABA at cutover with the regulated-status
-      footer per Settings → General.*
+      footer per Settings → General — then re-verify the bodies against
+      the production WABA and re-issue if Meta's review alters a word.*
 - [ ] **Vercel cron is live cadence** (introduced Session 10):
       `apps/web/vercel.json` ships a per-minute cron for
       `GET /api/workflows/tick` — per-minute cadence requires Vercel Pro

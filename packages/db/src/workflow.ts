@@ -73,6 +73,23 @@ export function renderTemplate(text: string, vars: Record<string, string | null 
   return rendered;
 }
 
+/**
+ * Decision 119 — WYSIWYS is per-channel: a template row may carry
+ * channel-specific bodies in attributes.bodies ({ [channel]: text }); the
+ * body of the channel the draft will DISPATCH on wins over the row's default
+ * body column. The WhatsApp entry is the Meta-approved template text
+ * verbatim, so the stamped draft shows exactly the words the client will
+ * receive. A blank channel entry never blanks a draft — the default holds.
+ */
+export function resolveTemplateBody(
+  template: { body: string; attributes?: Record<string, unknown> | null },
+  channel: string
+): string {
+  const bodies = template.attributes?.bodies as Record<string, unknown> | undefined;
+  const specific = bodies?.[channel];
+  return typeof specific === "string" && specific.trim() !== "" ? specific : template.body;
+}
+
 // ---------------------------------------------------------------------------
 // Gated acts — pause / resume / cancel a run. The database function is the
 // gate (enquiries execute, or the owner); the wrapper puts the act on the
@@ -480,10 +497,12 @@ async function executeDraftComm(
     if (!templates[0]) throw new Error(`Message template "${templateKey}" not found for this business`);
 
     const vars = await templateVars(db, facts);
-    const body = renderTemplate(templates[0].body, vars);
-    const subject = templates[0].subject ? renderTemplate(templates[0].subject, vars) : null;
     const intended = (step.config.channel as string) ?? templates[0].channel;
     const picked = await pickChannel(db, facts.contact.id, intended, step.config.fallback_channel);
+    // Decision 119 (WYSIWYS is per-channel): the channel is picked FIRST,
+    // then the draft renders that channel's body — never another channel's.
+    const body = renderTemplate(resolveTemplateBody(templates[0], picked.channel), vars);
+    const subject = templates[0].subject ? renderTemplate(templates[0].subject, vars) : null;
 
     // Session 10: a WhatsApp draft carries its Meta-approved template
     // reference (message_templates.attributes.wa_template: {name, language,

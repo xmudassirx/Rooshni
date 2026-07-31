@@ -929,3 +929,22 @@ per-row basics semantics").
      draft bodies re-issue to the approved templates' exact wording
      wherever the template path may carry the send — the nudge now, the
      intro if drifted. This law binds the query-aware drafting session.
+
+119. **WYSIWYS is per-channel — template versions carry channel-specific
+     bodies; the stamped draft renders the body of the channel it will
+     dispatch on.** Founder-ruled on the flagged caveat: the email intro is
+     NOT aligned to WhatsApp's approved text — split instead.
+     Schema-light shape: `attributes.bodies` ({ channel → body }) within
+     the existing template row; the whatsapp entry is the Meta-approved
+     template text VERBATIM (read off WABA 270272332844358 — name verified
+     "Test WhatsApp Business Account" — all three templates APPROVED,
+     en_GB, variable counts matching decision-118's params ruling); email
+     keeps its own copy in the body column; the drafter picks the channel
+     FIRST, then renders that channel's body (`resolveTemplateBody`), and a
+     blank channel entry never blanks a draft. Re-issued live as new
+     version rows (intro_v1 v3, nurture_t2_v1 v2 — never rewritten), which
+     also repaired a latest-version gap the re-issue inspection surfaced:
+     the mapping chore and params fix had landed on superseded version
+     rows while the drafter reads the latest. This shape binds the
+     query-aware drafting session: generated drafts are per-channel from
+     birth.

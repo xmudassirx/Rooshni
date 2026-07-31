@@ -9,6 +9,7 @@ import { quietHoursHoldUntil, QUIET_HOURS_DEFAULT } from "../src/quiet-hours";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
+import { resolveTemplateBody } from "../src/workflow";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -2007,6 +2008,37 @@ async function main() {
     }
     if (JSON.stringify(r.notApplicableKeys) !== JSON.stringify(["business_hours", "languages"])) {
       throw new Error(`not-applicable split: ${r.notApplicableKeys.join(", ")}`);
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Chore (30 Jul 2026) — decision 119, WYSIWYS is per-channel: the drafter
+  // renders the body of the channel the draft will dispatch on; the
+  // WhatsApp entry is the approved template text verbatim.
+  // ---------------------------------------------------------------------
+  console.log("\nDecision 119 — per-channel template bodies:");
+
+  const perChannelTemplate = {
+    body: "The email copy.",
+    attributes: { bodies: { whatsapp: "The approved WhatsApp wording." } },
+  };
+  await expectOk("the picked channel's body wins — a WhatsApp draft shows the approved wording", async () => {
+    if (resolveTemplateBody(perChannelTemplate, "whatsapp") !== "The approved WhatsApp wording.") {
+      throw new Error("whatsapp did not resolve to its own body");
+    }
+  });
+  await expectOk("a channel without its own body keeps the default — email copy untouched", async () => {
+    if (resolveTemplateBody(perChannelTemplate, "email") !== "The email copy.") {
+      throw new Error("email did not fall back to the default body");
+    }
+    if (resolveTemplateBody({ body: "Only body.", attributes: {} }, "whatsapp") !== "Only body.") {
+      throw new Error("a template without bodies did not fall back");
+    }
+  });
+  await expectOk("a blank channel entry never blanks a draft — the default holds", async () => {
+    const blank = { body: "Default.", attributes: { bodies: { whatsapp: "   " } } };
+    if (resolveTemplateBody(blank, "whatsapp") !== "Default.") {
+      throw new Error("a blank channel body blanked the draft");
     }
   });
 
