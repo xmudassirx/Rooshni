@@ -191,38 +191,67 @@ export async function dispatchApprovedCommunications(
   const report: DispatchReport = { dispatched: 0, failed: 0, queued_quiet_hours: 0, skipped: 0, errors: [] };
   const now = options.now ?? new Date();
 
-  let query = db
-    .from("communications")
-    .select("id, business_id, thread_id, contact_id, engagement_id, channel, body, body_format, scheduled_for, attributes")
-    .eq("status", "approved")
-    .eq("direction", "outbound")
-    .is("archived_at", null);
-  if (options.onlyCommunicationId) query = query.eq("id", options.onlyCommunicationId);
-  const approved = await q<ApprovedComm[]>(query, "approved communications lookup");
-  if (approved.length === 0) return report;
+  const FULL_COLUMNS =
+    "id, business_id, thread_id, contact_id, engagement_id, channel, body, body_format, scheduled_for, attributes";
+
+  // EGRESS DIET: the sweep resolves its working set from ids alone — due-ness
+  // by indexed predicate (communications_approved_idx) and the stub-era
+  // exclusion below — and pulls bodies/attributes only for rows it will
+  // actually carry. The old single full-row select re-transferred every
+  // stub-era body on every tick. The inline post-stamp path (one known id)
+  // keeps the direct full fetch.
+  let candidateIds: string[];
+  if (options.onlyCommunicationId) {
+    candidateIds = [options.onlyCommunicationId];
+  } else {
+    const candidates = await q<{ id: string }[]>(
+      db
+        .from("communications")
+        .select("id")
+        .eq("status", "approved")
+        .eq("direction", "outbound")
+        .is("archived_at", null)
+        .or(`scheduled_for.is.null,scheduled_for.lte.${now.toISOString()}`),
+      "approved candidates lookup"
+    );
+    candidateIds = candidates.map((c) => c.id);
+  }
+  if (candidateIds.length === 0) return report;
 
   // JUDGMENT: messages already carrying a communication.send_stubbed event
   // are the Session 6 stub-era rehearsal rows — "sent" in the stub's terms,
   // never to be re-carried for real. They stay approved until the go-live
-  // purge sweeps the demo data; the dispatcher walks past them.
+  // purge sweeps the demo data; the dispatcher walks past them — since the
+  // egress session, before their bodies ever leave the database.
   const stubbed = await q<{ entity_id: string }[]>(
     db
       .from("events")
       .select("entity_id")
       .eq("action", "communication.send_stubbed")
-      .in("entity_id", approved.map((c) => c.id)),
+      .in("entity_id", candidateIds),
     "stub-era lookup"
   );
   const stubEra = new Set(stubbed.map((s) => s.entity_id));
+  report.skipped += candidateIds.filter((id) => stubEra.has(id)).length;
+  const dispatchableIds = candidateIds.filter((id) => !stubEra.has(id));
+  if (dispatchableIds.length === 0) return report;
+
+  const approved = await q<ApprovedComm[]>(
+    db
+      .from("communications")
+      .select(FULL_COLUMNS)
+      .in("id", dispatchableIds)
+      .eq("status", "approved")
+      .eq("direction", "outbound")
+      .is("archived_at", null),
+    "approved communications lookup"
+  );
+  if (approved.length === 0) return report;
 
   const businesses = new Map<string, BusinessFacts>();
 
   for (const comm of approved) {
     try {
-      if (stubEra.has(comm.id)) {
-        report.skipped += 1;
-        continue;
-      }
       if (comm.scheduled_for && new Date(comm.scheduled_for) > now) {
         report.skipped += 1;
         continue;

@@ -195,10 +195,16 @@ export async function startWorkflowRun(db: SupabaseClient, input: StartRunInput)
 // The tick
 // ---------------------------------------------------------------------------
 
+/** EGRESS DIET (egress session): bundles carry only the columns the executors
+ * read — the definition's key and the steps' execution fields. Full-row
+ * selects on every tick were the top egress source on the free tier. */
+type BundleDefinition = Pick<WorkflowDefinitionRow, "id" | "key">;
+type BundleStep = Pick<WorkflowStepRow, "id" | "key" | "kind" | "config" | "sort_order">;
+
 interface RunBundle {
   run: WorkflowRunRow;
-  definition: WorkflowDefinitionRow;
-  steps: WorkflowStepRow[];
+  definition: BundleDefinition;
+  steps: BundleStep[];
 }
 
 async function q<T>(p: PromiseLike<{ data: T | null; error: { message: string } | null }>, what: string): Promise<T> {
@@ -273,15 +279,15 @@ async function loadRunBundle(db: SupabaseClient, runId: string, cache: Map<strin
   if (cached) return cached;
   const runs = await q<WorkflowRunRow[]>(db.from("workflow_runs").select("*").eq("id", runId).limit(1), "run lookup");
   if (!runs[0]) throw new Error(`Workflow run ${runId} not found`);
-  const definitions = await q<WorkflowDefinitionRow[]>(
-    db.from("workflow_definitions").select("*").eq("id", runs[0].definition_id).limit(1),
+  const definitions = await q<BundleDefinition[]>(
+    db.from("workflow_definitions").select("id, key").eq("id", runs[0].definition_id).limit(1),
     "definition lookup"
   );
   if (!definitions[0]) throw new Error(`Definition ${runs[0].definition_id} not found`);
-  const steps = await q<WorkflowStepRow[]>(
+  const steps = await q<BundleStep[]>(
     db
       .from("workflow_steps")
-      .select("*")
+      .select("id, key, kind, config, sort_order")
       .eq("definition_id", runs[0].definition_id)
       .is("archived_at", null)
       .order("sort_order"),
@@ -292,14 +298,14 @@ async function loadRunBundle(db: SupabaseClient, runId: string, cache: Map<strin
   return bundle;
 }
 
-function nextStepAfter(steps: WorkflowStepRow[], stepId: string): WorkflowStepRow | null {
+function nextStepAfter(steps: BundleStep[], stepId: string): BundleStep | null {
   const index = steps.findIndex((s) => s.id === stepId);
   return index >= 0 && index + 1 < steps.length ? steps[index + 1]! : null;
 }
 
 /** Advance parameters for complete_step_run: the next step and its moment.
  * Wait steps sleep as data says, scaled through timeScale(). */
-function advanceArgs(steps: WorkflowStepRow[], currentStepId: string, now: Date) {
+function advanceArgs(steps: BundleStep[], currentStepId: string, now: Date) {
   const next = nextStepAfter(steps, currentStepId);
   if (!next) return { p_next_step: null, p_next_scheduled_for: null };
   return {
@@ -311,7 +317,7 @@ function advanceArgs(steps: WorkflowStepRow[], currentStepId: string, now: Date)
 async function completeStep(
   db: SupabaseClient,
   bundle: RunBundle,
-  stepRun: StepRunRow,
+  stepRun: Pick<StepRunRow, "id" | "step_id">,
   status: "completed" | "skipped" | "failed",
   outcome: Record<string, unknown>,
   advance: { p_next_step: string | null; p_next_scheduled_for: string | null },
@@ -456,7 +462,7 @@ async function pickChannel(
 async function executeDraftComm(
   db: SupabaseClient,
   bundle: RunBundle,
-  step: WorkflowStepRow,
+  step: BundleStep,
   stepRun: StepRunRow,
   now: Date,
   report: TickReport
@@ -654,7 +660,7 @@ async function executeDraftComm(
 async function executeCreateTask(
   db: SupabaseClient,
   bundle: RunBundle,
-  step: WorkflowStepRow,
+  step: BundleStep,
   stepRun: StepRunRow,
   now: Date,
   report: TickReport
@@ -713,7 +719,7 @@ async function executeCreateTask(
 async function executeMoveStage(
   db: SupabaseClient,
   bundle: RunBundle,
-  step: WorkflowStepRow,
+  step: BundleStep,
   stepRun: StepRunRow,
   now: Date,
   report: TickReport
@@ -813,7 +819,7 @@ async function loadRunNudges(db: SupabaseClient, bundle: RunBundle): Promise<Nud
 async function executeClose(
   db: SupabaseClient,
   bundle: RunBundle,
-  step: WorkflowStepRow,
+  step: BundleStep,
   stepRun: StepRunRow,
   now: Date,
   report: TickReport
@@ -876,7 +882,7 @@ async function executeClose(
 async function executeFireConversion(
   db: SupabaseClient,
   bundle: RunBundle,
-  step: WorkflowStepRow,
+  step: BundleStep,
   stepRun: StepRunRow,
   now: Date,
   report: TickReport
@@ -941,40 +947,43 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
 
   // -- Phase 1: trigger matching — active definitions consume unclaimed
   // trigger events (idempotent: one run per event, one live run per lead).
-  const definitions = await q<WorkflowDefinitionRow[]>(
-    db.from("workflow_definitions").select("*").eq("status", "active").is("archived_at", null),
+  // EGRESS DIET: the scan reads only the id and the attribution source — a
+  // full-payload select re-transferred every Meta lead's field_data on every
+  // tick, forever, and was a top egress source. Non-engagement events are
+  // excluded by indexed predicate (events_entity_idx) instead of read-then-
+  // skipped; consumed lookups carry only the trigger_event_id.
+  const definitions = await q<Pick<WorkflowDefinitionRow, "id" | "business_id" | "key" | "trigger">[]>(
+    db.from("workflow_definitions").select("id, business_id, key, trigger").eq("status", "active").is("archived_at", null),
     "active definitions"
   );
   for (const definition of definitions) {
     const action = definition.trigger?.action;
     if (!action) continue;
     try {
-      const events = await q<{ id: string; entity_type: string | null; entity_id: string | null; payload: Record<string, unknown> }[]>(
+      const events = await q<{ id: string; entity_id: string | null; source: string | null }[]>(
         db
           .from("events")
-          .select("id, entity_type, entity_id, payload")
+          .select("id, entity_id, source:payload->attribution->>source")
           .eq("business_id", definition.business_id)
           .eq("action", action)
+          .eq("entity_type", "engagement")
           .order("occurred_at", { ascending: true })
           .limit(200),
         "trigger event scan"
       );
       if (events.length === 0) continue;
-      const consumedRows = await q<{ context: Record<string, unknown> }[]>(
-        db.from("workflow_runs").select("context").eq("definition_id", definition.id),
+      const consumedRows = await q<{ trigger_event_id: string | null }[]>(
+        db.from("workflow_runs").select("trigger_event_id:context->>trigger_event_id").eq("definition_id", definition.id),
         "consumed trigger lookup"
       );
-      const consumed = new Set(consumedRows.map((r) => r.context?.trigger_event_id).filter(Boolean));
+      const consumed = new Set(consumedRows.map((r) => r.trigger_event_id).filter(Boolean));
       const source = definition.trigger?.source;
       let actors: { engine_actor_id: string; drafter_actor_id: string } | null = null;
 
       for (const evt of events) {
         if (consumed.has(evt.id)) continue;
-        if (evt.entity_type !== "engagement" || !evt.entity_id) continue;
-        if (source) {
-          const attribution = evt.payload?.attribution as Record<string, unknown> | undefined;
-          if (attribution?.source !== source) continue;
-        }
+        if (!evt.entity_id) continue;
+        if (source && evt.source !== source) continue;
         actors ??= await resolveBusinessActors(db, definition.business_id);
         try {
           await startWorkflowRun(db, {
@@ -1015,28 +1024,48 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
     // for a human, not a reason to hold the run's independent steps hostage.
     // A rejected draft returns to `draft` with no stamp and the run stays
     // blocked, exactly as before.
-    const STAMPED_STATUSES = new Set(["approved", "sent", "delivered", "read", "failed"]);
-    const awaiting = await q<StepRunRow[]>(
-      db.from("step_runs").select("*").eq("status", "awaiting_approval"),
+    //
+    // EGRESS DIET: inverted — instead of loading every awaiting step's full
+    // run/definition/steps bundle and THEN discovering its draft is unstamped
+    // (the shadow-mode rejection pile made that ~100 bundles per tick), the
+    // sweep reads only (id, run_id, step_id, communication_id) per awaiting
+    // step, asks in one batched indexed query which of those drafts are
+    // stamped, and touches a bundle only for genuine unblocks — steady state
+    // transfers two small queries and loads nothing.
+    const awaiting = await q<{ id: string; run_id: string; step_id: string; communication_id: string | null }[]>(
+      db
+        .from("step_runs")
+        .select("id, run_id, step_id, communication_id:outcome->>communication_id")
+        .eq("status", "awaiting_approval"),
       "awaiting steps"
     );
+    const awaitedCommIds = [...new Set(awaiting.map((s) => s.communication_id).filter((v): v is string => Boolean(v)))];
+    const stampedStatusByComm = new Map<string, string>();
+    for (let i = 0; i < awaitedCommIds.length; i += 100) {
+      const chunk = awaitedCommIds.slice(i, i + 100);
+      const rows = await q<{ id: string; status: string }[]>(
+        db
+          .from("communications")
+          .select("id, status")
+          .in("id", chunk)
+          .in("status", ["approved", "sent", "delivered", "read", "failed"]),
+        "stamped drafts lookup"
+      );
+      for (const row of rows) stampedStatusByComm.set(row.id, row.status);
+    }
     for (const stepRun of awaiting) {
+      if (!stepRun.communication_id) continue;
+      const commStatus = stampedStatusByComm.get(stepRun.communication_id);
+      if (!commStatus) continue; // unstamped (incl. shadow-mode rejections) — the run stays blocked
       try {
         const bundle = await loadRunBundle(db, stepRun.run_id, bundles);
         if (bundle.run.status !== "blocked") continue;
-        const commId = stepRun.outcome.communication_id as string | undefined;
-        if (!commId) continue;
-        const comms = await q<{ id: string; status: string }[]>(
-          db.from("communications").select("id, status").eq("id", commId).limit(1),
-          "awaited communication lookup"
-        );
-        if (!comms[0] || !STAMPED_STATUSES.has(comms[0].status)) continue;
         await completeStep(
           db,
           bundle,
           stepRun,
           "completed",
-          { communication_id: commId, stamped: true, communication_status: comms[0].status },
+          { communication_id: stepRun.communication_id, stamped: true, communication_status: commStatus },
           advanceArgs(bundle.steps, stepRun.step_id, now()),
           report
         );
