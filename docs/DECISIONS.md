@@ -1006,3 +1006,91 @@ recommended").
      event `019fb7d1-f883-7c80-9f44-7b0004f33c33`
      (`account.allowlist_archived`, platform scope, no personal data in
      the payload).
+
+## Session 15 (31 July 2026) — query-aware drafting, pre-rulings recorded on in-prompt authority
+
+Entries 126, 127, 129, 130 are the founder pre-rulings PR-1..PR-4, "approved
+in this prompt — record each as a DECISIONS candidate at close, quoting this
+prompt per the §8 quoted-approval pattern; do not re-ask" (Session 15 prompt,
+31 July 2026). Entry 131 is pre-flight ruling C-2, approved in the founder's
+rulings message of the same day. Entry 128 is the PR-2 premise correction,
+recorded as Lane B on the founder's quoted confirmation. The session's
+remaining Lane B calls await sign-off in the close report and are NOT
+recorded here.
+
+126. **Knowledge entries are CONTENT, not a new table (PR-1).** Quoted from
+     the prompt: "Each entry is a content_items row, content_type
+     `knowledge_entry` (template vocab), state draft|published (published
+     entries are what retrieval reads), category held in declared attributes
+     (field_definitions rows scoped to the template) drawn from v3's
+     category list … Route-scoped entries (service descriptions) declare
+     attributes.visa_route from the same declared vocabulary the enquiry
+     rows use. Versioning via the existing content_versions; edits create
+     versions, evented. RLS applies as it already does to content. The
+     migration DECLARES (vocab, field definitions, any index retrieval
+     needs) — it does not create a parallel store." Landed as 0024 + the
+     Settings → Knowledge tab (the one-door law: the ONLY place pack
+     entries are edited).
+
+127. **Meta form answers persist on the engagement at ingest (PR-2).**
+     Quoted from the prompt: "engagements.attributes.form_answers = ordered
+     array of {name, label, value} preserving Meta's field names verbatim,
+     declared in field_definitions … Ingest path (Session 10 webhook)
+     writes it from this session on. BACKFILL in-session … a one-off
+     evented chore script … Read payloads ONCE each (egress discipline);
+     report the count. Form answers render in the Approval Inbox
+     context-in-card." This closes decision 110's founder-annotated
+     deferral: data minimisation persisted what drafting uses, when it
+     began using it.
+
+128. **The PR-2 premise correction (Lane B, founder-confirmed):** the 0021
+     `meta_webhook_events` payloads retain ids only — Session 10 fetched
+     field data live and never persisted it — so the backfill replays the
+     STORED LEADGEN IDS and re-fetches each lead's field data from Graph
+     once (`fetchMetaLead`, the live-path adapter), reading the payload
+     column zero times. Idempotent per the C-3 amendment (skips enquiries
+     already holding form_answers; runs twice — in-session and post-merge).
+     Founder approval quoted (31 July 2026): "Proceed in this order: 1. Run
+     npm run backfill:form-answers — report the count and confirm zero
+     payload-column reads." In-session run: 104 marks scanned, 103
+     backfilled and evented, 1 visible failure (a lead Graph no longer
+     serves).
+
+129. **Anthropic is the drafting provider; routing per the doctrine
+     (PR-3).** Quoted from the prompt: "ANTHROPIC_API_KEY env var only
+     (Vercel + .env.local), never committed, never logged … Router floors
+     per doctrine: Standard floor = current Haiku-class model; escalation
+     tier = current Sonnet-class; both model ids live in ONE config module
+     (model-agnosticism = one-line swap). Escalation is earned by recorded
+     trigger — no-go proximity in the lead's question, multi-route
+     situation, assembled context beyond floor budget — and the reason
+     lands on the credit line. Every draft's credit line records: model
+     tier, escalation reason (or 'floor'), and context budget used (tokens
+     assembled vs cap)." The module is
+     `packages/db/src/model-router.ts`; the credit line lives on the row
+     (attributes.credit_line) and is priced on The Record
+     (`light.draft_generated` with the events.cost block — its first
+     producer).
+
+130. **Refine feedback lives in `draft_feedback` (PR-4).** Quoted from the
+     prompt: "communication_id, template_id, kind edit|rejection,
+     body_before, body_after (null for rejection), reason, pack entry ids
+     the draft used, actor, created_at. Append-only; evented on The Record.
+     Queryable by template for the future training loop — this session
+     just stops throwing the signal away." Landed as 0025; edits and
+     rejections (single and bulk) write it from the Approval Inbox.
+
+131. **The compliance gate binds the machine (ruling C-2).** Quoted from
+     the founder's rulings message (31 July 2026): "The compliance
+     requirement binds agent-drafted communications created after the
+     migration: heuristics + generation-time attestation both required for
+     green on those rows, fail closed. Human-authored communications
+     (including decision-21 insert-at-approved) and pre-migration drafts
+     remain under the existing deterministic check set — decision-21
+     behaviour unchanged. … v3's no-go rules govern Light's words, not the
+     firm's own; the compliance gate binds the machine." Landed as 0026:
+     `compliance_required` stamped at birth from the drafter's actor type
+     and immutable; checks recorded append-only through the server-only
+     `run_compliance_check()`; the readiness pre-flight fails closed on a
+     missing, stale, breaching or unattested check, and a breach names its
+     rule on the RED chip.
