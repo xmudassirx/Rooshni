@@ -188,6 +188,12 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   its own evented entry with its reason. A session asked to "speed up
   approvals" with any batch mechanism is a Lane C stop by definition.
 
+- The **superseded-template guard** (0023, decision 120): a
+  `message_templates` row with a newer live version of the same key refuses
+  every UPDATE except archival — a fix can never land on the version row
+  the drafter no longer reads; the lawful change is a new version row
+  (re-issue, never rewrite).
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail

@@ -2042,6 +2042,46 @@ async function main() {
     }
   });
 
+  // ---------------------------------------------------------------------
+  // 0023 — superseded template versions are read-only history (decision
+  // 120): the fix that lands on the row nobody reads is now impossible,
+  // not merely noticed.
+  // ---------------------------------------------------------------------
+  console.log("\n0023 — the superseded-template guard:");
+
+  const guardRows = await db.query<{ id: string; version: number }>(
+    `insert into public.message_templates (business_id, created_by, key, channel, subject, body, version)
+     values ($1, $2, 'guard_t', 'email', 'One', 'Version one.', 1),
+            ($1, $2, 'guard_t', 'email', 'Two', 'Version two.', 2)
+     returning id, version`,
+    [f.business_id, f.human_id]
+  );
+  const guardId = new Map(guardRows.rows.map((r) => [r.version, r.id]));
+
+  await expectError(
+    "a superseded version refuses the fix that lands on the row nobody reads",
+    /superseded/,
+    () =>
+      db.query(`update public.message_templates set attributes = '{"wa_template":{"name":"late_fix"}}'::jsonb where id = $1`, [
+        guardId.get(1),
+      ])
+  );
+  await expectOk("the latest version accepts the same write", async () => {
+    await db.query(`update public.message_templates set attributes = '{"wa_template":{"name":"on_latest"}}'::jsonb where id = $1`, [
+      guardId.get(2),
+    ]);
+  });
+  await expectOk("archiving a superseded version stays legal — history keeps its housekeeping", async () => {
+    await db.query(`update public.message_templates set archived_at = now() where id = $1`, [guardId.get(1)]);
+  });
+  await expectOk("a version whose newer siblings are all archived is the effective latest again — updates lawful", async () => {
+    await db.query(`update public.message_templates set archived_at = now() where id = $1`, [guardId.get(2)]);
+    await db.query(`update public.message_templates set archived_at = null where id = $1`, [guardId.get(1)]);
+    await db.query(`update public.message_templates set attributes = '{"back":"in service"}'::jsonb where id = $1`, [
+      guardId.get(1),
+    ]);
+  });
+
   console.log(`\n${passed} passed, ${failed} failed.`);
   process.exit(failed > 0 ? 1 : 0);
 }

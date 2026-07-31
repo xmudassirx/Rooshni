@@ -948,3 +948,15 @@ per-row basics semantics").
      rows while the drafter reads the latest. This shape binds the
      query-aware drafting session: generated drafts are per-channel from
      birth.
+
+120. **Superseded template versions are read-only history — enforced in the
+     database (0023).** Founder-ordered hardening after the decision-119
+     re-issue surfaced the class of bug (a mapping/params fix landing on a
+     version row the drafter no longer reads); the order allowed
+     "structurally impossible or loudly detected" — the trigger lane is
+     chosen per the standing principle. Any UPDATE on a message_templates
+     row with a newer live version of the same key is refused, whatever
+     code carries the write; archival-state changes stay legal on any
+     version, and a row whose newer siblings are all archived is the
+     effective latest again. The lawful change remains a NEW version row:
+     re-issue, never rewrite.
