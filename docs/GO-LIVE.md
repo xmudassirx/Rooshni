@@ -83,6 +83,20 @@ Add to this list during build; check items off only at go-live.
       and the `stripe_events` circuit rows. Its ledger events are append-only;
       they go with the one-off superuser purge at go-live like the other
       fixture events.
+- [ ] **Rule on the Bikayga test tenant + close its sign-in door** (introduced
+      Session 14, auth forensics — recommendation awaiting founder ruling):
+      account `019f7082-2f2e-7e3d-98a1-9b4aed81f786` ("Ahsan Raja" /
+      business "Bikayga", signup email bikaygapl@gmail.com) is Ahsan's
+      activated test-mode signup of 17 Jul 15:37 BST — the activation door
+      created its auth user via the admin API (provider "email",
+      auto-confirmed, never signed in), an `allowed_emails` row and standing
+      activation grants, all evented on the ledger. Isolation held (single
+      membership, own business only, zero sessions ever), but the allowlist
+      row is an open sign-in door for a non-customer. Recommended: archive
+      the `allowed_emails` row now (reversible, evented) and fold the tenant
+      — auth user included — into the Pilot-Test purge pattern above at
+      go-live; never hard-delete the tenant outside that purge (its ledger
+      events are append-only).
 - [ ] **Microsoft sign-in before the first external pilot** (recorded
       17 July 2026, founder-ruled fast-follow, outside Session 9's scope):
       signup states the Google constraint on the email field; the Supabase
