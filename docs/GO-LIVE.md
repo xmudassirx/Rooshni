@@ -188,6 +188,23 @@ Add to this list during build; check items off only at go-live.
       note is now his own words verbatim; day-3 aligned, no new claims. The
       note's "[link]" is wired to the signup resume link until a real
       booking URL exists (see the walkthrough-booking session).*
+- [ ] **ANTHROPIC_API_KEY in Vercel** (introduced Session 15, PR-3): the
+      drafting engine's provider key must be set in Vercel env vars (and
+      `.env.local` for local runs) BEFORE the s15 merge deploys — without
+      it every generated email draft fails visibly with the recorded reason
+      (never a silent stub fallback), and only the WhatsApp template path
+      keeps drafting. Env var only, never committed, never logged; note a
+      rotation date when issued. Model ids live in ONE module
+      (`packages/db/src/model-router.ts`) — a swap is a one-line change.
+- [ ] **Pre-migration shadow drafts are compliance-exempt by design**
+      (introduced Session 15, ruling C-2): agent drafts created BEFORE 0026
+      carry `compliance_required = false` and remain stampable under the
+      old deterministic checks; the shadow-mode purge/cancel at exit-shadow
+      retires them. Drafts created AFTER 0026 by the pre-merge production
+      engine (the window between live apply and the s15 deploy) carry the
+      requirement but no recorded check, so they are unapprovable until
+      rejected or purged — bulk rejection covers them in the daily shadow
+      chore.
 - [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
       Session 3/6 demo drafts that were approved in the stub era carry
       `communication.send_stubbed` events; the dispatcher permanently walks
