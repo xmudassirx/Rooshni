@@ -62,6 +62,9 @@ export interface InboxCardProps {
   context: CardContext | null;
   /** Session 15 — the credit line, present on generated drafts only. */
   creditLine: CardCreditLine | null;
+  /** Session 15 fix round — "edited by <name> · <time>", pre-formatted on
+   * the server; a FACT in neutral chrome (not a stamp act, not a Light act). */
+  editedNote: string | null;
   /** Session 12 — selection mode, for bulk REJECTION only. Approval never
    * takes a selection: the stamp is individual by constitution. */
   selection?: { selected: boolean; onToggle: () => void } | null;
@@ -265,6 +268,7 @@ export function InboxCard(props: InboxCardProps) {
         ) : (
           <Badge variant="time">drafted by {props.draftedBy ?? "unknown"}</Badge>
         )}
+        {props.editedNote ? <Badge variant="time">{props.editedNote}</Badge> : null}
         <span className="text-[12.5px] font-medium text-ink-soft">
           {props.recipient ? `→ ${props.recipient}` : null}
           {props.recipient && props.subject ? " · " : null}

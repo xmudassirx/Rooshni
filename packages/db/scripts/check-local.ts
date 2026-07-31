@@ -2523,6 +2523,75 @@ async function main() {
       )
   );
 
+  // --- 0027: the waiting clock is the client's, immutable across edits ----
+  await expectOk("the waiting clock is the CLIENT's — an edit never resets awaiting_since (0027)", async () => {
+    const id = await s15Draft("The waiting clock belongs to the client, not the editor.");
+    await s15Check(id);
+    const before = await db.query<{ awaiting_since: string; submitted_at: string }>(
+      `select v.awaiting_since::text as awaiting_since, c.submitted_at::text as submitted_at
+       from public.approval_inbox v join public.communications c on c.id = v.item_id
+       where v.item_id = $1`,
+      [id]
+    );
+    if (!before.rows[0]) throw new Error("the submitted draft is not in the inbox");
+    if (before.rows[0].submitted_at === null) throw new Error("submitted_at was not stamped at the pending transition");
+    if (before.rows[0].awaiting_since !== before.rows[0].submitted_at) {
+      throw new Error("awaiting_since is not keyed to the submission stamp");
+    }
+    // The edit: words change, the age must not — and even an explicit write
+    // to the clock is forced back by the trigger, whatever code carries it.
+    await db.query(
+      `update public.communications set body = body || ' (edited)', submitted_at = '2020-01-01T00:00:00Z' where id = $1`,
+      [id]
+    );
+    const after = await db.query<{ awaiting_since: string; submitted_at: string }>(
+      `select v.awaiting_since::text as awaiting_since, c.submitted_at::text as submitted_at
+       from public.approval_inbox v join public.communications c on c.id = v.item_id
+       where v.item_id = $1`,
+      [id]
+    );
+    if (after.rows[0]!.submitted_at !== before.rows[0].submitted_at) {
+      throw new Error("an edit (or an explicit write) moved the submission stamp");
+    }
+    if (after.rows[0]!.awaiting_since !== before.rows[0].awaiting_since) {
+      throw new Error("an edit reset the client's waiting clock — the inbox would lie about the lead's age");
+    }
+  });
+
+  await expectError(
+    "submitted_at is closed to direct update for API roles (the clock is not theirs to touch)",
+    /permission denied/,
+    async () => {
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(`update public.communications set submitted_at = now() where id = $1`, [feedbackCommId]);
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  await expectOk("a re-submission after rejection lawfully restarts the wait (that queue period is new)", async () => {
+    const id = await s15Draft("Rejected, revised, resubmitted.");
+    await s15Check(id);
+    const first = await db.query<{ submitted_at: string }>(
+      `select submitted_at::text as submitted_at from public.communications where id = $1`,
+      [id]
+    );
+    await db.query(`select public.reject_communication($1, $2, $3)`, [id, activation!.owner_actor_id, "Not yet."]);
+    await db.query(`select pg_sleep(0.01)`);
+    await db.query(`select public.submit_communication($1, $2)`, [id, activation!.light_actor_id]);
+    const second = await db.query<{ submitted_at: string }>(
+      `select submitted_at::text as submitted_at from public.communications where id = $1`,
+      [id]
+    );
+    if (second.rows[0]!.submitted_at === first.rows[0]!.submitted_at) {
+      throw new Error("a genuine re-submission did not restart the clock");
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed.`);
   process.exit(failed > 0 ? 1 : 0);
 }

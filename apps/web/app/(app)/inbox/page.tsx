@@ -50,6 +50,11 @@ async function toCardProps(row: ApprovalInboxRow): Promise<InboxCardProps> {
     context: detail?.context ?? null,
     // Session 15 (PR-3): Light's spend and sources, on the card at stamp time.
     creditLine: detail?.creditLine ?? null,
+    // Session 15 fix round: an edited pending body wears its state — a fact
+    // in neutral chrome, never gold, never red, never green.
+    editedNote: detail?.editedBy
+      ? `edited by ${detail.editedBy.name} · ${formatWhen(detail.editedBy.at)}`
+      : null,
   };
 }
 

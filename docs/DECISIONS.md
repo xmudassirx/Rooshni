@@ -1156,3 +1156,21 @@ recorded here.
      register/tone, selected pack entries) is cache-marked so
      regenerations bill cached-input rates, and cache usage lands on the
      credit line.
+
+134. **The waiting clock is the client's, immutable across edits** (Session
+     15 click-review fix, founder-ruled 31 July 2026: "'waiting since' and
+     the inbox sort key derive from the original submission-to-pending
+     time, never reset by an edit. An edit changes the words, not the age.
+     The edited card must hold its queue position and its true waiting
+     time."). Landed as 0027: `communications.submitted_at`, stamped by
+     trigger on the transition INTO pending_approval, forced immutable on
+     every other write (an explicit write is overwritten back), absent from
+     the API roles' update grants; the approval_inbox view (re-issued from
+     its four-arm 0019 definition) keys awaiting_since to it, with
+     updated_at only as the fallback for pre-0027 rows the ledger could
+     not date; existing rows backfilled from their earliest
+     `communication.submitted` event. A re-submission after rejection
+     lawfully restarts the clock — that queue period is genuinely new. The
+     companion click-review fix needs no ruling: an edited pending body
+     wears an "edited by <name> · <time>" chip read from draft_feedback —
+     a fact in neutral chrome, never gold, red or green.

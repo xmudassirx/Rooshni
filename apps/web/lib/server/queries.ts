@@ -211,6 +211,9 @@ export interface CommunicationDetail {
   creditLine: CommunicationCreditLine | null;
   /** Session 15 — whether the 0026 compliance gate binds this row. */
   complianceRequired: boolean;
+  /** Session 15 fix round — the latest human edit of this pending body,
+   * read from draft_feedback (no new store). A fact, not a stamp act. */
+  editedBy: { name: string; at: string } | null;
 }
 
 /** Full draft for the inbox detail panel — the view carries only a preview. */
@@ -354,6 +357,26 @@ export async function getCommunicationDetail(
     };
   }
 
+  // Session 15 fix round: an edited pending body wears its state — the
+  // latest edit signal already lives in draft_feedback (PR-4).
+  let editedBy: { name: string; at: string } | null = null;
+  const { data: lastEdit } = await db
+    .from("draft_feedback")
+    .select("created_by, created_at")
+    .eq("communication_id", data.id)
+    .eq("kind", "edit")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (lastEdit) {
+    const { data: editor } = await db
+      .from("actors")
+      .select("display_name")
+      .eq("id", lastEdit.created_by)
+      .maybeSingle();
+    editedBy = { name: editor?.display_name ?? "a team member", at: lastEdit.created_at };
+  }
+
   return {
     id: data.id,
     body: data.body,
@@ -364,6 +387,7 @@ export async function getCommunicationDetail(
     context,
     creditLine,
     complianceRequired: Boolean(data.compliance_required),
+    editedBy,
   };
 }
 
