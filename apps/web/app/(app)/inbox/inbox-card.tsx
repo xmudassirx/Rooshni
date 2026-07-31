@@ -1,17 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Check, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { DecisionControls } from "./decision-controls";
+import { editDraftAction, type EditDraftState } from "./actions";
 
 export interface CardCheck {
   key: string;
   label: string;
   pass: boolean;
   detail: string | null;
+  /** Session 15 — the compliance check's finer state:
+   * pending | stale | breach | unattested | clean. */
+  state?: string;
+}
+
+/** Session 15 (PR-3) — Light's spend and sources, on the card at stamp time. */
+export interface CardCreditLine {
+  tier: string;
+  model: string;
+  reason: string;
+  contextTokens: number;
+  budgetTokens: number;
+  attempts: number;
+  packEntries: { id: string; title: string }[];
 }
 
 export interface CardContext {
@@ -42,6 +60,11 @@ export interface InboxCardProps {
   preflightPass: boolean | null;
   /** Session 11 — the lead's context, expandable above the draft. */
   context: CardContext | null;
+  /** Session 15 — the credit line, present on generated drafts only. */
+  creditLine: CardCreditLine | null;
+  /** Session 15 fix round — "edited by <name> · <time>", pre-formatted on
+   * the server; a FACT in neutral chrome (not a stamp act, not a Light act). */
+  editedNote: string | null;
   /** Session 12 — selection mode, for bulk REJECTION only. Approval never
    * takes a selection: the stamp is individual by constitution. */
   selection?: { selected: boolean; onToggle: () => void } | null;
@@ -53,9 +76,14 @@ const CHECK_NAMES: Record<string, string> = {
   placeholders: "PLACEHOLDERS",
   consent: "CONSENT",
   attachment: "ATTACHMENTS",
+  wa_session_window: "WA WINDOW",
+  compliance: "COMPLIANCE",
 };
 
-/** Checks the database has not run yet (decision 19) — pending, never green. */
+/** Checks the database has not run yet (decision 19) — pending, never green.
+ * Session 15: COMPLIANCE became a REAL check for rows the 0026 gate binds —
+ * it appears in `checks` there; rows the gate does not bind (human-authored,
+ * pre-migration) still show it here as pending, honestly unchecked. */
 const NOT_YET_RUN = ["LINKS", "COMPLIANCE"];
 
 function PreflightLine({
@@ -65,28 +93,61 @@ function PreflightLine({
   checks: CardCheck[];
   wired: boolean;
 }) {
+  const hasRealCompliance = checks.some((c) => c.key === "compliance");
+  const notYetRun = hasRealCompliance ? NOT_YET_RUN.filter((n) => n !== "COMPLIANCE") : NOT_YET_RUN;
   return (
     <div className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
       Pre-flight:{" "}
       {wired ? (
         <>
-          {checks.map((check) => (
-            <span key={check.key}>
-              <span className={check.pass ? "text-ledger" : "font-semibold text-stamp"}>
-                {CHECK_NAMES[check.key] ?? check.key} {check.pass ? "✓" : "✗"}
+          {checks.map((check) => {
+            // The compliance check distinguishes RED (a named breach — the
+            // stamp is refused) from PENDING (not yet run on these exact
+            // words — never green, decision 117 fail-closed).
+            const pendingNotFailed =
+              check.key === "compliance" && !check.pass && check.state !== "breach";
+            return (
+              <span key={check.key}>
+                <span
+                  className={
+                    check.pass
+                      ? "text-ledger"
+                      : pendingNotFailed
+                        ? undefined
+                        : "font-semibold text-stamp"
+                  }
+                >
+                  {CHECK_NAMES[check.key] ?? check.key}{" "}
+                  {check.pass ? "✓" : pendingNotFailed ? (check.state === "stale" ? "re-check due" : "pending") : "✗"}
+                </span>
+                {" · "}
               </span>
-              {" · "}
-            </span>
-          ))}
-          {NOT_YET_RUN.map((name, i) => (
+            );
+          })}
+          {notYetRun.map((name, i) => (
             <span key={name}>
-              {name} pending{i < NOT_YET_RUN.length - 1 ? " · " : ""}
+              {name} pending{i < notYetRun.length - 1 ? " · " : ""}
             </span>
           ))}
         </>
       ) : (
         <span>not yet wired for this item type — every check pending, never ticked</span>
       )}
+    </div>
+  );
+}
+
+/** Session 15 (PR-3): tier, escalation reason, budget and the pack entries
+ * used — Light's channel, so the spark wears gold; the facts stay mono. */
+function CreditLine({ credit }: { credit: CardCreditLine }) {
+  return (
+    <div className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+      <span className="light-text">✦ Light</span>
+      {` · ${credit.tier} (${credit.model})`}
+      {` · ${credit.reason === "floor" ? "floor — no escalation" : `escalated: ${credit.reason}`}`}
+      {` · context ${credit.contextTokens}/${credit.budgetTokens} tok`}
+      {credit.attempts > 1 ? ` · attempt ${credit.attempts} (redrafted after a compliance breach)` : ""}
+      {` · pack: ${credit.packEntries.length ? credit.packEntries.map((e) => e.title).join(", ") : "no entries used"}`}
     </div>
   );
 }
@@ -145,7 +206,7 @@ function ContextSection({ context }: { context: CardContext }) {
             ))}
           </div>
           <p className="mt-2 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
-            Full form answers arrive with query-aware drafting (Phase 2) — shown here: everything the database holds.
+            Shown here: everything the database holds — form answers verbatim as the lead gave them.
           </p>
         </div>
       ) : null}
@@ -153,11 +214,23 @@ function ContextSection({ context }: { context: CardContext }) {
   );
 }
 
+const EDIT_INITIAL: EditDraftState = { error: null };
+
 export function InboxCard(props: InboxCardProps) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editState, editFormAction, editPending] = useActionState(editDraftAction, EDIT_INITIAL);
   const failures = props.checks.filter((c) => !c.pass && c.detail);
   const isComm = props.itemType === "communication";
   const canExpand = props.fullBody !== null && props.fullBody !== props.preview;
+
+  useEffect(() => {
+    if (editState.saved) {
+      setEditing(false);
+      router.refresh();
+    }
+  }, [editState.saved, router]);
 
   return (
     <div
@@ -195,6 +268,7 @@ export function InboxCard(props: InboxCardProps) {
         ) : (
           <Badge variant="time">drafted by {props.draftedBy ?? "unknown"}</Badge>
         )}
+        {props.editedNote ? <Badge variant="time">{props.editedNote}</Badge> : null}
         <span className="text-[12.5px] font-medium text-ink-soft">
           {props.recipient ? `→ ${props.recipient}` : null}
           {props.recipient && props.subject ? " · " : null}
@@ -209,28 +283,57 @@ export function InboxCard(props: InboxCardProps) {
           glance and stamp without leaving the inbox). */}
       {props.context ? <ContextSection context={props.context} /> : null}
 
-      {/* The message, readable in place; clicking opens the full text. */}
-      <button
-        type="button"
-        onClick={() => canExpand && setOpen((v) => !v)}
-        aria-expanded={open}
-        className={cn(
-          "my-2 block w-full rounded-lg border border-rule bg-paper px-3 py-2.5 text-left text-[13.5px] text-ink",
-          canExpand && "cursor-pointer transition-colors hover:border-ledger"
-        )}
-      >
-        <span className={cn(!open && "line-clamp-2", open && "whitespace-pre-wrap")}>
-          {open ? (props.fullBody ?? props.preview) : props.preview}
-        </span>
-        {canExpand ? (
-          <span className="mt-1.5 block font-mono text-[10px] tracking-wide text-ink-faint uppercase">
-            {open ? "— tap to collapse" : "— tap to open the full message"}
+      {/* The message: readable in place, or editable before the stamp
+          (Session 15, signed amendment 2 — WYSIWYS: the stamp approves the
+          words as edited, and the pre-flight re-runs on exactly those words). */}
+      {editing ? (
+        <form action={editFormAction} className="my-2">
+          <input type="hidden" name="communicationId" value={props.itemId} />
+          <Textarea
+            name="body"
+            defaultValue={props.fullBody ?? props.preview}
+            rows={8}
+            autoFocus
+            className="text-[13.5px]"
+          />
+          {editState.error ? <p className="mt-1.5 text-[12px] text-stamp">{editState.error}</p> : null}
+          <div className="mt-2 flex items-center gap-2">
+            <p className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+              Saving re-runs the pre-flight — compliance included — on these exact words; the edit lands in
+              draft_feedback and on The Record.
+            </p>
+            <Button type="button" variant="ghost" size="sm" className="ml-auto" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" size="sm" disabled={editPending}>
+              {editPending ? "Saving…" : "Save & re-check"}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <button
+          type="button"
+          onClick={() => canExpand && setOpen((v) => !v)}
+          aria-expanded={open}
+          className={cn(
+            "my-2 block w-full rounded-lg border border-rule bg-paper px-3 py-2.5 text-left text-[13.5px] text-ink",
+            canExpand && "cursor-pointer transition-colors hover:border-ledger"
+          )}
+        >
+          <span className={cn(!open && "line-clamp-2", open && "whitespace-pre-wrap")}>
+            {open ? (props.fullBody ?? props.preview) : props.preview}
           </span>
-        ) : null}
-      </button>
+          {canExpand ? (
+            <span className="mt-1.5 block font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+              {open ? "— tap to collapse" : "— tap to open the full message"}
+            </span>
+          ) : null}
+        </button>
+      )}
 
       <div className="mb-2 flex flex-col gap-1">
         <PreflightLine checks={props.checks} wired={isComm} />
+        {props.creditLine ? <CreditLine credit={props.creditLine} /> : null}
         <div className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
           {props.scheduledNote}
         </div>
@@ -247,6 +350,7 @@ export function InboxCard(props: InboxCardProps) {
           communicationId={props.itemId}
           preflightPass={props.preflightPass === true}
           blockedDetails={failures.map((f) => f.detail as string)}
+          onEdit={editing ? undefined : () => setEditing(true)}
         />
       ) : (
         <p className="text-[12.5px] text-ink-soft">

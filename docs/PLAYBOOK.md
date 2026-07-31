@@ -194,6 +194,21 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   the drafter no longer reads; the lawful change is a new version row
   (re-issue, never rewrite).
 
+- The **compliance gate** (Session 15, 0026, ruling C-2): an agent-drafted
+  communication born after 0026 carries `compliance_required = true` —
+  stamped at insert from the drafter's actor type by trigger, immutable
+  thereafter, and absent from every API role's update grant. Such a row
+  cannot reach `approved`/`sent` without a recorded compliance check on
+  EXACTLY its current wording that is heuristics-clean AND carries a
+  generation-time attestation — missing, stale, breaching or unattested
+  checks all fail closed (decision 117). Checks are append-only rows
+  written only by the service-only `run_compliance_check()`; no
+  authenticated insert path exists, so a browser can never record itself a
+  clean check. Human-authored communications and pre-0026 rows stay under
+  the decision-19 deterministic set — the gate binds the machine, never
+  the firm's own words. `draft_feedback` (0025) is append-only: the refine
+  signal, once recorded, is history.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail

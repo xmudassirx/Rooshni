@@ -93,12 +93,15 @@ export interface GrantRow {
 // --- Session 3: the Approval Inbox ------------------------------------------
 
 /** One deterministic readiness check (Spec 3 §6, decision 11; Session 10
- * adds the WhatsApp session-window check). */
+ * adds the WhatsApp session-window check; Session 15 adds compliance). */
 export interface PreflightCheck {
-  key: "body" | "placeholders" | "consent" | "attachment" | "wa_session_window" | string;
+  key: "body" | "placeholders" | "consent" | "attachment" | "wa_session_window" | "compliance" | string;
   label: string;
   pass: boolean;
   detail: string | null;
+  /** Session 15 — the compliance check's finer state:
+   * pending | stale | breach | unattested | clean. */
+  state?: string;
 }
 
 /** The checklist shown on an inbox card; `pass` gates the Approve control. */

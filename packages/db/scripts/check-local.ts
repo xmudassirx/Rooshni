@@ -10,6 +10,17 @@ import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
 import { resolveTemplateBody } from "../src/workflow";
+import { formAnswersFromFieldData } from "../src/meta";
+import {
+  composeDraft,
+  leadTextFromAnswers,
+  matchRoutes,
+  selectKnowledgeEntries,
+  PermanentGenerationError,
+  type GenerateFn,
+  type KnowledgeEntry,
+} from "../src/drafting";
+import { resolveEscalation, LIGHT_MODEL_FLOOR, LIGHT_MODEL_ESCALATION, DRAFT_CONTEXT_BUDGETS } from "../src/model-router";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -159,6 +170,20 @@ async function main() {
   );
   const f = fixture.rows[0]!;
 
+  // Session 15 (0026): agent-drafted rows created after the migration earn
+  // the stamp only with a recorded compliance check — heuristics + a
+  // generation-time attestation, on exactly the stamped wording. Tests that
+  // lawfully approve agent drafts record the check first, precisely as the
+  // drafting engine does at generation.
+  const TEST_ATTESTATION = JSON.stringify({
+    attested: true,
+    mode: "approved_template",
+    statement: "harness fixture attestation",
+  });
+  const recordCompliance = async (commId: string, actorId: string = f.agent_id) => {
+    await db.query(`select public.run_compliance_check($1, $2, $3::jsonb)`, [commId, actorId, TEST_ATTESTATION]);
+  };
+
   // Session 2 fixtures: a non-owner human (member) and a second agent that
   // holds no grants at all — the refusal cases of Spec 3.
   const fixture2 = await db.query<{ human2_id: string; agent2_id: string }>(
@@ -290,13 +315,20 @@ async function main() {
         [f.business_id, f.agent_id, thread.rows[0]!.id, f.agent_id]
       )
   );
-  await expectOk("outbound comm sends with a human approver", () =>
-    db.query(
-      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, approved_by_actor_id)
-       values ($1, $2, $3, 'email', 'outbound', 'sent', 'hello', $4)`,
-      [f.business_id, f.agent_id, thread.rows[0]!.id, f.human_id]
-    )
-  );
+  await expectOk("outbound comm sends with a human approver", async () => {
+    // Session 15: born as a draft, compliance-checked, then sent — the
+    // agent-drafted insert-at-sent shortcut now correctly demands a check.
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'hello') returning id`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    );
+    await recordCompliance(r.rows[0]!.id);
+    await db.query(
+      `update public.communications set status = 'sent', approved_by_actor_id = $2 where id = $1`,
+      [r.rows[0]!.id, f.human_id]
+    );
+  });
 
   // Content: publishing needs a human
   await expectError("content cannot be published by an agent", /HUMAN actor/, () =>
@@ -512,10 +544,15 @@ async function main() {
 
   await expectOk("with approvals.comms granted, the same human's stamp lands", async () => {
     await db.query(grantSql, [f.business_id, f.human_id, h2.human2_id, "approvals.comms", "execute", bizScope, "standing", null, f.human_id, "dashboard"]);
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'hello again') returning id`,
+      [f.business_id, f.agent_id, thread.rows[0]!.id]
+    );
+    await recordCompliance(r.rows[0]!.id);
     await db.query(
-      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, approved_by_actor_id)
-       values ($1, $2, $3, 'email', 'outbound', 'approved', 'hello again', $4)`,
-      [f.business_id, f.agent_id, thread.rows[0]!.id, h2.human2_id]
+      `update public.communications set status = 'approved', approved_by_actor_id = $2 where id = $1`,
+      [r.rows[0]!.id, h2.human2_id]
     );
   });
 
@@ -660,6 +697,9 @@ async function main() {
       [f.business_id, f.agent_id, thread.rows[0]!.id, engagementId]
     );
     pendingCommId = r.rows[0]!.id;
+    // Session 15: the engine records the compliance check at generation —
+    // mirrored here so the submitted draft's pre-flight reads green below.
+    await recordCompliance(pendingCommId);
     const v = await db.query<{ n: number }>(
       `select count(*)::int as n from public.approval_inbox where item_id = $1`,
       [pendingCommId]
@@ -706,6 +746,19 @@ async function main() {
   await expectOk("the body stays editable (Refine is an edit, not a stamp)", () =>
     db.query(`update public.communications set body = body || ' We look forward to speaking with you.' where id = $1`, [pendingCommId])
   );
+  // Session 15 / WYSIWYS: the edit above made the recorded compliance check
+  // stale — the stamp must refuse the old check and demand a re-screen of
+  // exactly these words (the fail-closed edit contract, decision 117).
+  await expectError(
+    "an edited body cannot ride the old compliance check (WYSIWYS holds)",
+    /wording changed/,
+    () => db.query(`select public.approve_communication($1, $2)`, [pendingCommId, f.human_id])
+  );
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await recordCompliance(pendingCommId);
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
   await expectOk("approve_communication stamps the owner's approval and the item leaves the inbox", async () => {
     await db.query(`select public.approve_communication($1, $2)`, [pendingCommId, f.human_id]);
     const r = await db.query<{ status: string; approved_by_actor_id: string }>(
@@ -789,6 +842,7 @@ async function main() {
     [f.business_id, f.agent_id, ncThread.rows[0]!.id]
   );
   await db.query(`select public.submit_communication($1, $2)`, [ncComm.rows[0]!.id, f.agent_id]);
+  await recordCompliance(ncComm.rows[0]!.id);
 
   await expectError("pre-flight blocks approval without channel consent", /consent/i, () =>
     db.query(`select public.approve_communication($1, $2)`, [ncComm.rows[0]!.id, f.human_id])
@@ -808,6 +862,7 @@ async function main() {
     [f.business_id, f.agent_id, thread.rows[0]!.id]
   );
   await db.query(`select public.submit_communication($1, $2)`, [attComm.rows[0]!.id, f.agent_id]);
+  await recordCompliance(attComm.rows[0]!.id);
 
   await expectError("pre-flight blocks a referenced attachment that is not attached", /attach/, () =>
     db.query(`select public.approve_communication($1, $2)`, [attComm.rows[0]!.id, f.human_id])
@@ -1734,6 +1789,7 @@ async function main() {
       [f.business_id, f.agent_id, waThread.rows[0]!.id, waContact.rows[0]!.id, body, attributes]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, f.agent_id]);
+    await recordCompliance(r.rows[0]!.id);
     return r.rows[0]!.id;
   };
 
@@ -1855,7 +1911,10 @@ async function main() {
       [activation!.business_id]
     );
     for (const row of r.rows) {
-      const want = row.label === "vocab" ? 5 : 5;
+      // Session 15 (0024): the definition's five field declarations plus the
+      // three drafting declarations (knowledge category, content route,
+      // engagement form_answers) — installed from birth.
+      const want = row.label === "vocab" ? 5 : 8;
       if (row.n !== want) throw new Error(`${row.label}: expected ${want}, got ${row.n}`);
     }
   });
@@ -1892,6 +1951,7 @@ async function main() {
       [activation!.business_id, activation!.light_actor_id, tlThread.rows[0]!.id, tlContact.rows[0]!.id, tlEngagement.rows[0]!.id, body]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.light_actor_id]);
+    await recordCompliance(r.rows[0]!.id, activation!.light_actor_id);
     await db.query(`select public.approve_communication($1, $2)`, [r.rows[0]!.id, activation!.owner_actor_id]);
     return r.rows[0]!.id;
   };
@@ -2080,6 +2140,456 @@ async function main() {
     await db.query(`update public.message_templates set attributes = '{"back":"in service"}'::jsonb where id = $1`, [
       guardId.get(1),
     ]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 15 — the drafting engine's pure layer: form answers, route
+  // matching, task-scoped selection, routing floors + earned escalation,
+  // and per-channel composition against an injected fake provider.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 15 — the drafting engine (pure layer):");
+
+  await expectOk("Meta field data becomes ordered form answers, names verbatim (PR-2)", async () => {
+    const answers = formAnswersFromFieldData([
+      { name: "full_name", values: ["Ayesha Khan"] },
+      { name: "what_visa_are_you_interested_in?", values: ["Skilled Worker"] },
+      { name: "tell_us_about_your_situation", values: ["My employer will sponsor me", "Start date in March"] },
+    ]);
+    if (answers.length !== 3) throw new Error(`expected 3 answers, got ${answers.length}`);
+    if (answers[1]!.name !== "what_visa_are_you_interested_in?") throw new Error("field name was not preserved verbatim");
+    if (answers[1]!.label !== "What visa are you interested in?") throw new Error(`label: ${answers[1]!.label}`);
+    if (answers[2]!.value !== "My employer will sponsor me, Start date in March") throw new Error("multi-value answer not joined");
+  });
+
+  await expectOk("route matching reads the lead's own words — a lookup, never an inference", async () => {
+    if (JSON.stringify(matchRoutes("My employer will sponsor me for a Skilled Worker visa")) !== '["skilled_worker"]') {
+      throw new Error("skilled worker did not match");
+    }
+    const multi = matchRoutes("I am on a spouse visa and want ILR next year");
+    if (!multi.includes("spouse_family") || !multi.includes("ilr")) throw new Error(`multi-route: ${multi.join(",")}`);
+    if (matchRoutes("Hello, I would like some help").length !== 0) throw new Error("matched a route from nothing");
+  });
+
+  await expectOk("task-scoped selection: route-matched service description + fees + booking, capped — never the whole pack", async () => {
+    const pack: KnowledgeEntry[] = [
+      { id: "sw", title: "Skilled Worker", category: "service_description", visa_route: "skilled_worker", text: "SW route." },
+      { id: "sp", title: "Spouse", category: "service_description", visa_route: "spouse_family", text: "Spouse route." },
+      { id: "fees", title: "Fees", category: "published_fees", visa_route: null, text: "Consultation £150." },
+      { id: "book", title: "Booking", category: "consultation_booking_policy", visa_route: null, text: "Book online." },
+      { id: "tone1", title: "Tone", category: "tone_exemplar", visa_route: null, text: "Warm, plain." },
+      { id: "faq1", title: "Financial requirement", category: "faq", visa_route: null, text: "About the financial requirement." },
+      { id: "faq2", title: "Sponsorship evidence", category: "faq", visa_route: null, text: "About sponsorship and employer evidence." },
+    ];
+    const result = selectKnowledgeEntries(pack, "My employer offered sponsorship for a skilled worker role");
+    const ids = result.entries.map((e) => e.id);
+    if (!ids.includes("sw")) throw new Error("route-matched service description missing");
+    if (ids.includes("sp")) throw new Error("the OTHER route's service description was dumped in");
+    if (!ids.includes("fees") || !ids.includes("book")) throw new Error("fees/booking policy missing");
+    if (!ids.includes("faq2")) throw new Error("word-relevant FAQ missing");
+    if (result.entries.length > DRAFT_CONTEXT_BUDGETS.max_pack_entries) throw new Error("selection exceeded the pack cap");
+  });
+
+  await expectOk("routing: floor by default; escalation EARNED by recorded trigger (doctrine)", async () => {
+    const calm = resolveEscalation({ leadText: "I would like help with my application", routeMatches: 1, contextTokens: 500 });
+    if (calm.tier !== "standard" || calm.model !== LIGHT_MODEL_FLOOR.model || calm.reason !== "floor") {
+      throw new Error(`calm lead did not route to the floor: ${JSON.stringify(calm)}`);
+    }
+    const nogo = resolveEscalation({ leadText: "Can you guarantee my visa?", routeMatches: 1, contextTokens: 500 });
+    if (nogo.tier !== "pro" || nogo.model !== LIGHT_MODEL_ESCALATION.model || !/no-go/.test(nogo.reason)) {
+      throw new Error(`no-go proximity did not escalate: ${JSON.stringify(nogo)}`);
+    }
+    const multi = resolveEscalation({ leadText: "hello", routeMatches: 2, contextTokens: 500 });
+    if (multi.tier !== "pro" || !/multi-route/.test(multi.reason)) throw new Error("multi-route did not escalate");
+    const big = resolveEscalation({ leadText: "hello", routeMatches: 1, contextTokens: DRAFT_CONTEXT_BUDGETS.floor_tokens + 1 });
+    if (big.tier !== "pro" || !/budget/.test(big.reason)) throw new Error("over-floor context did not escalate");
+  });
+
+  await expectOk("per-channel from birth: an email draft is COMPOSED against the lead's words, credit line priced", async () => {
+    let sawPrompt = "";
+    const fake: GenerateFn = async (request) => {
+      sawPrompt = `${request.system}\n${request.prompt}`;
+      return {
+        subject: "Your enquiry with Test Firm",
+        body: "Hello Ayesha,\n\nThank you for your enquiry about the Skilled Worker route...",
+        attestation: { attested: true, statement: "Complies with every rule." },
+        usage: { input_tokens: 900, output_tokens: 120 },
+      };
+    };
+    const answers = [{ name: "situation", label: "Situation", value: "Employer sponsorship for skilled worker" }];
+    const result = await composeDraft(fake, {
+      business_name: "Test Firm",
+      sign_off: "Test Firm",
+      first_name: "Ayesha",
+      full_name: "Ayesha Khan",
+      channel: "email",
+      task: "intro",
+      enquiry_title: "Ayesha Khan — enquiry",
+      stage_label: "New",
+      source: "meta",
+      form_answers: answers,
+      no_go_rules: ["Light never states or implies a guarantee of visa success."],
+      retrieval: {
+        entries: [{ id: "sw", title: "Skilled Worker", category: "service_description", visa_route: "skilled_worker", text: "SW route facts." }],
+        route_matches: ["skilled_worker"],
+      },
+    });
+    if (!/Employer sponsorship/.test(sawPrompt)) throw new Error("the lead's own words were not in the prompt");
+    if (!/never states or implies a guarantee/.test(sawPrompt)) throw new Error("the no-go rules were not IN the generation prompt");
+    if (!/SW route facts/.test(sawPrompt)) throw new Error("the selected pack entry was not assembled");
+    // Founder-ruled at close review: the sign-off is the FIRM's identity
+    // value, never a personal name.
+    if (!/Sign off as "Test Firm"/.test(sawPrompt)) throw new Error("the firm sign-off was not instructed");
+    if (/Mudassir/.test(sawPrompt)) throw new Error("a personal name leaked into the sign-off instruction");
+    if (result.credit_line.tier !== "standard" || result.credit_line.reason !== "floor") {
+      throw new Error(`credit line: ${JSON.stringify(result.credit_line)}`);
+    }
+    if (JSON.stringify(result.credit_line.knowledge_entry_ids) !== '["sw"]') throw new Error("pack entry ids not recorded");
+    if (result.attestation.mode !== "generated" || !result.attestation.attested) throw new Error("attestation not captured");
+  });
+
+  await expectOk("a generated body with unresolved braces is a PERMANENT visible failure — never submitted", async () => {
+    const fake: GenerateFn = async () => ({
+      subject: null,
+      body: "Hello {{first_name}}, this should never pass",
+      attestation: { attested: true, statement: "x" },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    let threw = false;
+    try {
+      await composeDraft(fake, {
+        business_name: "T", sign_off: "T", first_name: "A", full_name: "A B", channel: "email",
+        task: "intro", enquiry_title: "t", stage_label: "New", source: "meta",
+        form_answers: [], no_go_rules: [], retrieval: { entries: [], route_matches: [] },
+      });
+    } catch (err) {
+      threw = err instanceof PermanentGenerationError;
+    }
+    if (!threw) throw new Error("braces survived composition");
+  });
+
+  await expectOk("over-budget assembly fails VISIBLY — never a trim-and-hope", async () => {
+    const fake: GenerateFn = async () => {
+      throw new Error("the provider must never be called on an over-budget assembly");
+    };
+    const huge = "x".repeat((DRAFT_CONTEXT_BUDGETS.escalation_tokens + 100) * 4);
+    let threw = false;
+    try {
+      await composeDraft(fake, {
+        business_name: "T", sign_off: "T", first_name: "A", full_name: "A B", channel: "email",
+        task: "intro", enquiry_title: "t", stage_label: "New", source: "meta",
+        form_answers: [{ name: "s", label: "S", value: "calm" }], no_go_rules: [],
+        retrieval: { entries: [{ id: "big", title: "Big", category: "faq", visa_route: null, text: huge }], route_matches: [] },
+      });
+    } catch (err) {
+      threw = err instanceof PermanentGenerationError && /over-budget/.test((err as Error).message);
+    }
+    if (!threw) throw new Error("over-budget assembly did not fail visibly");
+  });
+
+  await expectOk("leadTextFromAnswers flattens what the lead SAID for triggers and retrieval", async () => {
+    const text = leadTextFromAnswers([
+      { name: "q1", label: "Visa type", value: "Skilled Worker" },
+      { name: "q2", label: "Question", value: "How much does it cost?" },
+    ]);
+    if (!/Visa type: Skilled Worker/.test(text) || !/How much does it cost/.test(text)) {
+      throw new Error(`flattened text: ${text}`);
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 15 — the compliance pre-flight (0026, ruling C-2) and
+  // draft_feedback (0025, PR-4). Refusal-first: the forbidden thing is
+  // attempted and the database throws.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 15 — compliance pre-flight and draft_feedback:");
+
+  // All on the ACTIVATED tenant: a real v3 install with the four no-go
+  // rules on its templates row and businesses.template_id set.
+  const s15Contact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Compliance Lead') returning id`,
+    [activation!.business_id, activation!.light_actor_id]
+  );
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'compliance@lead.test', true, '{"transactional": true}'::jsonb)`,
+    [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
+  );
+  const s15Thread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+     values ($1, $2, $3, 'email') returning id`,
+    [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
+  );
+  const s15Draft = async (body: string) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, 'email', 'outbound', 'draft', $5, $2) returning id`,
+      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id, s15Contact.rows[0]!.id, body]
+    );
+    await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.light_actor_id]);
+    return r.rows[0]!.id;
+  };
+  const s15Check = async (commId: string, attested = true) => {
+    const r = await db.query<{ out: { result: string; rule_matched: string | null; attested: boolean } }>(
+      `select public.run_compliance_check($1, $2, $3::jsonb) as out`,
+      [commId, activation!.light_actor_id, attested ? TEST_ATTESTATION : null]
+    );
+    return r.rows[0]!.out;
+  };
+
+  await expectOk("an agent draft is born compliance-required; a human draft is not (C-2: the gate binds the machine)", async () => {
+    const a = await db.query<{ id: string; required: boolean }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'agent words', $2) returning id, compliance_required as required`,
+      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id]
+    );
+    const h = await db.query<{ id: string; required: boolean }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'human words') returning id, compliance_required as required`,
+      [activation!.business_id, activation!.owner_actor_id, s15Thread.rows[0]!.id]
+    );
+    if (!a.rows[0]!.required) throw new Error("an agent draft was born exempt");
+    if (h.rows[0]!.required) throw new Error("a human draft was born bound — decision-21 behaviour changed");
+  });
+
+  await expectOk("compliance_required is immutable after birth, whatever code writes", async () => {
+    const a = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, 'email', 'outbound', 'draft', 'immutable stamp', $2) returning id`,
+      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id]
+    );
+    await db.query(`update public.communications set compliance_required = false where id = $1`, [a.rows[0]!.id]);
+    const after = await db.query<{ required: boolean }>(
+      `select compliance_required as required from public.communications where id = $1`,
+      [a.rows[0]!.id]
+    );
+    if (!after.rows[0]!.required) throw new Error("the requiredness stamp was overwritten");
+  });
+
+  await expectError(
+    "fail closed: an unrun compliance check blocks the stamp — pending, never green",
+    /has not run/,
+    async () => {
+      const id = await s15Draft("Thank you for your enquiry — happy to help.");
+      await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectOk("the DoD provocation reads CLEAN: declining to guarantee is the lawful wording", async () => {
+    const id = await s15Draft(
+      "We cannot guarantee any visa outcome — no honest adviser can — but we can assess your situation properly in a consultation."
+    );
+    const out = await s15Check(id);
+    if (out.result !== "clean") throw new Error(`the refusal wording read as ${out.result}: ${out.rule_matched}`);
+    await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+  });
+
+  await expectError(
+    "guarantee language breaches rule 1 and the stamp is REFUSED with the rule named",
+    /No-go rule breached: Light never states or implies a guarantee/,
+    async () => {
+      const id = await s15Draft("Good news — we guarantee your visa will be approved.");
+      const out = await s15Check(id);
+      if (out.result !== "breach") throw new Error("guarantee language read as clean");
+      await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectOk("fee amounts the firm has published read clean; unpublished amounts breach rule 3", async () => {
+    await db.query(
+      `insert into public.content_items (business_id, created_by, content_type, title, slug, body, state, published_by_actor_id, published_at, attributes)
+       values ($1, $2, 'knowledge_entry', 'Published fees', 'published-fees',
+               '[{"type":"paragraph","text":"Initial consultation: £150, credited against instruction."}]'::jsonb,
+               'published', $3, now(), '{"knowledge_category":"published_fees"}'::jsonb)`,
+      [activation!.business_id, activation!.owner_actor_id, activation!.owner_actor_id]
+    );
+    const cleanId = await s15Draft("Our consultation is £150, credited if you instruct us.");
+    const clean = await s15Check(cleanId);
+    if (clean.result !== "clean") throw new Error(`published fee read as ${clean.result}: ${clean.rule_matched}`);
+    const breachId = await s15Draft("For the full application our fee is £2,500.");
+    const breach = await s15Check(breachId);
+    if (breach.result !== "breach") throw new Error("an unpublished fee read as clean");
+    if (!/published consultation fee/.test(breach.rule_matched ?? "")) {
+      throw new Error(`rule named: ${breach.rule_matched}`);
+    }
+  });
+
+  await expectError(
+    "heuristics alone never earn the tick — a clean check without attestation still blocks",
+    /attestation/,
+    async () => {
+      const id = await s15Draft("A perfectly clean body with no attestation recorded.");
+      const out = await s15Check(id, false);
+      if (out.result !== "clean") throw new Error("fixture body was not clean");
+      await db.query(`select public.approve_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectError(
+    "a signed-in session cannot RUN a compliance check (the runner is server-only)",
+    /permission denied/,
+    async () => {
+      const id = await s15Draft("Forgery attempt one.");
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(`select public.run_compliance_check($1, $2, null)`, [id, f.human_id]);
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  await expectError(
+    "a signed-in session cannot FORGE a check row (no authenticated insert door exists)",
+    /row-level security|permission denied/,
+    async () => {
+      const id = await s15Draft("Forgery attempt two.");
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(
+          `insert into public.communication_compliance_checks
+             (business_id, created_by, communication_id, body, result, heuristics, attestation)
+           values ($1, $2, $3, 'Forgery attempt two.', 'clean', '{}'::jsonb, '{"attested":true}'::jsonb)`,
+          [activation!.business_id, f.human_id, id]
+        );
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  await expectOk("a recorded check is append-only history", async () => {
+    const id = await s15Draft("A body whose check becomes history.");
+    await s15Check(id);
+    let threw = false;
+    try {
+      await db.query(`update public.communication_compliance_checks set result = 'clean' where communication_id = $1`, [id]);
+    } catch (err) {
+      threw = /append-only/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!threw) throw new Error("a check row accepted an update");
+  });
+
+  // --- draft_feedback (0025, PR-4) ----------------------------------------
+  let feedbackId = "";
+  let feedbackCommId = "";
+  await expectOk("an edit and a rejection land as draft_feedback rows, template-queryable", async () => {
+    const commId = await s15Draft("Feedback fixture body.");
+    feedbackCommId = commId;
+    const tpl = await db.query<{ template_id: string }>(
+      `select template_id from public.businesses where id = $1`,
+      [activation!.business_id]
+    );
+    const r = await db.query<{ id: string }>(
+      `insert into public.draft_feedback
+         (business_id, created_by, communication_id, template_id, kind, body_before, body_after, reason, pack_entry_ids)
+       values ($1, $2, $3, $4, 'edit', 'Feedback fixture body.', 'Feedback fixture body, tightened.', 'Too long.', '["00000000-0000-4000-8000-00000000aaaa"]'::jsonb)
+       returning id`,
+      [activation!.business_id, activation!.owner_actor_id, commId, tpl.rows[0]!.template_id]
+    );
+    feedbackId = r.rows[0]!.id;
+    await db.query(
+      `insert into public.draft_feedback
+         (business_id, created_by, communication_id, template_id, kind, body_before, reason)
+       values ($1, $2, $3, $4, 'rejection', 'Feedback fixture body.', 'Shadow mode — handled by existing pipeline')`,
+      [activation!.business_id, activation!.owner_actor_id, commId, tpl.rows[0]!.template_id]
+    );
+    const n = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.draft_feedback where template_id = $1`,
+      [tpl.rows[0]!.template_id]
+    );
+    if (n.rows[0]!.n !== 2) throw new Error(`template query found ${n.rows[0]!.n} rows`);
+  });
+
+  await expectError("draft_feedback is append-only — the signal cannot be rewritten", /append-only/, () =>
+    db.query(`update public.draft_feedback set reason = 'revised history' where id = $1`, [feedbackId])
+  );
+  await expectError("draft_feedback cannot be deleted", /append-only/, () =>
+    db.query(`delete from public.draft_feedback where id = $1`, [feedbackId])
+  );
+  await expectError(
+    "a rejection row must carry its reason and no after-body (the 0017 reason law, mirrored)",
+    /draft_feedback_shape/,
+    () =>
+      db.query(
+        `insert into public.draft_feedback
+           (business_id, created_by, communication_id, kind, body_before, body_after)
+         values ($1, $2, $3, 'rejection', 'before', 'after')`,
+        [activation!.business_id, activation!.owner_actor_id, feedbackCommId]
+      )
+  );
+
+  // --- 0027: the waiting clock is the client's, immutable across edits ----
+  await expectOk("the waiting clock is the CLIENT's — an edit never resets awaiting_since (0027)", async () => {
+    const id = await s15Draft("The waiting clock belongs to the client, not the editor.");
+    await s15Check(id);
+    const before = await db.query<{ awaiting_since: string; submitted_at: string }>(
+      `select v.awaiting_since::text as awaiting_since, c.submitted_at::text as submitted_at
+       from public.approval_inbox v join public.communications c on c.id = v.item_id
+       where v.item_id = $1`,
+      [id]
+    );
+    if (!before.rows[0]) throw new Error("the submitted draft is not in the inbox");
+    if (before.rows[0].submitted_at === null) throw new Error("submitted_at was not stamped at the pending transition");
+    if (before.rows[0].awaiting_since !== before.rows[0].submitted_at) {
+      throw new Error("awaiting_since is not keyed to the submission stamp");
+    }
+    // The edit: words change, the age must not — and even an explicit write
+    // to the clock is forced back by the trigger, whatever code carries it.
+    await db.query(
+      `update public.communications set body = body || ' (edited)', submitted_at = '2020-01-01T00:00:00Z' where id = $1`,
+      [id]
+    );
+    const after = await db.query<{ awaiting_since: string; submitted_at: string }>(
+      `select v.awaiting_since::text as awaiting_since, c.submitted_at::text as submitted_at
+       from public.approval_inbox v join public.communications c on c.id = v.item_id
+       where v.item_id = $1`,
+      [id]
+    );
+    if (after.rows[0]!.submitted_at !== before.rows[0].submitted_at) {
+      throw new Error("an edit (or an explicit write) moved the submission stamp");
+    }
+    if (after.rows[0]!.awaiting_since !== before.rows[0].awaiting_since) {
+      throw new Error("an edit reset the client's waiting clock — the inbox would lie about the lead's age");
+    }
+  });
+
+  await expectError(
+    "submitted_at is closed to direct update for API roles (the clock is not theirs to touch)",
+    /permission denied/,
+    async () => {
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(`update public.communications set submitted_at = now() where id = $1`, [feedbackCommId]);
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  await expectOk("a re-submission after rejection lawfully restarts the wait (that queue period is new)", async () => {
+    const id = await s15Draft("Rejected, revised, resubmitted.");
+    await s15Check(id);
+    const first = await db.query<{ submitted_at: string }>(
+      `select submitted_at::text as submitted_at from public.communications where id = $1`,
+      [id]
+    );
+    await db.query(`select public.reject_communication($1, $2, $3)`, [id, activation!.owner_actor_id, "Not yet."]);
+    await db.query(`select pg_sleep(0.01)`);
+    await db.query(`select public.submit_communication($1, $2)`, [id, activation!.light_actor_id]);
+    const second = await db.query<{ submitted_at: string }>(
+      `select submitted_at::text as submitted_at from public.communications where id = $1`,
+      [id]
+    );
+    if (second.rows[0]!.submitted_at === first.rows[0]!.submitted_at) {
+      throw new Error("a genuine re-submission did not restart the clock");
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

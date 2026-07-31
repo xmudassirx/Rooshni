@@ -25,10 +25,14 @@ export function DecisionControls({
   communicationId,
   preflightPass,
   blockedDetails,
+  onEdit,
 }: {
   communicationId: string;
   preflightPass: boolean;
   blockedDetails: string[];
+  /** Session 15 (signed amendment 2): edit-before-stamp — a stamp-authority
+   * act; saving re-runs the pre-flight on the edited words. */
+  onEdit?: () => void;
 }) {
   const [approveState, approve, approving] = useActionState(approveAction, initialState);
   const [rejectState, reject, rejecting] = useActionState(rejectAction, initialState);
@@ -72,6 +76,12 @@ export function DecisionControls({
             <Ban /> Blocked by pre-flight
           </Button>
         )}
+
+        {onEdit ? (
+          <Button size="sm" variant="ghost" disabled={approving || rejecting} onClick={onEdit}>
+            Edit draft
+          </Button>
+        ) : null}
 
         <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
           <DialogTrigger asChild>

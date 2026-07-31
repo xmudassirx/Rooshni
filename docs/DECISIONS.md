@@ -1006,3 +1006,171 @@ recommended").
      event `019fb7d1-f883-7c80-9f44-7b0004f33c33`
      (`account.allowlist_archived`, platform scope, no personal data in
      the payload).
+
+## Session 15 (31 July 2026) — query-aware drafting, pre-rulings recorded on in-prompt authority
+
+Entries 126, 127, 129, 130 are the founder pre-rulings PR-1..PR-4, "approved
+in this prompt — record each as a DECISIONS candidate at close, quoting this
+prompt per the §8 quoted-approval pattern; do not re-ask" (Session 15 prompt,
+31 July 2026). Entry 131 is pre-flight ruling C-2, approved in the founder's
+rulings message of the same day. Entry 128 is the PR-2 premise correction,
+recorded as Lane B on the founder's quoted confirmation. The session's
+remaining Lane B calls await sign-off in the close report and are NOT
+recorded here.
+
+126. **Knowledge entries are CONTENT, not a new table (PR-1).** Quoted from
+     the prompt: "Each entry is a content_items row, content_type
+     `knowledge_entry` (template vocab), state draft|published (published
+     entries are what retrieval reads), category held in declared attributes
+     (field_definitions rows scoped to the template) drawn from v3's
+     category list … Route-scoped entries (service descriptions) declare
+     attributes.visa_route from the same declared vocabulary the enquiry
+     rows use. Versioning via the existing content_versions; edits create
+     versions, evented. RLS applies as it already does to content. The
+     migration DECLARES (vocab, field definitions, any index retrieval
+     needs) — it does not create a parallel store." Landed as 0024 + the
+     Settings → Knowledge tab (the one-door law: the ONLY place pack
+     entries are edited).
+
+127. **Meta form answers persist on the engagement at ingest (PR-2).**
+     Quoted from the prompt: "engagements.attributes.form_answers = ordered
+     array of {name, label, value} preserving Meta's field names verbatim,
+     declared in field_definitions … Ingest path (Session 10 webhook)
+     writes it from this session on. BACKFILL in-session … a one-off
+     evented chore script … Read payloads ONCE each (egress discipline);
+     report the count. Form answers render in the Approval Inbox
+     context-in-card." This closes decision 110's founder-annotated
+     deferral: data minimisation persisted what drafting uses, when it
+     began using it.
+
+128. **The PR-2 premise correction (Lane B, founder-confirmed):** the 0021
+     `meta_webhook_events` payloads retain ids only — Session 10 fetched
+     field data live and never persisted it — so the backfill replays the
+     STORED LEADGEN IDS and re-fetches each lead's field data from Graph
+     once (`fetchMetaLead`, the live-path adapter), reading the payload
+     column zero times. Idempotent per the C-3 amendment (skips enquiries
+     already holding form_answers; runs twice — in-session and post-merge).
+     Founder approval quoted (31 July 2026): "Proceed in this order: 1. Run
+     npm run backfill:form-answers — report the count and confirm zero
+     payload-column reads." In-session run: 104 marks scanned, 103
+     backfilled and evented, 1 visible failure (a lead Graph no longer
+     serves).
+
+129. **Anthropic is the drafting provider; routing per the doctrine
+     (PR-3).** Quoted from the prompt: "ANTHROPIC_API_KEY env var only
+     (Vercel + .env.local), never committed, never logged … Router floors
+     per doctrine: Standard floor = current Haiku-class model; escalation
+     tier = current Sonnet-class; both model ids live in ONE config module
+     (model-agnosticism = one-line swap). Escalation is earned by recorded
+     trigger — no-go proximity in the lead's question, multi-route
+     situation, assembled context beyond floor budget — and the reason
+     lands on the credit line. Every draft's credit line records: model
+     tier, escalation reason (or 'floor'), and context budget used (tokens
+     assembled vs cap)." The module is
+     `packages/db/src/model-router.ts`; the credit line lives on the row
+     (attributes.credit_line) and is priced on The Record
+     (`light.draft_generated` with the events.cost block — its first
+     producer).
+
+130. **Refine feedback lives in `draft_feedback` (PR-4).** Quoted from the
+     prompt: "communication_id, template_id, kind edit|rejection,
+     body_before, body_after (null for rejection), reason, pack entry ids
+     the draft used, actor, created_at. Append-only; evented on The Record.
+     Queryable by template for the future training loop — this session
+     just stops throwing the signal away." Landed as 0025; edits and
+     rejections (single and bulk) write it from the Approval Inbox.
+
+131. **The compliance gate binds the machine (ruling C-2).** Quoted from
+     the founder's rulings message (31 July 2026): "The compliance
+     requirement binds agent-drafted communications created after the
+     migration: heuristics + generation-time attestation both required for
+     green on those rows, fail closed. Human-authored communications
+     (including decision-21 insert-at-approved) and pre-migration drafts
+     remain under the existing deterministic check set — decision-21
+     behaviour unchanged. … v3's no-go rules govern Light's words, not the
+     firm's own; the compliance gate binds the machine." Landed as 0026:
+     `compliance_required` stamped at birth from the drafter's actor type
+     and immutable; checks recorded append-only through the server-only
+     `run_compliance_check()`; the readiness pre-flight fails closed on a
+     missing, stale, breaching or unattested check, and a breach names its
+     rule on the RED chip.
+
+132. **The Session 15 Lane B calls, all eleven approved** ("LANE B SIGN-OFF:
+     1–11 ALL APPROVED as recommended. Record in DECISIONS quoting this
+     approval" — founder review message, 31 July 2026). The calls, with the
+     founder's riders recorded in place:
+     (1) 0024 declarations land as per-install field_definitions rows, not
+     a template_definitions v4 re-issue (decision 79 pins "v3 applies");
+     (2) category/route vocabularies ride field_definitions.validation.allowed
+     per install; (3) the 0026 heuristics deterministically implement v3
+     rules 1 and 3, rules 2 and 4 enforced in-prompt + attestation —
+     **rider:** rule 4 becomes partially deterministic when contact
+     classification exists (future tightening, not this scope); (4) the fee
+     check reads rule 3 as "Light quotes only amounts published in the
+     pack" — **rider:** deliberately broader than rule 3 as written;
+     (5) draft_feedback.template_id nullable; (6) the generative path is
+     email-only this session — WhatsApp always takes the approved-template
+     path (118/119) and attests as `approved_template`; (7) a template
+     subject wins when present (decision 98 stability), and the doctrine
+     retry-once runs post-insert against recorded heuristics, both checks
+     retained, attempts on the credit line; (8) transient provider failures
+     leave the step for lease retry, permanent ones (including a missing
+     key) fail the step visibly with both events; (9) rejection feedback is
+     captured for agent-drafted rows only, and edit authority is checked
+     app-side (owner or approvals.comms) with the DB gates untouched;
+     (10) Meta form-answer labels are the verbatim field names humanised
+     deterministically (Graph carries no separate label); (11) the official
+     @anthropic-ai/sdk dependency — **rider:** recorded explicitly as a
+     departure from the raw-fetch house pattern (graph.ts/whatsapp.ts);
+     its typed error classes drive the transient/permanent split.
+     **Edited-body attestation semantics, on the record at the founder's
+     instruction:** an edit re-runs the compliance check on the EXACT
+     edited words — heuristics re-screen deterministically, the
+     generation-time attestation carries forward, no new model call; green
+     = clean heuristics + carried attestation, so an edited draft is
+     approvable the moment the re-check lands clean (WYSIWYS holds; C-2's
+     both-required rule is satisfied by the carried attestation, which
+     truthfully attests the generation that produced the base draft).
+
+133. **DEFERRED RULING — the inbound-supersede engine (next session's
+     headline; gates shadow-exit; NOT built in Session 15).** Founder-ruled
+     at the Session 15 close review, recorded so the repo carries the fence:
+     (a) one live pending outbound draft per engagement per channel; a new
+     inbound regenerates against full thread context, the old draft moves
+     to a superseded, evented state, and the card shows "supersedes earlier
+     draft · N new messages since"; (b) the settle window is configurable
+     in Settings — instant / 1 / 3 / 5 minutes, default 3 — with
+     per-conversation override; (c) a human reply sent while a draft pends
+     auto-supersedes the draft, evented — the human always wins, and no
+     orphan draft survives them; (d) **founder-ruled revised:**
+     Conversations drafts PROACTIVELY by default — every settled inbound
+     burst yields one draft under the same settle and supersede laws;
+     "Ask Light to draft" is the manual trigger; the per-conversation
+     toggle PAUSES auto-draft, it does not enable it — the product is
+     Light drafting everything, with the economics carried by the settle
+     window, supersede, floor routing and task-scoped assembly, not by
+     drafting less; (e) sign-off gains an "approver, resolved at stamp"
+     option, WYSIWYS-preserving — the opened card shows the approver's
+     name before stamping; (f) the supersede engine's drafting calls use
+     provider prompt caching — the stable prefix (no-go register,
+     register/tone, selected pack entries) is cache-marked so
+     regenerations bill cached-input rates, and cache usage lands on the
+     credit line.
+
+134. **The waiting clock is the client's, immutable across edits** (Session
+     15 click-review fix, founder-ruled 31 July 2026: "'waiting since' and
+     the inbox sort key derive from the original submission-to-pending
+     time, never reset by an edit. An edit changes the words, not the age.
+     The edited card must hold its queue position and its true waiting
+     time."). Landed as 0027: `communications.submitted_at`, stamped by
+     trigger on the transition INTO pending_approval, forced immutable on
+     every other write (an explicit write is overwritten back), absent from
+     the API roles' update grants; the approval_inbox view (re-issued from
+     its four-arm 0019 definition) keys awaiting_since to it, with
+     updated_at only as the fallback for pre-0027 rows the ledger could
+     not date; existing rows backfilled from their earliest
+     `communication.submitted` event. A re-submission after rejection
+     lawfully restarts the clock — that queue period is genuinely new. The
+     companion click-review fix needs no ruling: an edited pending body
+     wears an "edited by <name> · <time>" chip read from draft_feedback —
+     a fact in neutral chrome, never gold, red or green.

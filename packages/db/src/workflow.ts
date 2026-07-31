@@ -3,7 +3,18 @@ import { scaleDurationMs } from "@rooshni/config";
 import { emitEvent } from "./events";
 import { submitCommunication } from "./approvals";
 import { evaluateAutoClose, type NudgeFact } from "./auto-close";
-import { SEND_EVENT_KINDS } from "./event-kinds";
+import { DRAFTING_EVENT_KINDS, SEND_EVENT_KINDS } from "./event-kinds";
+import {
+  composeDraft,
+  createAnthropicGenerator,
+  isTransientProviderError,
+  leadTextFromAnswers,
+  retrieveKnowledgeEntries,
+  PermanentGenerationError,
+  type ComposeDraftResult,
+  type DraftAttestation,
+} from "./drafting";
+import type { FormAnswer } from "./meta";
 import type {
   EventRow,
   RealDuration,
@@ -379,16 +390,30 @@ interface EngagementFacts {
   title: string;
   owner_actor_id: string;
   template_type_id: string;
+  attributes: Record<string, unknown>;
+  attribution: Record<string, unknown> | null;
+  stage: { label: string } | null;
   contact: { id: string; display_name: string; given_name: string | null } | null;
 }
 
 async function loadEngagementFacts(db: SupabaseClient, engagementId: string): Promise<EngagementFacts> {
   const engagements = await q<
-    { id: string; business_id: string; title: string; owner_actor_id: string; template_type_id: string }[]
+    {
+      id: string;
+      business_id: string;
+      title: string;
+      owner_actor_id: string;
+      template_type_id: string;
+      attributes: Record<string, unknown>;
+      attribution: Record<string, unknown> | null;
+      stage: { label: string } | { label: string }[] | null;
+    }[]
   >(
     db
       .from("engagements")
-      .select("id, business_id, title, owner_actor_id, template_type_id")
+      // Session 15: attributes carry the lead's form answers (PR-2) — the
+      // drafting engine composes against what the lead SAID.
+      .select("id, business_id, title, owner_actor_id, template_type_id, attributes, attribution, stage:stage_definitions(label)")
       .eq("id", engagementId)
       .limit(1),
     "engagement lookup"
@@ -412,7 +437,54 @@ async function loadEngagementFacts(db: SupabaseClient, engagementId: string): Pr
     );
     contact = contacts[0] ?? null;
   }
-  return { ...engagements[0], contact };
+  const row = engagements[0];
+  // Supabase types a to-one embed as an array; normalise either shape.
+  const stage = Array.isArray(row.stage) ? (row.stage[0] ?? null) : row.stage;
+  return { ...row, stage, contact };
+}
+
+/** The installed no-go register (0022: templates.no_go_rules, seeded from
+ * the v3 definition). Empty when no template is installed — the generation
+ * prompt then carries no rules, and the 0026 heuristics still screen. */
+async function loadNoGoRules(db: SupabaseClient, businessId: string): Promise<string[]> {
+  const rows = await q<{ template: { no_go_rules: unknown } | { no_go_rules: unknown }[] | null }[]>(
+    db
+      .from("businesses")
+      .select("template:templates!businesses_template_id_fkey(no_go_rules)")
+      .eq("id", businessId)
+      .limit(1),
+    "no-go register lookup"
+  );
+  const embedded = rows[0]?.template;
+  const template = Array.isArray(embedded) ? (embedded[0] ?? null) : embedded;
+  const rules = template?.no_go_rules;
+  return Array.isArray(rules) ? rules.map((r) => String(r)) : [];
+}
+
+/** Record a compliance check through the 0026 server-only door, evented. */
+async function recordComplianceCheck(
+  db: SupabaseClient,
+  businessId: string,
+  communicationId: string,
+  actorId: string,
+  attestation: DraftAttestation
+): Promise<{ result: string; rule_matched: string | null }> {
+  const { data, error } = await db.rpc("run_compliance_check", {
+    p_comm: communicationId,
+    p_actor: actorId,
+    p_attestation: attestation,
+  });
+  if (error) throw new Error(`run_compliance_check failed: ${error.message}`);
+  const out = data as { result: string; rule_matched: string | null };
+  await emitEvent(db, {
+    business_id: businessId,
+    actor_id: actorId,
+    action: DRAFTING_EVENT_KINDS.complianceChecked,
+    entity_type: "communication",
+    entity_id: communicationId,
+    payload: { result: out.result, ...(out.rule_matched ? { rule_matched: out.rule_matched } : {}) },
+  });
+  return out;
 }
 
 async function templateVars(db: SupabaseClient, facts: EngagementFacts): Promise<Record<string, string>> {
@@ -420,16 +492,26 @@ async function templateVars(db: SupabaseClient, facts: EngagementFacts): Promise
     db.from("actors").select("display_name").eq("id", facts.owner_actor_id).limit(1),
     "owner lookup"
   );
-  const businesses = await q<{ name: string }[]>(
-    db.from("businesses").select("name").eq("id", facts.business_id).limit(1),
+  const businesses = await q<{ name: string; settings: Record<string, unknown> | null }[]>(
+    db.from("businesses").select("name, settings").eq("id", facts.business_id).limit(1),
     "business lookup"
   );
   const fullName = facts.contact?.display_name ?? "";
+  const businessName = businesses[0]?.name ?? "";
+  // Founder-ruled (Session 15 close review): the email sign-off renders from
+  // a business-identity field — never the owner's personal name, never
+  // hardcoded. Only the firm-name default ships this session.
+  // JUDGMENT: the settings key is `email_sign_off` (businesses.settings, the
+  // General-tab identity store); the Settings edit surface arrives with its
+  // session — until then the firm display name is the value.
+  const rawSignOff = (businesses[0]?.settings ?? {})["email_sign_off"];
+  const signOff = typeof rawSignOff === "string" && rawSignOff.trim() ? rawSignOff.trim() : businessName;
   return {
     first_name: facts.contact?.given_name ?? fullName.split(/\s+/)[0] ?? "",
     full_name: fullName,
     owner_name: owners[0]?.display_name ?? "",
-    business_name: businesses[0]?.name ?? "",
+    business_name: businessName,
+    sign_off: signOff,
   };
 }
 
@@ -505,10 +587,98 @@ async function executeDraftComm(
     const vars = await templateVars(db, facts);
     const intended = (step.config.channel as string) ?? templates[0].channel;
     const picked = await pickChannel(db, facts.contact.id, intended, step.config.fallback_channel);
-    // Decision 119 (WYSIWYS is per-channel): the channel is picked FIRST,
-    // then the draft renders that channel's body — never another channel's.
-    const body = renderTemplate(resolveTemplateBody(templates[0], picked.channel), vars);
-    const subject = templates[0].subject ? renderTemplate(templates[0].subject, vars) : null;
+
+    // Session 15 — the query-aware drafting engine. Decision 119 holds: the
+    // channel is picked FIRST, then that channel's body comes into being.
+    //   - email lawfully carries free-form: Light COMPOSES against the
+    //     lead's form answers + the published knowledge pack;
+    //   - WhatsApp keeps the approved-template path VERBATIM (decisions
+    //     118/119 — the stamp shows the exact wording Meta will carry);
+    //     free-form WhatsApp stays template-rendered and answers to the
+    //     session-window pre-flight, as before.
+    const generative = picked.channel === "email";
+    let body: string;
+    let subject: string | null = templates[0].subject ? renderTemplate(templates[0].subject, vars) : null;
+    let composed: ComposeDraftResult | null = null;
+    let composeInput: Parameters<typeof composeDraft>[1] | null = null;
+    let attestation: DraftAttestation;
+
+    if (generative) {
+      const generator = createAnthropicGenerator();
+      if (!generator) {
+        // Failure honesty: no provider is a VISIBLE failure with its reason
+        // on The Record — never a silent fallback to the stub body.
+        await emitEvent(db, {
+          business_id: run.business_id,
+          actor_id: drafter,
+          action: DRAFTING_EVENT_KINDS.draftGenerationFailed,
+          entity_type: "workflow_run",
+          entity_id: run.id,
+          payload: {
+            step_run_id: stepRun.id,
+            step_key: step.key,
+            transient: false,
+            reason: "ANTHROPIC_API_KEY is not configured — Light cannot compose",
+          },
+        });
+        throw new Error("draft generation failed: ANTHROPIC_API_KEY is not configured — Light cannot compose");
+      }
+
+      const formAnswers = (facts.attributes?.form_answers as FormAnswer[] | undefined) ?? [];
+      const leadText = `${leadTextFromAnswers(formAnswers)}\n${facts.title}`;
+      try {
+        const retrieval = await retrieveKnowledgeEntries(db, run.business_id, leadText);
+        const noGoRules = await loadNoGoRules(db, run.business_id);
+        composeInput = {
+          business_name: vars.business_name ?? "",
+          sign_off: vars.sign_off ?? vars.business_name ?? "",
+          first_name: vars.first_name ?? "",
+          full_name: vars.full_name ?? "",
+          channel: picked.channel,
+          task: templateKey.startsWith("intro") ? ("intro" as const) : ("nudge" as const),
+          enquiry_title: facts.title,
+          stage_label: facts.stage?.label ?? "",
+          source: String(facts.attribution?.source ?? "unknown"),
+          form_answers: formAnswers,
+          no_go_rules: noGoRules,
+          retrieval,
+        };
+        composed = await composeDraft(generator, composeInput);
+        body = composed.body;
+        subject = subject ?? composed.subject;
+        attestation = composed.attestation;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        const transient = isTransientProviderError(err);
+        await emitEvent(db, {
+          business_id: run.business_id,
+          actor_id: drafter,
+          action: DRAFTING_EVENT_KINDS.draftGenerationFailed,
+          entity_type: "workflow_run",
+          entity_id: run.id,
+          payload: { step_run_id: stepRun.id, step_key: step.key, transient, reason },
+        });
+        if (transient) {
+          // The step stays claimed-but-incomplete: the lease expires and a
+          // later tick retries. Dispatch retries are free of model spend
+          // only when a draft exists — none does yet, so regeneration IS
+          // the retry.
+          report.errors.push(`step ${stepRun.id}: transient draft generation failure — ${reason}`);
+          return;
+        }
+        throw new Error(`draft generation failed: ${reason}`);
+      }
+    } else {
+      body = renderTemplate(resolveTemplateBody(templates[0], picked.channel), vars);
+      // No generation happened: the body is founder-approved template
+      // wording with variables filled — attested as such (C-2 requires an
+      // attestation for every agent-drafted row born after 0026).
+      attestation = {
+        attested: true,
+        mode: "approved_template",
+        statement: "Body is the approved template wording with variables filled; no generative content.",
+      };
+    }
 
     // Session 10: a WhatsApp draft carries its Meta-approved template
     // reference (message_templates.attributes.wa_template: {name, language,
@@ -593,12 +763,78 @@ async function executeDraftComm(
             ...(subject ? { subject } : {}),
             ...(picked.fell_back ? { channel_fallback_from: intended } : {}),
             ...(waTemplate ? { wa_template: waTemplate } : {}),
+            // Session 15: the credit line — the founder's visibility into
+            // Light's spend and sources at the moment of stamping (PR-3).
+            ...(composed ? { credit_line: { ...composed.credit_line, attempts: 1 } } : {}),
           },
         })
         .select("id, channel, contact_id, status"),
       "communication insert"
     );
     comm = inserted[0]!;
+
+    // The compliance check is recorded at generation (0026): heuristics run
+    // server-side against the exact wording, the model's attestation rides
+    // along, and the stamp is unreachable without a clean, attested check.
+    let check = await recordComplianceCheck(db, run.business_id, comm.id, drafter, attestation);
+
+    // The doctrine's retry rule: a Standard attempt that breaches retries
+    // ONCE at the same tier with the specific failure fed back — recorded,
+    // never silent (both checks persist on the append-only table). If the
+    // retry still breaches, the draft stands with its RED chip: a visible
+    // pre-flight failure the stamp refuses.
+    if (composed && composeInput && check.result === "breach") {
+      try {
+        const generator = createAnthropicGenerator();
+        if (generator) {
+          const retry = await composeDraft(generator, composeInput, {
+            escalationOverride: {
+              tier: composed.credit_line.tier,
+              model: composed.credit_line.model,
+              reason: composed.credit_line.reason,
+            },
+            feedback: check.rule_matched ?? "a no-go rule was breached",
+          });
+          const mergedCredit = {
+            ...retry.credit_line,
+            attempts: 2,
+            retry_reason: check.rule_matched ?? "no-go breach",
+          };
+          const { error: updError } = await db
+            .from("communications")
+            .update({
+              body: retry.body,
+              attributes: {
+                workflow_run_id: run.id,
+                step_run_id: stepRun.id,
+                template_key: templates[0].key,
+                template_version: templates[0].version,
+                ...(subject ? { subject } : {}),
+                ...(picked.fell_back ? { channel_fallback_from: intended } : {}),
+                credit_line: mergedCredit,
+              },
+            })
+            .eq("id", comm.id);
+          if (updError) throw new Error(`retry body update failed: ${updError.message}`);
+          composed = {
+            ...retry,
+            credit_line: mergedCredit,
+            // Both attempts are metered spend — the credit line prices the act.
+            usage: {
+              input_tokens: composed.usage.input_tokens + retry.usage.input_tokens,
+              output_tokens: composed.usage.output_tokens + retry.usage.output_tokens,
+            },
+          };
+          check = await recordComplianceCheck(db, run.business_id, comm.id, drafter, retry.attestation);
+        }
+      } catch (retryErr) {
+        // The retry is best-effort: a failure here leaves attempt 1's
+        // recorded breach standing — visible, unapprovable, honest.
+        report.errors.push(
+          `step ${stepRun.id}: compliance retry failed — ${retryErr instanceof Error ? retryErr.message : retryErr}`
+        );
+      }
+    }
 
     await emitEvent(db, {
       business_id: run.business_id,
@@ -615,6 +851,33 @@ async function executeDraftComm(
         ...(picked.fell_back ? { channel_fallback_from: intended } : {}),
       },
     });
+
+    if (composed) {
+      // The credit line on The Record (doctrine: no invisible spend — every
+      // metered act is a priced line; events.cost feeds the billing surface).
+      await emitEvent(db, {
+        business_id: run.business_id,
+        actor_id: drafter,
+        action: DRAFTING_EVENT_KINDS.draftGenerated,
+        entity_type: "communication",
+        entity_id: comm.id,
+        payload: {
+          tier: composed.credit_line.tier,
+          escalation_reason: composed.credit_line.reason,
+          context_tokens: composed.credit_line.context_tokens,
+          budget_tokens: composed.credit_line.budget_tokens,
+          knowledge_entry_ids: composed.credit_line.knowledge_entry_ids,
+          compliance: check.result,
+          step_key: step.key,
+        },
+        cost: {
+          provider: "anthropic",
+          model: composed.credit_line.model,
+          tokens: composed.usage.input_tokens + composed.usage.output_tokens,
+        },
+      });
+    }
+
     await submitCommunication(db, {
       business_id: run.business_id,
       communication_id: comm.id,

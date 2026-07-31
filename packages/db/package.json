@@ -18,9 +18,12 @@
     "demo:reset": "tsx scripts/demo-reset.ts",
     "first-light:drive": "tsx scripts/first-light-drive.ts",
     "allowlist:archive": "tsx scripts/archive-allowlist-email.ts",
+    "backfill:form-answers": "tsx scripts/backfill-form-answers.ts",
+    "circuit:drafting": "tsx scripts/circuit-drafting.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@rooshni/config": "*",
     "@supabase/supabase-js": "^2.50.0",
     "postgres": "^3.4.5"
