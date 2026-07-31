@@ -1094,3 +1094,65 @@ recorded here.
      `run_compliance_check()`; the readiness pre-flight fails closed on a
      missing, stale, breaching or unattested check, and a breach names its
      rule on the RED chip.
+
+132. **The Session 15 Lane B calls, all eleven approved** ("LANE B SIGN-OFF:
+     1–11 ALL APPROVED as recommended. Record in DECISIONS quoting this
+     approval" — founder review message, 31 July 2026). The calls, with the
+     founder's riders recorded in place:
+     (1) 0024 declarations land as per-install field_definitions rows, not
+     a template_definitions v4 re-issue (decision 79 pins "v3 applies");
+     (2) category/route vocabularies ride field_definitions.validation.allowed
+     per install; (3) the 0026 heuristics deterministically implement v3
+     rules 1 and 3, rules 2 and 4 enforced in-prompt + attestation —
+     **rider:** rule 4 becomes partially deterministic when contact
+     classification exists (future tightening, not this scope); (4) the fee
+     check reads rule 3 as "Light quotes only amounts published in the
+     pack" — **rider:** deliberately broader than rule 3 as written;
+     (5) draft_feedback.template_id nullable; (6) the generative path is
+     email-only this session — WhatsApp always takes the approved-template
+     path (118/119) and attests as `approved_template`; (7) a template
+     subject wins when present (decision 98 stability), and the doctrine
+     retry-once runs post-insert against recorded heuristics, both checks
+     retained, attempts on the credit line; (8) transient provider failures
+     leave the step for lease retry, permanent ones (including a missing
+     key) fail the step visibly with both events; (9) rejection feedback is
+     captured for agent-drafted rows only, and edit authority is checked
+     app-side (owner or approvals.comms) with the DB gates untouched;
+     (10) Meta form-answer labels are the verbatim field names humanised
+     deterministically (Graph carries no separate label); (11) the official
+     @anthropic-ai/sdk dependency — **rider:** recorded explicitly as a
+     departure from the raw-fetch house pattern (graph.ts/whatsapp.ts);
+     its typed error classes drive the transient/permanent split.
+     **Edited-body attestation semantics, on the record at the founder's
+     instruction:** an edit re-runs the compliance check on the EXACT
+     edited words — heuristics re-screen deterministically, the
+     generation-time attestation carries forward, no new model call; green
+     = clean heuristics + carried attestation, so an edited draft is
+     approvable the moment the re-check lands clean (WYSIWYS holds; C-2's
+     both-required rule is satisfied by the carried attestation, which
+     truthfully attests the generation that produced the base draft).
+
+133. **DEFERRED RULING — the inbound-supersede engine (next session's
+     headline; gates shadow-exit; NOT built in Session 15).** Founder-ruled
+     at the Session 15 close review, recorded so the repo carries the fence:
+     (a) one live pending outbound draft per engagement per channel; a new
+     inbound regenerates against full thread context, the old draft moves
+     to a superseded, evented state, and the card shows "supersedes earlier
+     draft · N new messages since"; (b) the settle window is configurable
+     in Settings — instant / 1 / 3 / 5 minutes, default 3 — with
+     per-conversation override; (c) a human reply sent while a draft pends
+     auto-supersedes the draft, evented — the human always wins, and no
+     orphan draft survives them; (d) **founder-ruled revised:**
+     Conversations drafts PROACTIVELY by default — every settled inbound
+     burst yields one draft under the same settle and supersede laws;
+     "Ask Light to draft" is the manual trigger; the per-conversation
+     toggle PAUSES auto-draft, it does not enable it — the product is
+     Light drafting everything, with the economics carried by the settle
+     window, supersede, floor routing and task-scoped assembly, not by
+     drafting less; (e) sign-off gains an "approver, resolved at stamp"
+     option, WYSIWYS-preserving — the opened card shows the approver's
+     name before stamping; (f) the supersede engine's drafting calls use
+     provider prompt caching — the stable prefix (no-go register,
+     register/tone, selected pack entries) is cache-marked so
+     regenerations bill cached-input rates, and cache usage lands on the
+     credit line.

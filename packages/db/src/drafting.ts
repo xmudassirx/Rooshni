@@ -188,7 +188,10 @@ export class PermanentGenerationError extends Error {}
 
 export interface ComposeDraftInput {
   business_name: string;
-  owner_name: string;
+  /** The firm's configured email sign-off (founder-ruled, Session 15 close
+   * review): a business-identity value, default = the firm's display name —
+   * never the owner's personal name, never hardcoded. */
+  sign_off: string;
   first_name: string;
   full_name: string;
   channel: string;
@@ -236,7 +239,7 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     `- If the enquirer asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome — and steer to a consultation.`,
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — a few short sentences; say less.`,
-    `- Sign off as ${input.owner_name} at ${input.business_name}.`,
+    `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
     ``,
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
   ].join("\n");

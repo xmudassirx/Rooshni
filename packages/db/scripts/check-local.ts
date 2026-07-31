@@ -2218,7 +2218,7 @@ async function main() {
     const answers = [{ name: "situation", label: "Situation", value: "Employer sponsorship for skilled worker" }];
     const result = await composeDraft(fake, {
       business_name: "Test Firm",
-      owner_name: "Mudassir",
+      sign_off: "Test Firm",
       first_name: "Ayesha",
       full_name: "Ayesha Khan",
       channel: "email",
@@ -2236,6 +2236,10 @@ async function main() {
     if (!/Employer sponsorship/.test(sawPrompt)) throw new Error("the lead's own words were not in the prompt");
     if (!/never states or implies a guarantee/.test(sawPrompt)) throw new Error("the no-go rules were not IN the generation prompt");
     if (!/SW route facts/.test(sawPrompt)) throw new Error("the selected pack entry was not assembled");
+    // Founder-ruled at close review: the sign-off is the FIRM's identity
+    // value, never a personal name.
+    if (!/Sign off as "Test Firm"/.test(sawPrompt)) throw new Error("the firm sign-off was not instructed");
+    if (/Mudassir/.test(sawPrompt)) throw new Error("a personal name leaked into the sign-off instruction");
     if (result.credit_line.tier !== "standard" || result.credit_line.reason !== "floor") {
       throw new Error(`credit line: ${JSON.stringify(result.credit_line)}`);
     }
@@ -2253,7 +2257,7 @@ async function main() {
     let threw = false;
     try {
       await composeDraft(fake, {
-        business_name: "T", owner_name: "O", first_name: "A", full_name: "A B", channel: "email",
+        business_name: "T", sign_off: "T", first_name: "A", full_name: "A B", channel: "email",
         task: "intro", enquiry_title: "t", stage_label: "New", source: "meta",
         form_answers: [], no_go_rules: [], retrieval: { entries: [], route_matches: [] },
       });
@@ -2271,7 +2275,7 @@ async function main() {
     let threw = false;
     try {
       await composeDraft(fake, {
-        business_name: "T", owner_name: "O", first_name: "A", full_name: "A B", channel: "email",
+        business_name: "T", sign_off: "T", first_name: "A", full_name: "A B", channel: "email",
         task: "intro", enquiry_title: "t", stage_label: "New", source: "meta",
         form_answers: [{ name: "s", label: "S", value: "calm" }], no_go_rules: [],
         retrieval: { entries: [{ id: "big", title: "Big", category: "faq", visa_route: null, text: huge }], route_matches: [] },

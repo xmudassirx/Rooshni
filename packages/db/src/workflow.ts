@@ -492,16 +492,26 @@ async function templateVars(db: SupabaseClient, facts: EngagementFacts): Promise
     db.from("actors").select("display_name").eq("id", facts.owner_actor_id).limit(1),
     "owner lookup"
   );
-  const businesses = await q<{ name: string }[]>(
-    db.from("businesses").select("name").eq("id", facts.business_id).limit(1),
+  const businesses = await q<{ name: string; settings: Record<string, unknown> | null }[]>(
+    db.from("businesses").select("name, settings").eq("id", facts.business_id).limit(1),
     "business lookup"
   );
   const fullName = facts.contact?.display_name ?? "";
+  const businessName = businesses[0]?.name ?? "";
+  // Founder-ruled (Session 15 close review): the email sign-off renders from
+  // a business-identity field — never the owner's personal name, never
+  // hardcoded. Only the firm-name default ships this session.
+  // JUDGMENT: the settings key is `email_sign_off` (businesses.settings, the
+  // General-tab identity store); the Settings edit surface arrives with its
+  // session — until then the firm display name is the value.
+  const rawSignOff = (businesses[0]?.settings ?? {})["email_sign_off"];
+  const signOff = typeof rawSignOff === "string" && rawSignOff.trim() ? rawSignOff.trim() : businessName;
   return {
     first_name: facts.contact?.given_name ?? fullName.split(/\s+/)[0] ?? "",
     full_name: fullName,
     owner_name: owners[0]?.display_name ?? "",
-    business_name: businesses[0]?.name ?? "",
+    business_name: businessName,
+    sign_off: signOff,
   };
 }
 
@@ -621,7 +631,7 @@ async function executeDraftComm(
         const noGoRules = await loadNoGoRules(db, run.business_id);
         composeInput = {
           business_name: vars.business_name ?? "",
-          owner_name: vars.owner_name ?? "",
+          sign_off: vars.sign_off ?? vars.business_name ?? "",
           first_name: vars.first_name ?? "",
           full_name: vars.full_name ?? "",
           channel: picked.channel,

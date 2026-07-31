@@ -77,15 +77,10 @@ async function main() {
 
   const { data: business } = await db
     .from("businesses")
-    .select("id, account_id, name, template:templates!businesses_template_id_fkey(no_go_rules)")
+    .select("id, account_id, name, settings, template:templates!businesses_template_id_fkey(no_go_rules)")
     .eq("id", engagement.business_id)
     .maybeSingle();
   if (!business) throw new Error("Business not found.");
-  const { data: owner } = await db
-    .from("actors")
-    .select("display_name")
-    .eq("id", engagement.owner_actor_id)
-    .maybeSingle();
   const { data: agents } = await db
     .from("actors")
     .select("id, display_name")
@@ -114,9 +109,14 @@ async function main() {
   for (const a of formAnswers) console.log(`  - ${a.label}: ${a.value}`);
   console.log(`Pack retrieval : ${retrieval.entries.length} entries · routes matched: ${retrieval.route_matches.join(", ") || "none"}`);
 
+  // Founder-ruled: the sign-off is a business-identity value, default the
+  // firm's display name — never the owner's personal name.
+  const rawSignOff = ((business.settings ?? {}) as Record<string, unknown>)["email_sign_off"];
+  const signOff = typeof rawSignOff === "string" && rawSignOff.trim() ? rawSignOff.trim() : business.name;
+
   const composed = await composeDraft(generator, {
     business_name: business.name,
-    owner_name: owner?.display_name ?? "",
+    sign_off: signOff,
     first_name: contact.given_name ?? fullName.split(/\s+/)[0] ?? "",
     full_name: fullName,
     channel: "email",
