@@ -96,6 +96,37 @@ export async function fetchMetaLead(leadgenId: string, accessToken: string): Pro
   return body;
 }
 
+/** One persisted form answer — PR-2's shape (Session 15): the field name is
+ * Meta's verbatim; the value is what the lead typed or picked. */
+export interface FormAnswer {
+  name: string;
+  label: string;
+  value: string;
+}
+
+/**
+ * PR-2 (Session 15): the lead's own words, shaped for persistence on
+ * engagements.attributes.form_answers — ordered as Meta sent them, names
+ * verbatim, multi-value answers joined.
+ *
+ * JUDGMENT: Meta's Graph field_data carries no separate question label —
+ * `name` IS the form's field key (usually the slugified question). The
+ * label is that name humanised deterministically for display (underscores
+ * to spaces, first letter capitalised); nothing is inferred or invented.
+ */
+export function formAnswersFromFieldData(
+  fieldData: MetaLeadDetail["field_data"]
+): FormAnswer[] {
+  return (fieldData ?? []).map((f) => {
+    const spaced = f.name.replace(/[_]+/g, " ").trim();
+    return {
+      name: f.name,
+      label: spaced.length > 0 ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : f.name,
+      value: (f.values ?? []).filter((v) => typeof v === "string" && v.trim() !== "").join(", "),
+    };
+  });
+}
+
 /** 00-prefixed international numbers become E.164 (+…), per Spec 1 §4.1 —
  * the seed's rule, shared. */
 export function normalisePhone(raw: string): string {
@@ -338,6 +369,10 @@ export async function ingestMetaLead(
         stage_entered_at: lead.created_time,
         attribution,
         owner_actor_id: binding.owner_actor_id,
+        // PR-2 (Session 15): the full form answers persist at ingest, under
+        // the declared attributes schema (0024) — what drafting uses, stored
+        // when it is used; rendered in the Approval Inbox context-in-card.
+        attributes: { form_answers: formAnswersFromFieldData(lead.field_data) },
         external_refs: [{ system: "meta", external_id: lead.id, url: null, synced_at: new Date().toISOString() }],
       })
       .select("id"),

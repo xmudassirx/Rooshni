@@ -72,4 +72,31 @@ export const FIRST_LIGHT_EVENT_KINDS = {
   predicateUnearned: "first_light.predicate_unearned",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 15 — query-aware drafting. Same JUDGMENT as above: kinds are TS
+ * constants, the single truth every emitter imports.
+ */
+export const DRAFTING_EVENT_KINDS = {
+  /** A knowledge-pack entry was created (content_items, PR-1). */
+  knowledgeEntryCreated: "knowledge.entry_created",
+  /** A knowledge-pack entry's body/category changed — a new content_version rides along. */
+  knowledgeEntryUpdated: "knowledge.entry_updated",
+  /** A knowledge-pack entry became what retrieval reads (human publisher, approvals.content). */
+  knowledgeEntryPublished: "knowledge.entry_published",
+  /** A knowledge-pack entry left service (soft archive — never deleted). */
+  knowledgeEntryArchived: "knowledge.entry_archived",
+  /** PR-2 backfill: a shadow-era enquiry received its form answers from the stored leadgen id. */
+  formAnswersBackfilled: "engagement.form_answers_backfilled",
+  /** Light composed a draft — the credit line rides here (cost block: provider, model, tokens; payload: tier, escalation reason, budget, pack entry ids). */
+  draftGenerated: "light.draft_generated",
+  /** Generation failed VISIBLY — provider error or over-budget assembly; the reason is the payload. Never a silent stub fallback. */
+  draftGenerationFailed: "light.draft_generation_failed",
+  /** A compliance check was recorded against the no-go register (0026). */
+  complianceChecked: "communication.compliance_checked",
+  /** A stamped-authority holder edited a draft before stamping — before/after in the payload; pre-flight re-runs. */
+  draftEdited: "communication.draft_edited",
+  /** A refine signal (edit or rejection reason) landed in draft_feedback (PR-4). */
+  draftFeedbackRecorded: "draft.feedback_recorded",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

@@ -10,6 +10,17 @@ import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
 import { resolveTemplateBody } from "../src/workflow";
+import { formAnswersFromFieldData } from "../src/meta";
+import {
+  composeDraft,
+  leadTextFromAnswers,
+  matchRoutes,
+  selectKnowledgeEntries,
+  PermanentGenerationError,
+  type GenerateFn,
+  type KnowledgeEntry,
+} from "../src/drafting";
+import { resolveEscalation, LIGHT_MODEL_FLOOR, LIGHT_MODEL_ESCALATION, DRAFT_CONTEXT_BUDGETS } from "../src/model-router";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -2129,6 +2140,156 @@ async function main() {
     await db.query(`update public.message_templates set attributes = '{"back":"in service"}'::jsonb where id = $1`, [
       guardId.get(1),
     ]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 15 — the drafting engine's pure layer: form answers, route
+  // matching, task-scoped selection, routing floors + earned escalation,
+  // and per-channel composition against an injected fake provider.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 15 — the drafting engine (pure layer):");
+
+  await expectOk("Meta field data becomes ordered form answers, names verbatim (PR-2)", async () => {
+    const answers = formAnswersFromFieldData([
+      { name: "full_name", values: ["Ayesha Khan"] },
+      { name: "what_visa_are_you_interested_in?", values: ["Skilled Worker"] },
+      { name: "tell_us_about_your_situation", values: ["My employer will sponsor me", "Start date in March"] },
+    ]);
+    if (answers.length !== 3) throw new Error(`expected 3 answers, got ${answers.length}`);
+    if (answers[1]!.name !== "what_visa_are_you_interested_in?") throw new Error("field name was not preserved verbatim");
+    if (answers[1]!.label !== "What visa are you interested in?") throw new Error(`label: ${answers[1]!.label}`);
+    if (answers[2]!.value !== "My employer will sponsor me, Start date in March") throw new Error("multi-value answer not joined");
+  });
+
+  await expectOk("route matching reads the lead's own words — a lookup, never an inference", async () => {
+    if (JSON.stringify(matchRoutes("My employer will sponsor me for a Skilled Worker visa")) !== '["skilled_worker"]') {
+      throw new Error("skilled worker did not match");
+    }
+    const multi = matchRoutes("I am on a spouse visa and want ILR next year");
+    if (!multi.includes("spouse_family") || !multi.includes("ilr")) throw new Error(`multi-route: ${multi.join(",")}`);
+    if (matchRoutes("Hello, I would like some help").length !== 0) throw new Error("matched a route from nothing");
+  });
+
+  await expectOk("task-scoped selection: route-matched service description + fees + booking, capped — never the whole pack", async () => {
+    const pack: KnowledgeEntry[] = [
+      { id: "sw", title: "Skilled Worker", category: "service_description", visa_route: "skilled_worker", text: "SW route." },
+      { id: "sp", title: "Spouse", category: "service_description", visa_route: "spouse_family", text: "Spouse route." },
+      { id: "fees", title: "Fees", category: "published_fees", visa_route: null, text: "Consultation £150." },
+      { id: "book", title: "Booking", category: "consultation_booking_policy", visa_route: null, text: "Book online." },
+      { id: "tone1", title: "Tone", category: "tone_exemplar", visa_route: null, text: "Warm, plain." },
+      { id: "faq1", title: "Financial requirement", category: "faq", visa_route: null, text: "About the financial requirement." },
+      { id: "faq2", title: "Sponsorship evidence", category: "faq", visa_route: null, text: "About sponsorship and employer evidence." },
+    ];
+    const result = selectKnowledgeEntries(pack, "My employer offered sponsorship for a skilled worker role");
+    const ids = result.entries.map((e) => e.id);
+    if (!ids.includes("sw")) throw new Error("route-matched service description missing");
+    if (ids.includes("sp")) throw new Error("the OTHER route's service description was dumped in");
+    if (!ids.includes("fees") || !ids.includes("book")) throw new Error("fees/booking policy missing");
+    if (!ids.includes("faq2")) throw new Error("word-relevant FAQ missing");
+    if (result.entries.length > DRAFT_CONTEXT_BUDGETS.max_pack_entries) throw new Error("selection exceeded the pack cap");
+  });
+
+  await expectOk("routing: floor by default; escalation EARNED by recorded trigger (doctrine)", async () => {
+    const calm = resolveEscalation({ leadText: "I would like help with my application", routeMatches: 1, contextTokens: 500 });
+    if (calm.tier !== "standard" || calm.model !== LIGHT_MODEL_FLOOR.model || calm.reason !== "floor") {
+      throw new Error(`calm lead did not route to the floor: ${JSON.stringify(calm)}`);
+    }
+    const nogo = resolveEscalation({ leadText: "Can you guarantee my visa?", routeMatches: 1, contextTokens: 500 });
+    if (nogo.tier !== "pro" || nogo.model !== LIGHT_MODEL_ESCALATION.model || !/no-go/.test(nogo.reason)) {
+      throw new Error(`no-go proximity did not escalate: ${JSON.stringify(nogo)}`);
+    }
+    const multi = resolveEscalation({ leadText: "hello", routeMatches: 2, contextTokens: 500 });
+    if (multi.tier !== "pro" || !/multi-route/.test(multi.reason)) throw new Error("multi-route did not escalate");
+    const big = resolveEscalation({ leadText: "hello", routeMatches: 1, contextTokens: DRAFT_CONTEXT_BUDGETS.floor_tokens + 1 });
+    if (big.tier !== "pro" || !/budget/.test(big.reason)) throw new Error("over-floor context did not escalate");
+  });
+
+  await expectOk("per-channel from birth: an email draft is COMPOSED against the lead's words, credit line priced", async () => {
+    let sawPrompt = "";
+    const fake: GenerateFn = async (request) => {
+      sawPrompt = `${request.system}\n${request.prompt}`;
+      return {
+        subject: "Your enquiry with Test Firm",
+        body: "Hello Ayesha,\n\nThank you for your enquiry about the Skilled Worker route...",
+        attestation: { attested: true, statement: "Complies with every rule." },
+        usage: { input_tokens: 900, output_tokens: 120 },
+      };
+    };
+    const answers = [{ name: "situation", label: "Situation", value: "Employer sponsorship for skilled worker" }];
+    const result = await composeDraft(fake, {
+      business_name: "Test Firm",
+      owner_name: "Mudassir",
+      first_name: "Ayesha",
+      full_name: "Ayesha Khan",
+      channel: "email",
+      task: "intro",
+      enquiry_title: "Ayesha Khan — enquiry",
+      stage_label: "New",
+      source: "meta",
+      form_answers: answers,
+      no_go_rules: ["Light never states or implies a guarantee of visa success."],
+      retrieval: {
+        entries: [{ id: "sw", title: "Skilled Worker", category: "service_description", visa_route: "skilled_worker", text: "SW route facts." }],
+        route_matches: ["skilled_worker"],
+      },
+    });
+    if (!/Employer sponsorship/.test(sawPrompt)) throw new Error("the lead's own words were not in the prompt");
+    if (!/never states or implies a guarantee/.test(sawPrompt)) throw new Error("the no-go rules were not IN the generation prompt");
+    if (!/SW route facts/.test(sawPrompt)) throw new Error("the selected pack entry was not assembled");
+    if (result.credit_line.tier !== "standard" || result.credit_line.reason !== "floor") {
+      throw new Error(`credit line: ${JSON.stringify(result.credit_line)}`);
+    }
+    if (JSON.stringify(result.credit_line.knowledge_entry_ids) !== '["sw"]') throw new Error("pack entry ids not recorded");
+    if (result.attestation.mode !== "generated" || !result.attestation.attested) throw new Error("attestation not captured");
+  });
+
+  await expectOk("a generated body with unresolved braces is a PERMANENT visible failure — never submitted", async () => {
+    const fake: GenerateFn = async () => ({
+      subject: null,
+      body: "Hello {{first_name}}, this should never pass",
+      attestation: { attested: true, statement: "x" },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    let threw = false;
+    try {
+      await composeDraft(fake, {
+        business_name: "T", owner_name: "O", first_name: "A", full_name: "A B", channel: "email",
+        task: "intro", enquiry_title: "t", stage_label: "New", source: "meta",
+        form_answers: [], no_go_rules: [], retrieval: { entries: [], route_matches: [] },
+      });
+    } catch (err) {
+      threw = err instanceof PermanentGenerationError;
+    }
+    if (!threw) throw new Error("braces survived composition");
+  });
+
+  await expectOk("over-budget assembly fails VISIBLY — never a trim-and-hope", async () => {
+    const fake: GenerateFn = async () => {
+      throw new Error("the provider must never be called on an over-budget assembly");
+    };
+    const huge = "x".repeat((DRAFT_CONTEXT_BUDGETS.escalation_tokens + 100) * 4);
+    let threw = false;
+    try {
+      await composeDraft(fake, {
+        business_name: "T", owner_name: "O", first_name: "A", full_name: "A B", channel: "email",
+        task: "intro", enquiry_title: "t", stage_label: "New", source: "meta",
+        form_answers: [{ name: "s", label: "S", value: "calm" }], no_go_rules: [],
+        retrieval: { entries: [{ id: "big", title: "Big", category: "faq", visa_route: null, text: huge }], route_matches: [] },
+      });
+    } catch (err) {
+      threw = err instanceof PermanentGenerationError && /over-budget/.test((err as Error).message);
+    }
+    if (!threw) throw new Error("over-budget assembly did not fail visibly");
+  });
+
+  await expectOk("leadTextFromAnswers flattens what the lead SAID for triggers and retrieval", async () => {
+    const text = leadTextFromAnswers([
+      { name: "q1", label: "Visa type", value: "Skilled Worker" },
+      { name: "q2", label: "Question", value: "How much does it cost?" },
+    ]);
+    if (!/Visa type: Skilled Worker/.test(text) || !/How much does it cost/.test(text)) {
+      throw new Error(`flattened text: ${text}`);
+    }
   });
 
   // ---------------------------------------------------------------------
