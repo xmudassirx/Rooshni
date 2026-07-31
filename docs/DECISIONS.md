@@ -975,3 +975,34 @@ per-row basics semantics").
      at 1.29MB/412 requests before the Session 14 diet, ~42KB/9 requests
      after; cadence cut is the second factor of the recovery
      (1,852MB/day → ~12MB/day projected).
+
+Entries 122–125 are the close-message approvals, recorded verbatim on the
+founder's ruling ("Lane B 1–3: all approved… Bikayga ruling: approved as
+recommended").
+
+122. **DispatchReport `skipped` counts only what the sweep actually walked
+     past** — future-scheduled rows are excluded server-side by the egress
+     diet and no longer appear in the count; stub-era, no-carrier and
+     no-contact rows still do. Informational field; approved at Session 14
+     close.
+
+123. **Empirical verification may create-and-delete a synthetic auth user
+     on live when a DoD orders the proof** — the Session 14
+     provider-disable check (admin createUser 200 / public signup 400
+     email_provider_disabled) was made with a throwaway user deleted in the
+     same script, never allowlisted. Approved at close: "empirical proof
+     was the right call and the DoD ordered it."
+
+124. **A backend session may push main mid-session when the DoD requires
+     the change live on production** — Session 14's cadence DoD ("cron at
+     5 min on production") lands only via deploy. Approved at close.
+
+125. **The Bikayga test tenant: sign-in door closed now, tenant purged at
+     go-live** — the allowed_emails row for bikaygapl@gmail.com is archived
+     through the evented path (reversible; "Ahsan can be re-allowed in one
+     motion if he ever becomes a real tester"), and the tenant + admin-API
+     auth user fold into the Pilot-Test purge pattern at go-live. Executed
+     at close via `allowlist:archive` (new evented chore script); ledger
+     event `019fb7d1-f883-7c80-9f44-7b0004f33c33`
+     (`account.allowlist_archived`, platform scope, no personal data in
+     the payload).

@@ -97,6 +97,11 @@ Add to this list during build; check items off only at go-live.
       — auth user included — into the Pilot-Test purge pattern above at
       go-live; never hard-delete the tenant outside that purge (its ledger
       events are append-only).
+      *Ruled and half-executed at Session 14 close (decision 125): the
+      allowlist row is ARCHIVED (31 Jul 2026, ledger event
+      `019fb7d1-f883-7c80-9f44-7b0004f33c33`, via the new
+      `allowlist:archive` chore script). Remaining before this line ticks:
+      the tenant + auth user go with the Pilot-Test purge at go-live.*
 - [ ] **Microsoft sign-in before the first external pilot** (recorded
       17 July 2026, founder-ruled fast-follow, outside Session 9's scope):
       signup states the Google constraint on the email field; the Supabase

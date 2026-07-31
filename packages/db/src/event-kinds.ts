@@ -19,6 +19,10 @@ import type { EventAction } from "./types";
 export const EVENT_KINDS = {
   accountCreated: "account.created",
   accountDeletedUnpaid: "account.deleted_unpaid",
+  /** Platform scope (account.*): the account's allowlist row was archived —
+   * the sign-in door closed, reversibly; the row itself keeps the record.
+   * No personal data in the payload (the nurture_unsubscribed precedent). */
+  accountAllowlistArchived: "account.allowlist_archived",
   paymentSucceeded: "payment.succeeded",
   crawlStarted: "crawl.started",
   crawlFinished: "crawl.finished",

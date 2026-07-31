@@ -17,6 +17,7 @@
     "circuit:wa-draft": "tsx scripts/circuit-wa-draft.ts",
     "demo:reset": "tsx scripts/demo-reset.ts",
     "first-light:drive": "tsx scripts/first-light-drive.ts",
+    "allowlist:archive": "tsx scripts/archive-allowlist-email.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
