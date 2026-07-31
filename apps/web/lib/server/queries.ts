@@ -185,6 +185,18 @@ export interface CommunicationContext {
   channels: { channel: string; value: string; consented: boolean }[];
 }
 
+/** Session 15 — the credit line (PR-3): the founder's visibility into
+ * Light's spend and sources at the moment of stamping. */
+export interface CommunicationCreditLine {
+  tier: string;
+  model: string;
+  reason: string;
+  contextTokens: number;
+  budgetTokens: number;
+  attempts: number;
+  packEntries: { id: string; title: string }[];
+}
+
 export interface CommunicationDetail {
   id: string;
   body: string;
@@ -195,6 +207,10 @@ export interface CommunicationDetail {
   /** Session 11 — context-in-card: what the database holds about the lead,
    * so the founder can glance and stamp without leaving the inbox. */
   context: CommunicationContext | null;
+  /** Session 15 — present only on generated drafts (PR-3). */
+  creditLine: CommunicationCreditLine | null;
+  /** Session 15 — whether the 0026 compliance gate binds this row. */
+  complianceRequired: boolean;
 }
 
 /** Full draft for the inbox detail panel — the view carries only a preview. */
@@ -205,7 +221,7 @@ export async function getCommunicationDetail(
   const { data, error } = await db
     .from("communications")
     .select(
-      "id, body, channel, scheduled_for, engagement_id, contact_id, comm_threads(subject, contact_id), contacts(display_name)"
+      "id, body, channel, scheduled_for, engagement_id, contact_id, attributes, compliance_required, comm_threads(subject, contact_id), contacts(display_name)"
     )
     .eq("id", id)
     .eq("business_id", business.id)
@@ -262,6 +278,20 @@ export async function getCommunicationDetail(
         value: String(attrs[k]),
       }));
     }
+    // Session 15 (PR-2): the FULL Meta form answers — each answer its own
+    // labelled row, Meta's labels as stored at ingest, order preserved.
+    const formAnswers = attrs.form_answers;
+    if (Array.isArray(formAnswers)) {
+      for (const answer of formAnswers) {
+        if (answer && typeof answer === "object" && "value" in answer) {
+          const a = answer as { label?: unknown; name?: unknown; value: unknown };
+          const value = String(a.value ?? "").trim();
+          if (value) {
+            answers.push({ label: String(a.label ?? a.name ?? "Answer"), value });
+          }
+        }
+      }
+    }
     const attribution = (engagement?.attribution ?? {}) as Record<string, unknown>;
     const stageRel = engagement?.stage_definitions;
     context = {
@@ -283,6 +313,47 @@ export async function getCommunicationDetail(
     };
   }
 
+  // Session 15 (PR-3): the credit line rides the row's attributes; pack
+  // entry titles resolve from content_items so the founder can see the
+  // sources by name at the moment of stamping.
+  let creditLine: CommunicationCreditLine | null = null;
+  const commAttrs = (data.attributes ?? {}) as Record<string, unknown>;
+  const rawCredit = commAttrs.credit_line as
+    | {
+        tier?: unknown;
+        model?: unknown;
+        reason?: unknown;
+        context_tokens?: unknown;
+        budget_tokens?: unknown;
+        attempts?: unknown;
+        knowledge_entry_ids?: unknown;
+      }
+    | undefined;
+  if (rawCredit && typeof rawCredit === "object") {
+    const entryIds = Array.isArray(rawCredit.knowledge_entry_ids)
+      ? rawCredit.knowledge_entry_ids.filter((v): v is string => typeof v === "string")
+      : [];
+    let packEntries: { id: string; title: string }[] = [];
+    if (entryIds.length) {
+      const { data: entries } = await db
+        .from("content_items")
+        .select("id, title")
+        .eq("business_id", business.id)
+        .in("id", entryIds);
+      const titleById = new Map((entries ?? []).map((e) => [e.id as string, e.title as string]));
+      packEntries = entryIds.map((entryId) => ({ id: entryId, title: titleById.get(entryId) ?? "entry" }));
+    }
+    creditLine = {
+      tier: String(rawCredit.tier ?? "standard"),
+      model: String(rawCredit.model ?? ""),
+      reason: String(rawCredit.reason ?? "floor"),
+      contextTokens: Number(rawCredit.context_tokens ?? 0),
+      budgetTokens: Number(rawCredit.budget_tokens ?? 0),
+      attempts: Number(rawCredit.attempts ?? 1),
+      packEntries,
+    };
+  }
+
   return {
     id: data.id,
     body: data.body,
@@ -291,6 +362,8 @@ export async function getCommunicationDetail(
     contactName: contact?.display_name ?? null,
     scheduledFor: data.scheduled_for,
     context,
+    creditLine,
+    complianceRequired: Boolean(data.compliance_required),
   };
 }
 
@@ -2424,6 +2497,99 @@ export async function getTemplateContent(): Promise<TemplateContent | null> {
     noGoRules: d.no_go_rules ?? [],
     knowledgePackCategories: d.knowledge_pack_categories ?? [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Session 15 (PR-1) — the knowledge pack. Entries are content_items rows of
+// content_type `knowledge_entry`; the category and route VOCABULARIES render
+// from the installed declarations (0024 field_definitions.validation.allowed)
+// — never from hardcoded chrome.
+// ---------------------------------------------------------------------------
+
+export interface KnowledgeVocabOption {
+  key: string;
+  label: string;
+}
+
+export interface KnowledgeVocab {
+  categories: KnowledgeVocabOption[];
+  routes: KnowledgeVocabOption[];
+}
+
+export async function getKnowledgeVocab(): Promise<KnowledgeVocab | null> {
+  const { db, business } = await getAppContext();
+  const { data: biz } = await db
+    .from("businesses")
+    .select("template_id")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (!biz?.template_id) return null;
+
+  const { data: fields, error } = await db
+    .from("field_definitions")
+    .select("key, validation")
+    .eq("template_id", biz.template_id)
+    .eq("entity", "content")
+    .in("key", ["knowledge_category", "visa_route"])
+    .is("archived_at", null);
+  if (error) throw new Error(`knowledge vocab query failed: ${error.message}`);
+
+  const allowed = (key: string): KnowledgeVocabOption[] => {
+    const row = (fields ?? []).find((f) => f.key === key);
+    const list = (row?.validation as { allowed?: unknown } | null)?.allowed;
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter((o): o is { key: string; label: string } => Boolean(o && typeof o === "object" && "key" in o))
+      .map((o) => ({ key: String(o.key), label: String(o.label) }));
+  };
+
+  const categories = allowed("knowledge_category");
+  if (!categories.length) return null;
+  return { categories, routes: allowed("visa_route") };
+}
+
+export interface KnowledgeEntryRow {
+  id: string;
+  title: string;
+  category: string;
+  visaRoute: string | null;
+  state: "draft" | "published";
+  version: number;
+  updatedAt: string;
+  bodyText: string;
+}
+
+/** Every live pack entry, for the Settings → Knowledge editor (the one door). */
+export async function getKnowledgeEntries(): Promise<KnowledgeEntryRow[]> {
+  const { db, business } = await getAppContext();
+  const { data, error } = await db
+    .from("content_items")
+    .select("id, title, state, version, updated_at, body, attributes")
+    .eq("business_id", business.id)
+    .eq("content_type", "knowledge_entry")
+    .is("archived_at", null)
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(`knowledge entries query failed: ${error.message}`);
+  return (data ?? []).map((row) => {
+    const attrs = (row.attributes ?? {}) as Record<string, unknown>;
+    const body = row.body;
+    const bodyText = Array.isArray(body)
+      ? body
+          .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text ?? "") : ""))
+          .filter((t) => t.trim() !== "")
+          .join("\n")
+      : "";
+    return {
+      id: row.id,
+      title: row.title,
+      category: String(attrs.knowledge_category ?? ""),
+      visaRoute: attrs.visa_route ? String(attrs.visa_route) : null,
+      state: row.state === "published" ? "published" : "draft",
+      version: row.version ?? 1,
+      updatedAt: row.updated_at,
+      bodyText,
+    };
+  });
 }
 
 export interface IntegrationState {

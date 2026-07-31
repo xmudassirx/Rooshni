@@ -684,6 +684,19 @@ async function seedApprovalInboxDemo(db: SupabaseClient): Promise<void> {
       "No preparation is needed — the call is simply to understand your situation properly. Speak soon.",
   });
   if (approvedCreated) {
+    // Session 15 (0026): an agent-drafted row earns its stamp only with a
+    // recorded compliance check — the seed records one exactly as the
+    // engine does at generation.
+    const { error: checkError } = await db.rpc("run_compliance_check", {
+      p_comm: INBOX_DEMO.commApproved,
+      p_actor: IDS.actorLight,
+      p_attestation: {
+        attested: true,
+        mode: "approved_template",
+        statement: "Seed demonstration copy — founder-reviewed wording, no generative content.",
+      },
+    });
+    if (checkError) throw new Error(`seed compliance check failed: ${checkError.message}`);
     await approveCommunication(db, {
       business_id: IDS.business,
       communication_id: INBOX_DEMO.commApproved,

@@ -125,19 +125,15 @@ export async function GeneralTab() {
           k="Knowledge pack"
           v={
             template?.knowledgePackCategories.length
-              ? `Store not yet built · expects ${template.knowledgePackCategories.length} categories`
-              : "Not yet built"
+              ? `Live · ${template.knowledgePackCategories.length} categories`
+              : "No template installed"
           }
-          small={
-            template?.knowledgePackCategories.length
-              ? `${template.knowledgePackCategories.join(" · ")} — the store itself arrives with its session; advice beyond the pack always deflects to booking.`
-              : "What Light may answer from — advice beyond the pack always deflects to booking. The pack store arrives with its session."
-          }
+          small="What Light may draft from — curated in the Knowledge tab (the one door); Light reads published entries only, task-scoped, and names its sources on every draft's credit line."
           action={
             <HonestButton
               size="sm"
               variant="ghost"
-              notice="Pack contents will be inspectable — every entry, its source and its last review date. The store arrives with its session."
+              notice="The pack lives in the Knowledge tab above — every entry versioned, every change on The Record."
             >
               view
             </HonestButton>

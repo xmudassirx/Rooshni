@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AppearanceTab } from "./appearance-tab";
 import { GeneralTab } from "./general-tab";
 import { IntegrationsTab } from "./integrations-tab";
+import { KnowledgeTab } from "./knowledge-tab";
 import { TeamTab } from "./team-tab";
 
 export const dynamic = "force-dynamic";
@@ -13,9 +14,10 @@ export const dynamic = "force-dynamic";
 // Team & Access and Appearance (the ONLY appearance door — the top-bar Aa is
 // gone by founder ruling); Session 11 fills Integrations with honest
 // connection state (the one door, decision 58 — First Light deep-links here
-// and state reflects back).
+// and state reflects back). Session 15 adds Knowledge — the pack's one door
+// (PR-1): what Light may draft from, firm-curated, versioned, evented.
 
-const TAB_VALUES = new Set(["general", "team", "appearance", "integrations"]);
+const TAB_VALUES = new Set(["general", "knowledge", "team", "appearance", "integrations"]);
 
 export default async function SettingsPage({
   searchParams,
@@ -34,12 +36,16 @@ export default async function SettingsPage({
       <Tabs defaultValue={activeTab}>
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="knowledge">Knowledge</TabsTrigger>
           <TabsTrigger value="team">Team &amp; Access</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
         <TabsContent value="general">
           <GeneralTab />
+        </TabsContent>
+        <TabsContent value="knowledge">
+          <KnowledgeTab />
         </TabsContent>
         <TabsContent value="team">
           <TeamTab />
