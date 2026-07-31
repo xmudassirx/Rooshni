@@ -960,3 +960,18 @@ per-row basics semantics").
      version, and a row whose newer siblings are all archived is the
      effective latest again. The lawful change remains a NEW version row:
      re-issue, never rewrite.
+
+## Session 14 (31 July 2026) — egress diet + auth forensics, cadence ruled in-prompt
+
+121. **The workflow cron runs every 5 minutes, not every minute.**
+     Founder-approved in the Session 14 prompt ("CADENCE ruling
+     (founder-approved): cron drops from per-minute to every 5 minutes").
+     Dispatch already fires inline on the stamp (`outbound.ts`,
+     `onlyCommunicationId`) — the cron is backstop + timers, and 5-minute
+     granularity is invisible at business-day timescales. Recorded
+     consequences: quiet-hours releases and due-timer checks now land
+     within 5 minutes of their moment instead of within 1 — accepted.
+     Context: Supabase free-tier egress at 6.62GB/5GB; one tick measured
+     at 1.29MB/412 requests before the Session 14 diet, ~42KB/9 requests
+     after; cadence cut is the second factor of the recovery
+     (1,852MB/day → ~12MB/day projected).

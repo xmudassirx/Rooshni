@@ -139,6 +139,11 @@ Add to this list during build; check items off only at go-live.
       (already on this list; now sequence-forced — Hobby refuses sub-daily
       schedules at deploy). After merge, verify the cron appears in the
       Vercel dashboard and the tick returns ok with `CRON_SECRET` set.
+      *Session 14 amendment (decision 121, founder-ruled in-prompt): the
+      cadence is now every 5 minutes (`*/5 * * * *`) — the egress ruling.
+      Dispatch-on-stamp stays inline and instant; quiet-hours releases and
+      due timers land within 5 minutes of their moment. The Pro-plan
+      sequence note above still applies to any sub-daily schedule.*
 - [ ] **Exit shadow mode** (introduced Session 10 close, decision 99): real
       Meta leads currently run BOTH pipelines — Brevo handles them, Barakah
       ingests and drafts, and the founder rejects every draft with "shadow
