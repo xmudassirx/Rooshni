@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 
+import { canonicalOrigin } from "@/lib/app-url";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 /**
- * Starts the Google OAuth flow. The redirect target derives from the current
- * origin, so localhost, Vercel previews, production and any future custom
- * domain all work without a code change — only the Supabase redirect
- * allowlist needs to know a new host.
+ * Starts the Google OAuth flow. The redirect target rides the canonical
+ * seam (Session 18): NEXT_PUBLIC_APP_URL when set (production lands on the
+ * custom domain even when reached by another host), the current origin
+ * otherwise — so localhost and Vercel previews work without a code change.
+ * Only the Supabase redirect allowlist needs to know a new host.
  */
 export function GoogleSignInButton() {
   const [pending, setPending] = useState(false);
@@ -21,7 +23,7 @@ export function GoogleSignInButton() {
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${canonicalOrigin(window.location.origin)}/auth/callback`,
       },
     });
     if (oauthError) {

@@ -10,6 +10,7 @@ import {
   sweepPreActiveSignups,
   sweepSettleAndSupersede,
 } from "@rooshni/db";
+import { externalOrigin } from "@/lib/server/origin";
 import { sendSignupReminder } from "@/lib/server/platform-mail";
 import { outboundProviders } from "@/lib/server/outbound";
 
@@ -67,7 +68,10 @@ async function tick(request: NextRequest): Promise<NextResponse> {
   // (founder-ruled) — reminders at 24h/7d, hard delete + platform-scope
   // event at 30 days, every duration through timeScale(). Mail failures land
   // in the report and retry next tick; they never block the workflow tick.
-  const origin = request.nextUrl.origin;
+  // Session 18: the canonical seam — links mailed to real people must never
+  // be composed from the cron request's own origin when the canonical URL
+  // is configured.
+  const origin = externalOrigin(request);
   const signups = await sweepPreActiveSignups(db, {
     sendReminder: (kind, target) => sendSignupReminder(kind, target, origin),
   });
