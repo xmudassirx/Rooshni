@@ -270,20 +270,27 @@ export async function saveKnowledgeEntryAction(
   if (visaRoute && !vocab.routes.has(visaRoute)) {
     return { error: "Unknown visa route — pick one the template declares." };
   }
-  if (category === "route_guide") {
-    if (!id && !guideFile) {
-      return { error: "A route guide is a document — attach its PDF (up to 8MB)." };
+  // Founder ruling (1 Aug 2026, recorded this hotfix): a guide document may
+  // ride ANY route-scoped entry — one Spouse entry carrying text AND the PDF
+  // is the preferred curation shape; a separate route_guide row remains
+  // valid but optional. The door therefore offers the file wherever a route
+  // can be declared; route_guide still REQUIRES its document (that category
+  // is nothing without one), while a service description's document is
+  // optional.
+  const routeScoped = category === "service_description" || category === "route_guide";
+  if (category === "route_guide" && !id && !guideFile) {
+    return { error: "A route guide is a document — attach its PDF (up to 8MB)." };
+  }
+  if (guideFile) {
+    if (!routeScoped) {
+      return { error: "A document attaches to a route-scoped entry — pick a route category." };
     }
-    if (guideFile) {
-      if (guideFile.size > ATTACHMENT_MAX_BYTES) {
-        return { error: "The guide is over the 8MB limit — upload a smaller file." };
-      }
-      const isPdf =
-        guideFile.type === "application/pdf" || guideFile.name.toLowerCase().endsWith(".pdf");
-      if (!isPdf) return { error: "Route guides are PDF documents — upload a .pdf file." };
+    if (guideFile.size > ATTACHMENT_MAX_BYTES) {
+      return { error: "The guide is over the 8MB limit — upload a smaller file." };
     }
-  } else if (guideFile) {
-    return { error: "Only route-guide entries carry a document." };
+    const isPdf =
+      guideFile.type === "application/pdf" || guideFile.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) return { error: "Guide documents are PDFs — upload a .pdf file." };
   }
 
   const attributes: Record<string, string> = { knowledge_category: category };
