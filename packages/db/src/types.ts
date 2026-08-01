@@ -110,7 +110,7 @@ export interface PreflightResult {
   checks: PreflightCheck[];
 }
 
-export type ApprovalInboxItemType = "communication" | "content" | "task";
+export type ApprovalInboxItemType = "communication" | "content" | "task" | "workflow_definition";
 
 /** One row of public.approval_inbox — a view over the pending states. */
 export interface ApprovalInboxRow {
@@ -134,7 +134,9 @@ export interface ApprovalInboxRow {
 
 // --- Spec 4: the workflow engine ---------------------------------------------
 
-export type WorkflowDefinitionStatus = "draft" | "pending_approval" | "active" | "paused";
+/** Session 21 (0034): `withdrawn` — the owner's terminal exit for a
+ * pending_approval definition; frozen, evented, never deletable. */
+export type WorkflowDefinitionStatus = "draft" | "pending_approval" | "active" | "paused" | "withdrawn";
 export type WorkflowRunStatus = "running" | "waiting" | "blocked" | "completed" | "cancelled" | "paused";
 export type StepRunStatus =
   | "scheduled"
@@ -217,6 +219,10 @@ export interface WorkflowDefinitionRow {
   status: WorkflowDefinitionStatus;
   description_plain: string;
   approved_by_actor_id: string | null;
+  /** Session 21 (0034): who withdrew, when and why — all or none. */
+  withdrawn_at: string | null;
+  withdrawn_by_actor_id: string | null;
+  withdrawal_reason: string | null;
 }
 
 export interface WorkflowStepRow {

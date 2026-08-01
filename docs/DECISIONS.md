@@ -1459,3 +1459,34 @@ await sign-off in its close report and are NOT recorded here.
      while (b)'s signed-URL rewiring is the right shape at scale and is
      recorded as the future tightening. A harness tripwire now fails
      check-local if the transport ever again caps below the ceiling.
+     *Session 21 (chore 2) confirmed this entry as the recorded future shape
+     for file uploads — client-direct signed-URL upload; nothing further to
+     record.*
+
+## Session 21 (1 August 2026) — small chores sweep, the withdraw ruling recorded on in-prompt authority
+
+Entry 152 quotes the founder's ruling in the Session 21 prompt (1 August 2026,
+"founder-ruled" — the §8 quoted-approval pattern). The session's Lane B calls
+await sign-off in the close report and are NOT recorded here.
+
+152. **An owner may withdraw a pending workflow definition — terminal,
+     evented, never deletable.** Quoted from the Session 21 prompt: "The
+     approve/reject pipeline for workflow_definition items doesn't exist
+     yet; build the minimal honest exit only: an owner may WITHDRAW a
+     definition at pending_approval — terminal state, evented with a
+     recorded reason, visible in Approval Inbox History, never deletable
+     (the Record never purges). The inbox card for a pending definition
+     gains the single Withdraw control (Approve stays absent — the full
+     definition-approval pipeline remains its own later session; decision
+     116: no control that cannot act)." Landed as 0034 (the `withdrawn`
+     terminal state; the withdrawal triple on the row — who/when/why,
+     all-or-none; the extended definition door: frozen, never deletable, no
+     row born withdrawn, every 0019 refusal unchanged; the owner-only,
+     reason-required `withdraw_workflow_definition()` pipeline), the
+     `withdrawWorkflowDefinition` wrapper putting
+     `workflow.definition_withdrawn` (key, version, reason in the payload)
+     on The Record, the card's single Withdraw control gated by the pure
+     `canWithdrawWorkflowDefinition` (pending + owner, the one render
+     truth), and the History withdrawn arm. The dangling
+     meta_lead_to_consultation v2 was NOT withdrawn by the builder — the
+     founder's witnessed withdrawal through the UI is the DoD (GO-LIVE).

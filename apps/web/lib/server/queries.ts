@@ -506,8 +506,10 @@ export async function getCommunicationDetail(
 export interface InboxHistoryRow {
   eventId: string;
   /** Session 16: superseded joins the decided states — terminal, evented,
-   * never deletable (decision 133a); rendered in neutral chrome. */
-  action: "approved" | "rejected" | "superseded";
+   * never deletable (decision 133a); rendered in neutral chrome.
+   * Session 21: withdrawn joins them — the owner's terminal exit for a
+   * pending workflow definition (0034); neutral chrome likewise. */
+  action: "approved" | "rejected" | "superseded" | "withdrawn";
   occurredAt: string;
   actorName: string | null;
   reason: string | null;
@@ -530,14 +532,28 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
     .from("events")
     .select("id, action, occurred_at, entity_id, payload, actors(display_name)")
     .eq("business_id", business.id)
-    .in("action", ["communication.approved", "communication.rejected", "communication.superseded"])
+    // Session 21: a withdrawn workflow definition is a decided item too —
+    // it lands here from The Record like every other decision.
+    .in("action", [
+      "communication.approved",
+      "communication.rejected",
+      "communication.superseded",
+      "workflow.definition_withdrawn",
+    ])
     .gte("occurred_at", since)
     .order("occurred_at", { ascending: false })
     .limit(200);
   if (error) throw new Error(`inbox history query failed: ${error.message}`);
   if (!events?.length) return [];
 
-  const commIds = [...new Set(events.map((e) => e.entity_id).filter(Boolean))] as string[];
+  const commIds = [
+    ...new Set(
+      events
+        .filter((e) => e.action !== "workflow.definition_withdrawn")
+        .map((e) => e.entity_id)
+        .filter(Boolean)
+    ),
+  ] as string[];
   const { data: comms, error: commError } = commIds.length
     ? await db
         .from("communications")
@@ -549,8 +565,36 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
   if (commError) throw new Error(`history communications query failed: ${commError.message}`);
   const commById = new Map((comms ?? []).map((c) => [c.id, c]));
 
-  return events.flatMap((e) => {
+  return events.flatMap((e): InboxHistoryRow[] => {
     if (!e.entity_id) return [];
+    if (e.action === "workflow.definition_withdrawn") {
+      // Session 21: the payload carries the definition's key/version and the
+      // reason, so History renders without a second lookup.
+      const actorRel = e.actors as unknown as
+        | { display_name: string }
+        | { display_name: string }[]
+        | null;
+      const payload = (e.payload ?? {}) as Record<string, unknown>;
+      const key = typeof payload.definition_key === "string" ? payload.definition_key : null;
+      const version = typeof payload.definition_version === "number" ? payload.definition_version : null;
+      return [
+        {
+          eventId: e.id,
+          action: "withdrawn" as const,
+          occurredAt: e.occurred_at,
+          actorName: Array.isArray(actorRel)
+            ? (actorRel[0]?.display_name ?? null)
+            : (actorRel?.display_name ?? null),
+          reason: typeof payload.reason === "string" ? payload.reason : null,
+          communicationId: e.entity_id,
+          channel: null,
+          preview: key ? `${key}${version != null ? ` v${version}` : ""}` : "workflow definition",
+          contactName: null,
+          threadId: null,
+          engagementId: null,
+        },
+      ];
+    }
     const comm = commById.get(e.entity_id) as
       | {
           id: string;

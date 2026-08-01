@@ -543,9 +543,9 @@ $$;
 -- ---------------------------------------------------------------------------
 -- The run pipeline: pause / resume / cancel as gated acts. Controlling what
 -- the machine does to an enquiry is Level 2 work: the actor needs enquiries
--- (execute) — or is the owner. JUDGMENT: Spec 4 names these acts but not
--- their gate; enquiries execute is the Level 2 tool every other enquiry
--- mutation already consumes.
+-- (execute) — or is the owner.
+-- JUDGMENT: Spec 4 names these acts but not their gate; enquiries execute
+-- is the Level 2 tool every other enquiry mutation already consumes.
 -- ---------------------------------------------------------------------------
 create or replace function private.assert_run_authority(p_actor uuid, p_business uuid, p_engagement uuid)
 returns void
@@ -746,10 +746,11 @@ end;
 $$;
 
 -- Claims due work atomically: a second overlapping tick (cron retry, deploy
--- overlap) cannot claim the same step. JUDGMENT: the p_lease default is an
--- execution lease — how long a claimed step may sit 'running' before a later
--- tick assumes the claimant crashed and reclaims it. It is infrastructure
--- recovery time, not a workflow timer, so it is not TIME_SCALE data.
+-- overlap) cannot claim the same step.
+-- JUDGMENT: the p_lease default is an execution lease — how long a claimed
+-- step may sit 'running' before a later tick assumes the claimant crashed
+-- and reclaims it. It is infrastructure recovery time, not a workflow
+-- timer, so it is not TIME_SCALE data.
 create or replace function public.claim_due_step_runs(
   p_now timestamptz default now(),
   p_limit int default 20,

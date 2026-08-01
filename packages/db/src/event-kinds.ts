@@ -119,4 +119,17 @@ export const INBOUND_EVENT_KINDS = {
   threadDraftingPreferenceChanged: "thread.drafting_preference_changed",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 21 — the stuck-definition escape hatch. Same JUDGMENT as above:
+ * kinds are TS constants, the single truth every emitter imports. The run and
+ * step kinds predate this constant block and remain literals in workflow.ts;
+ * new workflow kinds land here.
+ */
+export const WORKFLOW_EVENT_KINDS = {
+  /** An owner withdrew a pending_approval definition — terminal, reason in
+   * the payload with the definition's key and version; the row carries the
+   * same facts (0034). */
+  definitionWithdrawn: "workflow.definition_withdrawn",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

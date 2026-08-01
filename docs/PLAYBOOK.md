@@ -236,6 +236,18 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   body-mentions-attachment check is retained beneath it. The 8MB refusal is
   enforced at the upload door, at the stamp, and at dispatch alike.
 
+- The **workflow-definition withdrawal door** (Session 21, 0034,
+  founder-ruled): `withdrawn` is a terminal state reachable ONLY from
+  `pending_approval`, only by the business OWNER, only through the
+  service-definer `withdraw_workflow_definition()` with a required reason
+  recorded on the row (who/when/why, all-or-none). A withdrawn definition is
+  frozen (no update of any kind), never deletable (the Record never purges),
+  never executes (`start_workflow_run` and the trigger scan see only
+  `active`), and no row is born withdrawn. The 0019 definition door's every
+  existing refusal stands unchanged; approve/reject remain the stamps and
+  stay absent from the UI until the definition-approval pipeline's own
+  session.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail
