@@ -2,31 +2,38 @@ import { loadEnv } from "./env";
 import { createServiceClient } from "../src/client";
 
 /**
- * Bind the inbound doors to a business (Session 16, PR-A). The WhatsApp
- * webhook resolves the tenant by businesses.settings.whatsapp.phone_number_id;
- * the Graph inbound poll by businesses.settings.graph.mailbox — exactly one
- * business per binding, the wire-meta pattern.
+ * Bind the inbound doors to a business (Session 16, PR-A; Gmail joined at
+ * Session 20). The WhatsApp webhook resolves the tenant by
+ * businesses.settings.whatsapp.phone_number_id; the Graph inbound poll by
+ * businesses.settings.graph.mailbox; the Gmail inbound poll by
+ * businesses.settings.gmail.mailbox — exactly one business per binding, the
+ * wire-meta pattern.
  *
  *   npm run wire-inbound --workspace=@rooshni/db -- \
- *     [--whatsapp <phone_number_id>] [--mailbox <address>] [business_id]
+ *     [--whatsapp <phone_number_id>] [--mailbox <address>] \
+ *     [--gmail <address>] [business_id]
  *
  * With one business in the database the id can be omitted. Config, not a
- * secret — the phone-number id and mailbox address are not credentials.
+ * secret — the phone-number id and mailbox addresses are not credentials.
+ * Which pipe CARRIES a business's outbound mail is the separate
+ * settings.mail_provider choice, made in Settings → Integrations (one door).
  */
 async function main() {
   loadEnv();
   const args = process.argv.slice(2).filter((a) => a !== "--");
   let whatsapp: string | null = null;
   let mailbox: string | null = null;
+  let gmail: string | null = null;
   let businessArg: string | null = null;
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === "--whatsapp") whatsapp = args[++i] ?? null;
     else if (args[i] === "--mailbox") mailbox = args[++i] ?? null;
+    else if (args[i] === "--gmail") gmail = args[++i] ?? null;
     else businessArg = args[i] ?? null;
   }
-  if (!whatsapp && !mailbox) {
+  if (!whatsapp && !mailbox && !gmail) {
     console.error(
-      "Usage: npm run wire-inbound --workspace=@rooshni/db -- [--whatsapp <phone_number_id>] [--mailbox <address>] [business_id]"
+      "Usage: npm run wire-inbound --workspace=@rooshni/db -- [--whatsapp <phone_number_id>] [--mailbox <address>] [--gmail <address>] [business_id]"
     );
     process.exit(1);
   }
@@ -64,10 +71,14 @@ async function main() {
   if (mailbox) {
     next.graph = { ...((settings.graph as Record<string, unknown>) ?? {}), mailbox: mailbox.toLowerCase() };
   }
+  if (gmail) {
+    next.gmail = { ...((settings.gmail as Record<string, unknown>) ?? {}), mailbox: gmail.toLowerCase() };
+  }
   const { error: updateError } = await db.from("businesses").update({ settings: next }).eq("id", target.id);
   if (updateError) throw new Error(`settings update failed: ${updateError.message}`);
   if (whatsapp) console.log(`Bound WhatsApp number ${whatsapp} → business "${target.name}" (${target.id}).`);
   if (mailbox) console.log(`Bound mailbox ${mailbox.toLowerCase()} → business "${target.name}" (${target.id}).`);
+  if (gmail) console.log(`Bound Gmail mailbox ${gmail.toLowerCase()} → business "${target.name}" (${target.id}).`);
 }
 
 main().catch((err) => {

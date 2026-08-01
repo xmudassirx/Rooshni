@@ -33,7 +33,7 @@ import {
   resolveSettleRealMs,
   SETTLE_WINDOW_DEFAULT_MINUTES,
 } from "../src/supersede";
-import { parseReferenceIds } from "../src/graph";
+import { parseReferenceIds } from "../src/mailbox";
 import { resolveSignOffBody, resolveSignOffMode, resolveSignOffText } from "../src/sign-off";
 import { resolveBookingUrl, substituteBookingLink } from "../src/booking-link";
 import {
