@@ -3,7 +3,7 @@ import { scaleDurationMs } from "@rooshni/config";
 import { emitEvent } from "./events";
 import { submitCommunication } from "./approvals";
 import { evaluateAutoClose, type NudgeFact } from "./auto-close";
-import { DRAFTING_EVENT_KINDS, SEND_EVENT_KINDS } from "./event-kinds";
+import { DRAFTING_EVENT_KINDS, SEND_EVENT_KINDS, WORKFLOW_EVENT_KINDS } from "./event-kinds";
 import {
   composeDraft,
   createAnthropicGenerator,
@@ -155,6 +155,61 @@ export async function cancelWorkflowRun(db: SupabaseClient, input: RunActInput):
     entity_type: "workflow_run",
     entity_id: input.run_id,
     payload: input.reason ? { reason: input.reason } : {},
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The definition escape hatch (Session 21, founder-ruled): an OWNER may
+// withdraw a definition at pending_approval — terminal, reason required,
+// evented. The 0034 pipeline function is the gate; this wrapper puts the act
+// on The Record (the pause/resume/cancel shape above).
+// ---------------------------------------------------------------------------
+
+/**
+ * The single truth for whether the Withdraw control may render: only a
+ * pending definition, only to the owner (decision 116 — no control that
+ * cannot act; the database refuses everyone else regardless). Pure so the
+ * harness proves the rendering law the same way the UI applies it.
+ */
+export function canWithdrawWorkflowDefinition(input: {
+  status: string;
+  isOwner: boolean;
+}): boolean {
+  return input.status === "pending_approval" && input.isOwner;
+}
+
+export interface WithdrawDefinitionInput {
+  business_id: string;
+  definition_id: string;
+  /** The owner's own actor — the database refuses anyone else. */
+  actor_id: string;
+  reason: string;
+  /** For the ledger payload, so History renders without a second lookup. */
+  definition_key?: string;
+  definition_version?: number;
+}
+
+export async function withdrawWorkflowDefinition(
+  db: SupabaseClient,
+  input: WithdrawDefinitionInput
+): Promise<EventRow> {
+  const { error } = await db.rpc("withdraw_workflow_definition", {
+    p_def: input.definition_id,
+    p_actor: input.actor_id,
+    p_reason: input.reason,
+  });
+  if (error) throw new Error(`withdraw_workflow_definition failed: ${error.message}`);
+  return emitEvent(db, {
+    business_id: input.business_id,
+    actor_id: input.actor_id,
+    action: WORKFLOW_EVENT_KINDS.definitionWithdrawn,
+    entity_type: "workflow_definition",
+    entity_id: input.definition_id,
+    payload: {
+      reason: input.reason,
+      ...(input.definition_key ? { definition_key: input.definition_key } : {}),
+      ...(input.definition_version != null ? { definition_version: input.definition_version } : {}),
+    },
   });
 }
 
@@ -509,8 +564,10 @@ async function templateVars(
   // a business-identity field — never the owner's personal name, never
   // hardcoded. Only the firm-name default ships this session.
   // JUDGMENT: the settings key is `email_sign_off` (businesses.settings, the
-  // General-tab identity store); the Settings edit surface arrives with its
-  // session — until then the firm display name is the value.
+  // General-tab identity store); the firm display name is the default when
+  // the key is unset. Its Settings edit surface shipped with Session 16's
+  // drafting-policy trio (decision 140) — the s15 "arrives with its session"
+  // deferral is closed (stale clause cleaned at the Session 21 sweep).
   // Session 16 (PR-F): one resolver module (sign-off.ts) is the truth for
   // the text; approver mode resolves at render+stamp, never at generation.
   const signOff = resolveSignOffText(settings, businessName);
