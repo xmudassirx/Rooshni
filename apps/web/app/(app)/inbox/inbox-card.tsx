@@ -30,6 +30,8 @@ export interface CardCreditLine {
   budgetTokens: number;
   attempts: number;
   packEntries: { id: string; title: string }[];
+  /** Session 16 (PR-E) — provider cache figures, when the call was cached. */
+  cache: { readTokens: number; writtenTokens: number; fallbackReason: string | null } | null;
 }
 
 export interface CardContext {
@@ -65,6 +67,12 @@ export interface InboxCardProps {
   /** Session 15 fix round — "edited by <name> · <time>", pre-formatted on
    * the server; a FACT in neutral chrome (not a stamp act, not a Light act). */
   editedNote: string | null;
+  /** Session 16 (decision 133a) — "supersedes an earlier draft · N new
+   * messages since", pre-formatted on the server; neutral chrome. */
+  supersedeNote: string | null;
+  /** Session 16 (PR-F) — approver sign-off mode: the body shown is the
+   * render-resolved form (WYSIWYS); this note states the fact, neutrally. */
+  signOffNote: string | null;
   /** Session 12 — selection mode, for bulk REJECTION only. Approval never
    * takes a selection: the stamp is individual by constitution. */
   selection?: { selected: boolean; onToggle: () => void } | null;
@@ -147,6 +155,14 @@ function CreditLine({ credit }: { credit: CardCreditLine }) {
       {` · ${credit.reason === "floor" ? "floor — no escalation" : `escalated: ${credit.reason}`}`}
       {` · context ${credit.contextTokens}/${credit.budgetTokens} tok`}
       {credit.attempts > 1 ? ` · attempt ${credit.attempts} (redrafted after a compliance breach)` : ""}
+      {/* Session 16 (PR-E): the cache figures, verified from the provider's
+          own usage fields — a recorded fallback reason when caching was
+          refused, never a silent difference. */}
+      {credit.cache
+        ? ` · cache: ${credit.cache.readTokens} read / ${credit.cache.writtenTokens} written${
+            credit.cache.fallbackReason ? " (fell back uncached — reason recorded)" : ""
+          }`
+        : ""}
       {` · pack: ${credit.packEntries.length ? credit.packEntries.map((e) => e.title).join(", ") : "no entries used"}`}
     </div>
   );
@@ -269,6 +285,9 @@ export function InboxCard(props: InboxCardProps) {
           <Badge variant="time">drafted by {props.draftedBy ?? "unknown"}</Badge>
         )}
         {props.editedNote ? <Badge variant="time">{props.editedNote}</Badge> : null}
+        {/* Session 16 (decision 133a): what this draft replaced — a fact in
+            neutral chrome; the superseded row itself lives in History. */}
+        {props.supersedeNote ? <Badge variant="time">{props.supersedeNote}</Badge> : null}
         <span className="text-[12.5px] font-medium text-ink-soft">
           {props.recipient ? `→ ${props.recipient}` : null}
           {props.recipient && props.subject ? " · " : null}
@@ -334,6 +353,13 @@ export function InboxCard(props: InboxCardProps) {
       <div className="mb-2 flex flex-col gap-1">
         <PreflightLine checks={props.checks} wired={isComm} />
         {props.creditLine ? <CreditLine credit={props.creditLine} /> : null}
+        {/* Session 16 (PR-F): the sign-off fact — WYSIWYS, stated in neutral
+            mono; the body above already shows the resolved form. */}
+        {props.signOffNote ? (
+          <div className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+            {props.signOffNote}
+          </div>
+        ) : null}
         <div className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
           {props.scheduledNote}
         </div>

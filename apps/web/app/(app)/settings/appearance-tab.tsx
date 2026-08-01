@@ -51,6 +51,14 @@ const VIEWS = [
   ["standard", "☰ Standard"],
 ] as const;
 
+// Session 16 (PR-G): the arrival tone for new pending drafts — on by
+// default; the browser's autoplay rules are honoured honestly (no sound
+// before the first user interaction is fine and expected).
+const SOUNDS = [
+  ["on", "On"],
+  ["off", "Off"],
+] as const;
+
 function persist(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
@@ -94,6 +102,7 @@ export function AppearanceTab() {
   const [font, setFont] = useState("theme");
   const [size, setSize] = useState("default");
   const [view, setView] = useState("phone");
+  const [sound, setSound] = useState("on");
 
   useEffect(() => {
     const d = document.documentElement.dataset;
@@ -105,6 +114,7 @@ export function AppearanceTab() {
     try {
       const v = localStorage.getItem("ui-convview");
       if (v === "standard") setView("standard");
+      if (localStorage.getItem("ui-inbox-sound") === "off") setSound("off");
     } catch {
       /* stays phone */
     }
@@ -181,6 +191,15 @@ export function AppearanceTab() {
         if (v === "standard") document.documentElement.dataset.convview = "standard";
         else delete document.documentElement.dataset.convview;
         persist("ui-convview", v);
+      },
+    },
+    {
+      label: "New-draft sound",
+      items: SOUNDS,
+      value: sound,
+      apply: (v) => {
+        setSound(v);
+        persist("ui-inbox-sound", v);
       },
     },
   ];

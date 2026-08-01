@@ -1,18 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Paperclip, Search } from "lucide-react";
 
 import { formatWhen } from "@/lib/format";
 import type { ConversationThread, ThreadMessage } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
+import {
+  askLightToDraftAction,
+  sendDirectMessageAction,
+  setAutoDraftPausedAction,
+  setSettleOverrideAction,
+  type ThreadActionState,
+} from "./actions";
 
 /*
- * view-convos, master mockup v2. Sending is NEXT session (outbound sends are
- * out of scope) — both composer modes render exactly as drawn and refuse
- * honestly on submit. Unread and starred are per-user state with no backing
- * columns yet, so those two filter chips render disabled, never pretending.
+ * view-convos, master mockup v2 — Session 16 makes it a drafting AND sending
+ * surface (decision 133c/d): direct sends are decision-21 insert-at-approved
+ * (the database fires every trigger, including the 0030 auto-supersede);
+ * every settled inbound burst yields ONE Light draft; "Ask Light to draft"
+ * bypasses the remaining settle wait; the per-conversation toggle PAUSES
+ * auto-draft (on is the default — the toggle never enables). Briefing Light
+ * with an instruction remains its own session and refuses honestly. Unread
+ * and starred stay disabled — their per-user columns still do not exist.
  */
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -92,6 +104,22 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
    * NOT YET SENT label), never the side. Bubbles cap at ~72% of the pane
    * at every viewport width (fluid shell, decision 76).
    */
+  // Session 16 (decision 133a): a superseded draft is frozen history — the
+  // world moved past it. Neutral chrome: not gold (no longer Light's live
+  // act), not red, not green; it never sent and never will.
+  if (message.direction === "outbound" && message.status === "superseded") {
+    return (
+      <div className="max-w-[72%] self-end rounded-xl rounded-br-sm border border-dashed border-rule bg-paper-deep px-2.5 py-2 text-[12.5px] leading-normal text-ink-faint opacity-80">
+        <span className="mb-1 block font-mono text-[8.5px] font-semibold tracking-[.08em] uppercase">
+          ⇢ superseded — replaced by a newer draft, never sent
+        </span>
+        <span className="line-clamp-2">{message.body}</span>
+        <span className="mt-1 block text-right font-mono text-[8.5px] tracking-wide">
+          {formatWhen(message.occurredAt)}
+        </span>
+      </div>
+    );
+  }
   if (message.isPendingDraft) {
     return (
       <>
@@ -183,6 +211,28 @@ export function ConversationsClient({
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const splitRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+
+  // Session 16 — the real acts: direct send (insert-at-approved), Ask Light
+  // (manual settle bypass), pause toggle and settle override. Server actions;
+  // the database decides.
+  const INITIAL: ThreadActionState = { error: null };
+  const [sendState, sendAction, sendPending] = useActionState(sendDirectMessageAction, INITIAL);
+  const [askState, askAction, askPending] = useActionState(askLightToDraftAction, INITIAL);
+  const [prefState, prefAction, prefPending] = useActionState(setAutoDraftPausedAction, INITIAL);
+  const [settleState, settleAction] = useActionState(setSettleOverrideAction, INITIAL);
+
+  useEffect(() => {
+    if (sendState.done) {
+      if (boxRef.current) boxRef.current.value = "";
+      router.refresh();
+    }
+  }, [sendState, router]);
+  useEffect(() => {
+    if (askState.done || prefState.done || settleState.done) router.refresh();
+  }, [askState, prefState, settleState, router]);
+
+  const actionError = sendState.error ?? askState.error ?? prefState.error ?? settleState.error;
 
   // v2's draggable divider — clamp 250–520px, exactly its bounds.
   function startDrag(e: React.PointerEvent<HTMLDivElement>) {
@@ -396,6 +446,17 @@ export function ConversationsClient({
               ) : (
                 <span className="ml-auto" />
               )}
+              {/* Session 16 (PR-A): Meta's 24h service window, as recorded on
+                  the thread — a fact in neutral chrome; the pre-flight over
+                  inbound rows stays the enforcement truth. */}
+              {selected.channel === "whatsapp" ? (
+                <span className="rounded border border-rule bg-paper-deep px-1.5 py-px font-mono text-[9px] tracking-wide text-ink-soft uppercase">
+                  {selected.waServiceWindowExpiresAt &&
+                  new Date(selected.waServiceWindowExpiresAt) > new Date()
+                    ? `WA window open · closes ${formatWhen(selected.waServiceWindowExpiresAt)}`
+                    : "WA window closed — template messages only"}
+                </span>
+              ) : null}
               {/* The phone/standard toggle is gone (decision 77) — Settings →
                   Appearance → Conversation view is the only door. */}
               {/* v2 quick actions. Star and read-state need per-user columns
@@ -507,8 +568,80 @@ export function ConversationsClient({
                   </div>
                 </div>
 
-                {/* Composer — both modes drawn; sending is next session. */}
+                {/* Composer — Session 16: direct sends are real (decision 21
+                    insert-at-approved; the 0030 trigger retires any pending
+                    draft in the same transaction). */}
                 <div className="shrink-0 border-t border-rule bg-panel px-4 pt-2.5 pb-3">
+                  {/* The drafting register (decision 133b/d): auto-draft
+                      state, the per-conversation settle override, and the
+                      manual ask — durable thread-row state, cron-evaluated. */}
+                  {["email", "whatsapp"].includes(selected.channel) ? (
+                    <div className="mb-2 flex flex-wrap items-center gap-2 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+                      <span className={selected.autoDraftPaused ? "" : "light-text font-semibold"}>
+                        ✦ auto-draft {selected.autoDraftPaused ? "paused" : "on"}
+                      </span>
+                      <form action={prefAction} className="inline">
+                        <input type="hidden" name="threadId" value={selected.id} />
+                        <input
+                          type="hidden"
+                          name="paused"
+                          value={selected.autoDraftPaused ? "false" : "true"}
+                        />
+                        <button
+                          type="submit"
+                          disabled={prefPending}
+                          className="cursor-pointer rounded border border-rule bg-paper px-1.5 py-px uppercase hover:border-accent"
+                          title={
+                            selected.autoDraftPaused
+                              ? "Resume automatic drafting on this conversation"
+                              : "Pause automatic drafting on this conversation — Ask Light remains the manual door"
+                          }
+                        >
+                          {selected.autoDraftPaused ? "resume" : "pause"}
+                        </button>
+                      </form>
+                      <span>·</span>
+                      <form action={settleAction} className="inline-flex items-center gap-1">
+                        <input type="hidden" name="threadId" value={selected.id} />
+                        <label>
+                          settle{" "}
+                          <select
+                            name="override_minutes"
+                            defaultValue={
+                              selected.settleOverrideSeconds === null
+                                ? "default"
+                                : String(selected.settleOverrideSeconds / 60)
+                            }
+                            onChange={(e) => e.currentTarget.form?.requestSubmit()}
+                            className="cursor-pointer rounded border border-rule bg-paper px-1 py-px font-mono text-[9.5px] uppercase"
+                            title="How long Light waits after a client message before drafting — this conversation only"
+                          >
+                            <option value="default">business default</option>
+                            <option value="0">instant</option>
+                            <option value="1">1 min</option>
+                            <option value="3">3 min</option>
+                            <option value="5">5 min</option>
+                          </select>
+                        </label>
+                      </form>
+                      {selected.settleDueAt ? (
+                        <span title="A client message is settling — Light drafts when the window closes">
+                          · settling — drafts {formatWhen(selected.settleDueAt)}
+                        </span>
+                      ) : null}
+                      <form action={askAction} className="ml-auto inline">
+                        <input type="hidden" name="threadId" value={selected.id} />
+                        <button
+                          type="submit"
+                          disabled={askPending}
+                          className="light-btn-soft cursor-pointer rounded-md px-2.5 py-1 font-mono text-[9.5px] font-semibold tracking-wide uppercase"
+                          title="Skip the remaining settle wait — Light drafts against the full thread now; the draft still needs your stamp"
+                        >
+                          {askPending ? "✦ drafting…" : "✦ Ask Light to draft"}
+                        </button>
+                      </form>
+                    </div>
+                  ) : null}
                   <div className="mb-2 inline-flex gap-1 rounded-lg bg-paper-deep p-0.5">
                     <button
                       type="button"
@@ -531,14 +664,15 @@ export function ConversationsClient({
                       ✦ Brief Light
                     </button>
                   </div>
-                  <div className="flex items-end gap-2">
+                  <form action={sendAction} className="flex items-end gap-2">
+                    <input type="hidden" name="threadId" value={selected.id} />
                     <button
                       type="button"
                       title="Attach"
                       className="glass size-9.5 shrink-0 rounded-lg text-ink-soft"
                       onClick={() =>
                         setNotice(
-                          "Manual attach — same control as the Approval Inbox draft editor; arrives with the send session."
+                          "Manual attach — same control as the Approval Inbox draft editor; arrives with its session."
                         )
                       }
                     >
@@ -546,6 +680,7 @@ export function ConversationsClient({
                     </button>
                     <textarea
                       ref={boxRef}
+                      name="body"
                       rows={1}
                       placeholder={
                         mode === "direct"
@@ -559,30 +694,51 @@ export function ConversationsClient({
                           : "border-rule bg-paper focus:outline-accent"
                       )}
                     />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setNotice(
-                          mode === "direct"
-                            ? "The send pipeline arrives next session — nothing was sent, nothing was recorded."
-                            : "Briefing Light arrives with its wiring session — nothing was drafted, nothing was recorded."
-                        )
-                      }
-                      className={cn(
-                        "h-9.5 shrink-0 rounded-lg px-4 text-[13px] font-bold text-white",
-                        mode === "light" ? "light-btn" : "bg-accent"
-                      )}
-                    >
-                      {mode === "direct" ? "Send" : "✦ Draft it"}
-                    </button>
-                  </div>
+                    {mode === "direct" ? (
+                      // Session 16: the REAL send — insert-at-approved as the
+                      // signed-in human; the database's refusals (consent,
+                      // the WhatsApp window, missing authority) surface
+                      // verbatim below.
+                      <button
+                        type="submit"
+                        disabled={sendPending}
+                        className="h-9.5 shrink-0 rounded-lg bg-accent px-4 text-[13px] font-bold text-white disabled:opacity-60"
+                      >
+                        {sendPending ? "Sending…" : "Send"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setNotice(
+                            "Briefing Light with an instruction arrives with its session — use ✦ Ask Light to draft above for a reply against the thread as it stands. Nothing was drafted, nothing was recorded."
+                          )
+                        }
+                        className="light-btn h-9.5 shrink-0 rounded-lg px-4 text-[13px] font-bold text-white"
+                      >
+                        ✦ Draft it
+                      </button>
+                    )}
+                  </form>
                   <p className="mt-1.5 font-mono text-[9.5px] tracking-[.04em] text-ink-faint">
-                    {notice ? (
+                    {actionError ? (
+                      <span className="text-stamp">{actionError}</span>
+                    ) : notice ? (
                       <span className="text-amber">{notice}</span>
+                    ) : askState.done ? (
+                      <span className="light-text font-semibold">
+                        ✦ Light drafted against the full thread — the draft is in this thread and your
+                        Approval Inbox, awaiting your stamp
+                      </span>
+                    ) : sendState.done ? (
+                      <span className="text-ledger">
+                        Sent as you · on The Record · any pending draft on this thread was superseded
+                        (the human always wins)
+                      </span>
                     ) : mode === "direct" ? (
                       <>
                         Sends immediately as <b className="text-ink-soft">you</b> · logged on The
-                        Record · staff without send rights see only the Brief Light path here
+                        Record · a pending Light draft on this thread is superseded by your reply
                       </>
                     ) : (
                       <>

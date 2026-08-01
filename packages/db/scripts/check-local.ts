@@ -21,6 +21,19 @@ import {
   type KnowledgeEntry,
 } from "../src/drafting";
 import { resolveEscalation, LIGHT_MODEL_FLOOR, LIGHT_MODEL_ESCALATION, DRAFT_CONTEXT_BUDGETS } from "../src/model-router";
+import {
+  assembleReplyPrompt,
+  composeReplyDraft,
+  type ComposeReplyInput,
+} from "../src/drafting";
+import {
+  nextSettleDueAt,
+  resolveSettleMinutes,
+  resolveSettleRealMs,
+  SETTLE_WINDOW_DEFAULT_MINUTES,
+} from "../src/supersede";
+import { parseReferenceIds } from "../src/graph";
+import { resolveSignOffBody, resolveSignOffMode, resolveSignOffText } from "../src/sign-off";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -1782,11 +1795,19 @@ async function main() {
     [f.business_id, f.agent_id, waContact.rows[0]!.id]
   );
 
+  // Session 16: one pending outbound per thread+channel is now law (0030) —
+  // each test draft takes its own thread so unresolved pendings from earlier
+  // refusal tests cannot collide with later ones.
   const draftWa = async (body: string, attributes: string) => {
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'whatsapp') returning id`,
+      [f.business_id, f.agent_id, waContact.rows[0]!.id]
+    );
     const r = await db.query<{ id: string }>(
       `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id, attributes)
        values ($1, $2, $3, $4, 'whatsapp', 'outbound', 'draft', $5, $2, $6::jsonb) returning id`,
-      [f.business_id, f.agent_id, waThread.rows[0]!.id, waContact.rows[0]!.id, body, attributes]
+      [f.business_id, f.agent_id, t.rows[0]!.id, waContact.rows[0]!.id, body, attributes]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, f.agent_id]);
     await recordCompliance(r.rows[0]!.id);
@@ -2320,11 +2341,19 @@ async function main() {
      values ($1, $2, $3, 'email') returning id`,
     [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
   );
+  // Session 16: one pending outbound per thread+channel is now law (0030) —
+  // each compliance test draft takes its own thread so unresolved pendings
+  // from refusal tests cannot collide with later submissions.
   const s15Draft = async (body: string) => {
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'email') returning id`,
+      [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
+    );
     const r = await db.query<{ id: string }>(
       `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
        values ($1, $2, $3, $4, 'email', 'outbound', 'draft', $5, $2) returning id`,
-      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id, s15Contact.rows[0]!.id, body]
+      [activation!.business_id, activation!.light_actor_id, t.rows[0]!.id, s15Contact.rows[0]!.id, body]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.light_actor_id]);
     return r.rows[0]!.id;
@@ -2589,6 +2618,367 @@ async function main() {
     );
     if (second.rows[0]!.submitted_at === first.rows[0]!.submitted_at) {
       throw new Error("a genuine re-submission did not restart the clock");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 16 — inbound capture (0028) and the supersede engine
+  // (0029/0030). Refusal-first: the guard, the terminal state and the
+  // service-only pipeline are all attempted from the wrong side.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 16 — inbound capture and the supersede engine:");
+
+  const s16Contact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Supersede Lead') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s16ContactId = s16Contact.rows[0]!.id;
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'supersede.lead@example.test', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s16ContactId]
+  );
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'whatsapp', '+447700900456', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s16ContactId]
+  );
+  const s16Engagement = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'Supersede enquiry', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s16EngagementId = s16Engagement.rows[0]!.id;
+  const s16NewThread = async (channel: string, withEngagement = true) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, engagement_id, channel)
+       values ($1, $2, $3, $4, '${channel}') returning id`,
+      [f.business_id, f.agent_id, s16ContactId, withEngagement ? s16EngagementId : null]
+    );
+    return r.rows[0]!.id;
+  };
+  const s16NewDraft = async (threadId: string, channel: string, body: string) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, drafted_by_actor_id)
+       select $1, $2, $3, $4, t.engagement_id, '${channel}', 'outbound', 'draft', $5, $2
+       from public.comm_threads t where t.id = $3 returning id`,
+      [f.business_id, f.agent_id, threadId, s16ContactId, body]
+    );
+    return r.rows[0]!.id;
+  };
+
+  // --- 0028: the inbound claim tables are service-side only ---------------
+  await expectOk("inbound claim tables: idempotent on the provider id; invisible and closed to signed-in sessions", async () => {
+    await db.query(
+      `insert into public.wa_webhook_events (wamid, phone_number_id, payload) values ('wamid.s16-1', '111', '{}'::jsonb)`
+    );
+    let threw = false;
+    try {
+      await db.query(`insert into public.wa_webhook_events (wamid) values ('wamid.s16-1')`);
+    } catch (err) {
+      threw = /duplicate key/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!threw) throw new Error("a replayed wamid claimed twice");
+    await db.query(
+      `insert into public.graph_mail_events (internet_message_id, mailbox) values ('<s16@example.test>', 'firm@example.test')`
+    );
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    try {
+      const wa = await db.query<{ n: number }>(`select count(*)::int as n from public.wa_webhook_events`);
+      const gm = await db.query<{ n: number }>(`select count(*)::int as n from public.graph_mail_events`);
+      if (wa.rows[0]!.n !== 0 || gm.rows[0]!.n !== 0) {
+        throw new Error("a signed-in session can read raw provider payloads");
+      }
+      let insertRefused = false;
+      try {
+        await db.query(`insert into public.wa_webhook_events (wamid) values ('wamid.forged')`);
+      } catch (err) {
+        insertRefused = /row-level security|permission denied/.test(err instanceof Error ? err.message : String(err));
+      }
+      if (!insertRefused) throw new Error("a signed-in session wrote a claim row");
+    } finally {
+      await db.exec(`reset role`);
+      await db.exec(`set request.jwt.claim.sub = ''`);
+    }
+  });
+
+  // --- 0030: the one-pending guard ----------------------------------------
+  let s16FirstPendingId = "";
+  await expectError(
+    "one pending outbound draft per engagement per channel — the second submission is refused by the DATABASE",
+    /one_pending_per_engagement_channel/,
+    async () => {
+      const t1 = await s16NewThread("email");
+      s16FirstPendingId = await s16NewDraft(t1, "email", "First answer, still awaiting the stamp.");
+      await db.query(`select public.submit_communication($1, $2)`, [s16FirstPendingId, f.agent_id]);
+      const t2 = await s16NewThread("email");
+      const second = await s16NewDraft(t2, "email", "A second pending answer must not exist.");
+      await db.query(`select public.submit_communication($1, $2)`, [second, f.agent_id]);
+    }
+  );
+
+  await expectOk("the guard is per CHANNEL — a WhatsApp draft may pend beside the email draft", async () => {
+    const t = await s16NewThread("whatsapp");
+    const id = await s16NewDraft(t, "whatsapp", "Channel-parallel pending is lawful.");
+    await db.query(`select public.submit_communication($1, $2)`, [id, f.agent_id]);
+    // Retire it through the pipeline so later smokes start clean.
+    await db.query(`select public.supersede_communication($1, 'new_inbound')`, [id]);
+  });
+
+  await expectOk("engagement-less threads carry the same guard, keyed by thread", async () => {
+    const t = await s16NewThread("email", false);
+    const a = await s16NewDraft(t, "email", "Pre-qualification draft one.");
+    await db.query(`select public.submit_communication($1, $2)`, [a, f.agent_id]);
+    const b = await s16NewDraft(t, "email", "Pre-qualification draft two.");
+    let threw = false;
+    try {
+      await db.query(`select public.submit_communication($1, $2)`, [b, f.agent_id]);
+    } catch (err) {
+      threw = /one_pending_per_thread_channel/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!threw) throw new Error("a second engagement-less pending was admitted");
+    await db.query(`select public.supersede_communication($1, 'new_inbound')`, [a]);
+  });
+
+  // --- 0030: supersede inherits the client's clock (decision 134) ---------
+  await expectOk("a superseding draft INHERITS the original submitted_at — the client's wait never resets", async () => {
+    const oldClock = await db.query<{ submitted_at: string }>(
+      `select submitted_at::text as submitted_at from public.communications where id = $1`,
+      [s16FirstPendingId]
+    );
+    if (!oldClock.rows[0]!.submitted_at) throw new Error("fixture draft has no submission stamp");
+    await db.query(`select pg_sleep(0.01)`);
+    const t = await s16NewThread("email");
+    const successor = await s16NewDraft(t, "email", "Regenerated against the full thread — both messages answered.");
+    await db.query(`select public.supersede_communication($1, 'new_inbound', $2, $3)`, [
+      s16FirstPendingId,
+      successor,
+      f.agent_id,
+    ]);
+    const after = await db.query<{ old_status: string; succ_status: string; succ_clock: string; reason: string; successor_id: string }>(
+      `select o.status::text as old_status, s.status::text as succ_status,
+              s.submitted_at::text as succ_clock,
+              o.attributes -> 'superseded' ->> 'reason' as reason,
+              o.attributes -> 'superseded' ->> 'successor_id' as successor_id
+       from public.communications o, public.communications s
+       where o.id = $1 and s.id = $2`,
+      [s16FirstPendingId, successor]
+    );
+    const r = after.rows[0]!;
+    if (r.old_status !== "superseded") throw new Error(`old draft is ${r.old_status}`);
+    if (r.succ_status !== "pending_approval") throw new Error(`successor is ${r.succ_status}`);
+    if (r.succ_clock !== oldClock.rows[0]!.submitted_at) {
+      throw new Error(`the clock reset: ${r.succ_clock} vs original ${oldClock.rows[0]!.submitted_at}`);
+    }
+    if (r.reason !== "new_inbound" || r.successor_id !== successor) {
+      throw new Error("the superseded marker does not name its reason and successor");
+    }
+    const inbox = await db.query<{ awaiting_since: string }>(
+      `select awaiting_since::text as awaiting_since from public.approval_inbox where item_id = $1`,
+      [successor]
+    );
+    if (inbox.rows[0]!.awaiting_since !== oldClock.rows[0]!.submitted_at) {
+      throw new Error("the inbox queue position did not follow the inherited clock");
+    }
+  });
+
+  await expectError(
+    "supersede is a service pipeline — a signed-in session cannot call it",
+    /permission denied/,
+    async () => {
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(`select public.supersede_communication($1, 'new_inbound')`, [s16FirstPendingId]);
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  // --- 0030: a human reply auto-supersedes, in the same transaction -------
+  let s16SupersededId = "";
+  await expectOk("a HUMAN outbound on the thread auto-supersedes the pending draft (reason human_replied, no orphan)", async () => {
+    const t = await s16NewThread("whatsapp");
+    s16SupersededId = await s16NewDraft(t, "whatsapp", "Light's answer, awaiting the stamp.");
+    await db.query(`select public.submit_communication($1, $2)`, [s16SupersededId, f.agent_id]);
+    // The human replies from Conversations: decision-21 insert-at-approved.
+    // (WhatsApp free-form passes pre-flight — the fixture holds no recent
+    // inbound, so ride the approved-template path like a real manual send.)
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, approved_by_actor_id, attributes)
+       values ($1, $2, $3, $4, $5, 'whatsapp', 'outbound', 'approved', 'Human answer, sent directly.', $2,
+               '{"wa_template": {"name": "enquiry_nudge", "language": "en_GB"}}'::jsonb)`,
+      [f.business_id, f.human_id, t, s16ContactId, s16EngagementId]
+    );
+    const after = await db.query<{ status: string; reason: string; needs_event: string }>(
+      `select status::text as status,
+              attributes -> 'superseded' ->> 'reason' as reason,
+              attributes -> 'superseded' ->> 'needs_event' as needs_event
+       from public.communications where id = $1`,
+      [s16SupersededId]
+    );
+    const r = after.rows[0]!;
+    if (r.status !== "superseded") throw new Error(`the pending draft is ${r.status} — an orphan survived the human`);
+    if (r.reason !== "human_replied") throw new Error(`reason recorded as ${r.reason}`);
+    if (r.needs_event !== "true") throw new Error("the transition left no event marker for The Record");
+  });
+
+  // --- 0030: superseded is terminal, frozen, never deletable --------------
+  await expectError("superseded is TERMINAL — status never leaves it", /terminal/, () =>
+    db.query(`update public.communications set status = 'draft' where id = $1`, [s16SupersededId])
+  );
+  await expectError("a superseded draft is FROZEN history — its words never change", /frozen history/, () =>
+    db.query(`update public.communications set body = 'rewritten history' where id = $1`, [s16SupersededId])
+  );
+  await expectError("superseded rows are NEVER deleted — History keeps its record", /never deleted/, () =>
+    db.query(`delete from public.communications where id = $1`, [s16SupersededId])
+  );
+  await expectError("a communication cannot be BORN superseded", /born superseded/, async () => {
+    const t = await s16NewThread("email");
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'superseded', 'never lived')`,
+      [f.business_id, f.agent_id, t]
+    );
+  });
+
+  // --- PR-C: the settle window (pure policy, timeScale-proven) ------------
+  await expectOk("settle options resolve instant/1/3/5 with default 3; unlawful values fall to the default", async () => {
+    if (resolveSettleMinutes({}) !== SETTLE_WINDOW_DEFAULT_MINUTES) throw new Error("absent ≠ default");
+    if (resolveSettleMinutes({ draft_settle_minutes: 0 }) !== 0) throw new Error("instant not honoured");
+    if (resolveSettleMinutes({ draft_settle_minutes: 1 }) !== 1) throw new Error("1 min not honoured");
+    if (resolveSettleMinutes({ draft_settle_minutes: 5 }) !== 5) throw new Error("5 min not honoured");
+    if (resolveSettleMinutes({ draft_settle_minutes: 7 }) !== SETTLE_WINDOW_DEFAULT_MINUTES) {
+      throw new Error("an unlawful value did not fall to the default");
+    }
+    if (resolveSettleRealMs({ draft_settle_minutes: 5 }, 60) !== 60_000) {
+      throw new Error("the per-conversation override did not win");
+    }
+    if (resolveSettleRealMs({ draft_settle_minutes: 5 }, 0) !== 0) {
+      throw new Error("an instant per-conversation override did not win");
+    }
+    if (resolveSettleRealMs({ draft_settle_minutes: 1 }, null) !== 60_000) {
+      throw new Error("the business setting did not apply without an override");
+    }
+  });
+
+  await expectOk("the settle clock RESTARTS on each inbound in a burst (timeScale-proven)", async () => {
+    const windowMs = 3 * 60 * 1000;
+    const t0 = new Date("2026-08-01T10:00:00.000Z");
+    const t1 = new Date(t0.getTime() + 2 * 60 * 1000);
+    const due0 = new Date(nextSettleDueAt(t0, windowMs));
+    const due1 = new Date(nextSettleDueAt(t1, windowMs));
+    const scaled = scaleDurationMs(windowMs);
+    if (due0.getTime() - t0.getTime() !== scaled) throw new Error("due is not now + the scaled window");
+    if (due1.getTime() <= due0.getTime()) throw new Error("a second inbound did not RESTART the window");
+    if (due1.getTime() - due0.getTime() !== t1.getTime() - t0.getTime()) {
+      throw new Error("the restart did not track the new inbound's moment");
+    }
+  });
+
+  // --- PR-D/E: the reply register and the cache-marked stable prefix ------
+  const s16ReplyInput: ComposeReplyInput = {
+    business_name: "Test Firm",
+    sign_off: "Test Firm",
+    first_name: "Amina",
+    full_name: "Amina Khan",
+    channel: "email",
+    enquiry_title: "Amina Khan — enquiry",
+    stage_label: "Contacted",
+    form_answers: [{ name: "visa_type", label: "Visa type", value: "Spouse visa" }],
+    no_go_rules: [
+      "Light never states or implies a guarantee of visa success, application outcome, or Home Office timescales.",
+      "Light never gives case-specific legal advice in an unstamped channel.",
+    ],
+    retrieval: { entries: [], route_matches: ["spouse_family"] },
+    thread_messages: [
+      { role: "firm", body: "Hello Amina, thank you for your enquiry.", at: "2026-08-01T09:00:00Z", channel: "email" },
+      { role: "client", body: "Thanks — how much does a spouse visa application cost?", at: "2026-08-01T10:00:00Z", channel: "email" },
+    ],
+    new_inbound_count: 1,
+  };
+
+  await expectOk("the reply prompt carries the register laws, the transcript, and a CACHE-MARKED stable prefix", async () => {
+    const { systemBlocks, prompt } = assembleReplyPrompt(s16ReplyInput);
+    if (systemBlocks.length !== 2 || !systemBlocks.every((b) => b.cache)) {
+      throw new Error("the stable prefix is not two cache-marked blocks");
+    }
+    if (!/case-specific legal advice is never given/.test(systemBlocks[0]!.text)) {
+      throw new Error("the reply register is missing from the stable prefix");
+    }
+    if (!/Invite a consultation ONLY where the answer genuinely needs one/.test(systemBlocks[0]!.text)) {
+      throw new Error("the consultation restraint is missing");
+    }
+    if (!/never states or implies a guarantee/.test(systemBlocks[0]!.text)) {
+      throw new Error("the no-go register is missing from the stable prefix");
+    }
+    if (!/how much does a spouse visa application cost/.test(prompt)) {
+      throw new Error("the client's actual question is not in the uncached tail");
+    }
+    if (/how much does a spouse visa application cost/.test(systemBlocks.map((b) => b.text).join())) {
+      throw new Error("the fresh inbound leaked into the cached prefix");
+    }
+  });
+
+  await expectOk("a reply about fees escalates (no-go proximity) and the cache figures land on the credit line", async () => {
+    let sawBlocks: Array<{ text: string; cache?: boolean }> | undefined;
+    const fake: GenerateFn = async (request) => {
+      sawBlocks = request.systemBlocks;
+      return {
+        subject: "Re: your enquiry",
+        body: "Hello Amina, fees depend on the published schedule — happy to confirm in a consultation.",
+        attestation: { attested: true, statement: "Checked against every law." },
+        usage: { input_tokens: 900, output_tokens: 80 },
+        cache: { read_tokens: 700, written_tokens: 0 },
+      };
+    };
+    const composed = await composeReplyDraft(fake, s16ReplyInput);
+    if (!sawBlocks || !sawBlocks.some((b) => b.cache)) throw new Error("the generator was not handed cache-marked blocks");
+    if (composed.credit_line.tier !== "pro" || !/no-go proximity/.test(composed.credit_line.reason)) {
+      throw new Error(`a fee question did not escalate: ${composed.credit_line.tier} (${composed.credit_line.reason})`);
+    }
+    if (composed.credit_line.cache?.read_tokens !== 700) {
+      throw new Error("cache figures did not land on the credit line");
+    }
+  });
+
+  // --- PR-F: the sign-off resolver (WYSIWYS by construction) --------------
+  await expectOk("approver sign-off resolves ONLY a known sign-off line, deterministically, render = stamp", async () => {
+    if (resolveSignOffMode({}) !== "firm_name") throw new Error("mode default is not firm_name");
+    if (resolveSignOffMode({ email_sign_off_mode: "approver" }) !== "approver") throw new Error("approver mode not honoured");
+    if (resolveSignOffText({}, "Test Firm") !== "Test Firm") {
+      throw new Error("the firm display name is not the shipped default");
+    }
+    const body = "Hello Amina,\n\nThank you for your message.\n\nKind regards,\nTest Firm";
+    const resolved = resolveSignOffBody(body, ["Test Firm"], "Sarah Malik");
+    if (resolved !== "Hello Amina,\n\nThank you for your message.\n\nKind regards,\nSarah Malik") {
+      throw new Error(`resolution wrong: ${JSON.stringify(resolved)}`);
+    }
+    // Idempotent: already the approver's name → nothing to change.
+    if (resolveSignOffBody(resolved!, ["Test Firm", "Sarah Malik"], "Sarah Malik") !== null) {
+      throw new Error("an already-resolved body was re-resolved");
+    }
+    // A second approver re-resolves from the recorded name.
+    const reResolved = resolveSignOffBody(resolved!, ["Test Firm", "Sarah Malik"], "Mudassir");
+    if (!reResolved?.endsWith("\nMudassir")) throw new Error("hand-over between approvers failed");
+    // A body whose last line is NOT a known sign-off changes NOTHING — what
+    // was seen (unresolved) is what sends (unresolved): WYSIWYS trivially.
+    if (resolveSignOffBody("Hello,\nNo sign-off here.", ["Test Firm"], "Sarah Malik") !== null) {
+      throw new Error("an unknown final line was rewritten — the resolver overreached");
+    }
+  });
+
+  await expectOk("reference-id parsing reads In-Reply-To/References into RFC ids", async () => {
+    const ids = parseReferenceIds([
+      "<abc-123@firm.example>",
+      "<older@firm.example> <abc-123@firm.example>\r\n <newest@client.example>",
+    ]);
+    if (ids.length !== 3 || !ids.includes("<newest@client.example>")) {
+      throw new Error(`parsed: ${JSON.stringify(ids)}`);
     }
   });
 

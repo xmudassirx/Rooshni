@@ -81,6 +81,129 @@ async function graphJson<T>(
   return { status: response.status, body };
 }
 
+/** One inbound mail as the poll reads it (Session 16, PR-A). */
+export interface GraphInboundMessage {
+  id: string;
+  internetMessageId: string | null;
+  receivedDateTime: string;
+  subject: string | null;
+  fromAddress: string | null;
+  fromName: string | null;
+  /** Plain-text body (Prefer: outlook.body-content-type="text"). */
+  bodyText: string;
+  /** RFC 5322 message ids this mail replies into (In-Reply-To + References). */
+  referenceIds: string[];
+}
+
+export interface GraphInboundReader {
+  mailbox: string;
+  /** New inbox mail strictly after the cursor, oldest first, capped. */
+  listNewMessages: (sinceIso: string, top?: number) => Promise<
+    Array<{ id: string; internetMessageId: string | null; receivedDateTime: string; subject: string | null; fromAddress: string | null; fromName: string | null }>
+  >;
+  /** Full detail for one message: text body + reply headers. */
+  getMessage: (id: string) => Promise<GraphInboundMessage>;
+}
+
+/** Extract every <rfc-id> from In-Reply-To/References header values. */
+export function parseReferenceIds(headerValues: string[]): string[] {
+  const ids = new Set<string>();
+  for (const value of headerValues) {
+    for (const match of value.matchAll(/<[^<>\s]+>/g)) ids.add(match[0]);
+  }
+  return [...ids];
+}
+
+/**
+ * Builds the inbound mailbox reader, or null when Graph is not configured
+ * (the poll then reports itself absent — a visible no-op, never a silent
+ * one). Reading the tenant mailbox needs the Mail.Read APPLICATION
+ * permission with admin consent on the existing app registration — the
+ * send path deliberately holds Mail.Send only (least privilege), so until
+ * consent is granted every read returns Graph's ErrorAccessDenied, which
+ * the poll records as a visible failure (Lane C credentials-at-need: the
+ * console steps are the founder's, listed in the session close report).
+ */
+export function createGraphInboundReader(
+  env: NodeJS.ProcessEnv = process.env
+): GraphInboundReader | null {
+  const graphEnv = readGraphEnv(env);
+  if (!graphEnv) return null;
+  const mailbox = graphEnv.senderAddress;
+
+  const listNewMessages = async (sinceIso: string, top = 25) => {
+    const token = await getGraphToken(graphEnv);
+    const select = "id,internetMessageId,receivedDateTime,subject,from";
+    const filter = encodeURIComponent(`receivedDateTime gt ${sinceIso}`);
+    const path =
+      `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages` +
+      `?$filter=${filter}&$orderby=receivedDateTime asc&$top=${top}&$select=${select}`;
+    const { status, body } = await graphJson<{
+      value?: Array<{
+        id: string;
+        internetMessageId?: string;
+        receivedDateTime: string;
+        subject?: string;
+        from?: { emailAddress?: { address?: string; name?: string } };
+      }>;
+      error?: { code?: string; message?: string };
+    }>(token, "GET", path);
+    if (status >= 400) {
+      throw new Error(`Graph inbox list failed (${status} ${body.error?.code ?? ""}): ${body.error?.message ?? "unknown error"}`);
+    }
+    return (body.value ?? []).map((m) => ({
+      id: m.id,
+      internetMessageId: m.internetMessageId ?? null,
+      receivedDateTime: m.receivedDateTime,
+      subject: m.subject ?? null,
+      fromAddress: m.from?.emailAddress?.address?.toLowerCase() ?? null,
+      fromName: m.from?.emailAddress?.name ?? null,
+    }));
+  };
+
+  const getMessage = async (id: string): Promise<GraphInboundMessage> => {
+    const token = await getGraphToken(graphEnv);
+    const select = "id,internetMessageId,receivedDateTime,subject,from,body,internetMessageHeaders";
+    const path = `/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(id)}?$select=${select}`;
+    const response = await fetch(`${GRAPH_BASE}${path}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: 'outlook.body-content-type="text"',
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      id?: string;
+      internetMessageId?: string;
+      receivedDateTime?: string;
+      subject?: string;
+      from?: { emailAddress?: { address?: string; name?: string } };
+      body?: { content?: string };
+      internetMessageHeaders?: Array<{ name: string; value: string }>;
+      error?: { code?: string; message?: string };
+    };
+    if (!response.ok || !body.id) {
+      throw new Error(`Graph message fetch failed (${response.status} ${body.error?.code ?? ""}): ${body.error?.message ?? "unknown error"}`);
+    }
+    const replyHeaders = (body.internetMessageHeaders ?? [])
+      .filter((h) => /^(in-reply-to|references)$/i.test(h.name))
+      .map((h) => h.value);
+    return {
+      id: body.id,
+      internetMessageId: body.internetMessageId ?? null,
+      receivedDateTime: body.receivedDateTime ?? new Date().toISOString(),
+      subject: body.subject ?? null,
+      fromAddress: body.from?.emailAddress?.address?.toLowerCase() ?? null,
+      fromName: body.from?.emailAddress?.name ?? null,
+      bodyText: body.body?.content ?? "",
+      referenceIds: parseReferenceIds(replyHeaders),
+    };
+  };
+
+  return { mailbox, listNewMessages, getMessage };
+}
+
 /** Builds the email carrier, or null when Graph is not configured (the
  * dispatcher then leaves email rows approved and says so in its report). */
 export function createGraphEmailSender(

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/shell/app-shell";
 import { FirstLight, type FirstLightBasicsProp } from "@/components/shell/first-light";
+import { LiveInbox } from "@/components/shell/live-inbox";
 import { getAppContext } from "@/lib/server/context";
 import {
   getBusinessConfig,
@@ -92,6 +93,10 @@ export default async function ShellLayout({ children }: { children: ReactNode })
       showFeedback={showFeedback}
       firstLight={firstLightSlot}
     >
+      {/* Session 16 (PR-G): one Realtime subscription — new pending drafts
+          and inbound messages re-render the shell server-side without a
+          refresh; the arrival tone is Appearance-toggleable. */}
+      <LiveInbox businessId={business.id} />
       {children}
     </AppShell>
   );

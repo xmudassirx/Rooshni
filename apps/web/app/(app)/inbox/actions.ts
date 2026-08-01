@@ -14,6 +14,7 @@ import {
 import { getAppContext } from "@/lib/server/context";
 import { dispatchAfterApproval } from "@/lib/server/outbound";
 import { isUuid } from "@/lib/server/queries";
+import { resolveSignOffAtStamp } from "@/lib/server/sign-off";
 
 /**
  * Session 15 (PR-4) — the refine loop's capture: an edit-before-stamp or a
@@ -109,6 +110,13 @@ export async function approveAction(
   if (!communicationId) return { error: "No communication was selected." };
 
   const { db, business, actor } = await getAppContext();
+  // Session 16 (PR-F, decision 133e): approver-mode sign-off resolves on the
+  // STORED body — the same deterministic transformation the card rendered —
+  // with a fresh recorded compliance check on the exact resolved words,
+  // before the stamp. A resolution failure withholds the stamp (fail
+  // closed): the body that sends is always the body that was seen.
+  const resolution = await resolveSignOffAtStamp(db, business, actor, communicationId);
+  if (resolution.error) return { error: resolution.error };
   try {
     await approveCommunication(db, {
       business_id: business.id,
