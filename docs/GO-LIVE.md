@@ -242,6 +242,20 @@ Add to this list during build; check items off only at go-live.
       each transition on The Record (communication.superseded, reason
       migration_normalisation). The cron sweep self-heals leftovers, but the
       explicit run closes the books the same day. Idempotent.
+- [ ] **Set `NEXT_PUBLIC_APP_URL=https://app.barakahx.com` in Vercel**
+      (introduced Session 18, founder-approved): the canonical-URL seam
+      (`apps/web/lib/app-url.ts`) routes every composed absolute URL —
+      nurture email links, signup resume links, the day-7 note's [link],
+      unsubscribe footers, Stripe success/cancel URLs, auth redirect
+      composition — through this env var when set, request-derived
+      otherwise. Set it in the PRODUCTION environment ONLY: previews and
+      local must stay unset so click-review previews keep deriving from the
+      request. Until set, production behaves exactly as before (request-
+      derived), so nothing breaks — but nurture links composed by the cron
+      tick ride the tick request's own origin, which is the defect the seam
+      closes. The founder adds the var the moment the merge deploys (he
+      asked to be told when it is read — it is read from this session's
+      merge onward).
 - [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
       Session 3/6 demo drafts that were approved in the stub era carry
       `communication.send_stubbed` events; the dispatcher permanently walks

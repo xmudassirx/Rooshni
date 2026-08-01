@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireEnv } from "@rooshni/config";
 import { createCheckoutSession, createServiceClient } from "@rooshni/db";
+import { externalOrigin } from "@/lib/server/origin";
 
 export const dynamic = "force-dynamic";
 
@@ -37,9 +38,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // The deployment's own origin: correct on localhost, previews and
-  // production without configuration.
-  const origin = request.nextUrl.origin;
+  // Session 18: the canonical seam — NEXT_PUBLIC_APP_URL when set,
+  // request-derived otherwise, so localhost and previews need no
+  // configuration and production Stripe returns land on the custom domain.
+  const origin = externalOrigin(request);
 
   try {
     const session = await createCheckoutSession({

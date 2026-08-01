@@ -237,6 +237,25 @@ export function leadTextFromAnswers(answers: FormAnswer[]): string {
   return answers.map((a) => `${a.label}: ${a.value}`).join("\n");
 }
 
+/**
+ * The register rule (Session 18, founder-ruled): no em or en dashes in
+ * client-facing drafted copy — the generation prompt instructs commas and
+ * full stops, and a generated body that slips one anyway is refused by the
+ * output screen beside the braces check. Scope is machine-drafted bodies
+ * only (email + WhatsApp free-form); human-authored text is never screened —
+ * humans punctuate as they wish.
+ */
+export function findRegisterBreach(body: string): "em dash" | "en dash" | null {
+  if (body.includes("—")) return "em dash";
+  if (body.includes("–")) return "en dash";
+  return null;
+}
+
+/** The prompt line both generation registers carry — written without the
+ * forbidden marks so the instruction never exemplifies the breach. */
+export const REGISTER_PUNCTUATION_LINE =
+  "- Never use an em dash or an en dash anywhere in the draft; punctuate with commas and full stops instead.";
+
 function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: string } {
   const rules = input.no_go_rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
   const system = [
@@ -251,6 +270,7 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     `- If the enquirer asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome — and steer to a consultation.`,
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — a few short sentences; say less.`,
+    REGISTER_PUNCTUATION_LINE,
     `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
     ``,
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
@@ -326,6 +346,16 @@ export async function composeDraft(
   }
   if (/\{\{|\}\}/.test(body)) {
     throw new PermanentGenerationError("the generated body carries unresolved template braces");
+  }
+  // JUDGMENT: the Session 18 register rule lands as an output screen in the
+  // braces-check lane (a permanent, visible refusal) — that is what makes
+  // "a drafted body containing an em or en dash fails the harness" true in
+  // production, not only in a test's own assertion.
+  const registerBreach = findRegisterBreach(body);
+  if (registerBreach) {
+    throw new PermanentGenerationError(
+      `the generated body contains an ${registerBreach} — the client-facing register uses commas and full stops (Session 18)`
+    );
   }
 
   return {
@@ -410,6 +440,7 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
     `- Invite a consultation ONLY where the answer genuinely needs one — never as a reflex; follow the published booking policy where one is provided.`,
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — answer, then stop.`,
+    REGISTER_PUNCTUATION_LINE,
     `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
     ``,
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
@@ -502,6 +533,13 @@ export async function composeReplyDraft(
   }
   if (/\{\{|\}\}/.test(body)) {
     throw new PermanentGenerationError("the generated body carries unresolved template braces");
+  }
+  // Session 18 register rule — same screen, same lane as composeDraft's.
+  const registerBreach = findRegisterBreach(body);
+  if (registerBreach) {
+    throw new PermanentGenerationError(
+      `the generated body contains an ${registerBreach} — the client-facing register uses commas and full stops (Session 18)`
+    );
   }
 
   return {
