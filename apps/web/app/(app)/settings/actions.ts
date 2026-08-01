@@ -1,9 +1,13 @@
 "use server";
 
+import { createHash, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import {
+  createServiceClient,
   emitEvent,
+  ATTACHMENT_MAX_BYTES,
   DRAFTING_EVENT_KINDS,
+  FILES_BUCKET,
   FIRST_LIGHT_EVENT_KINDS,
   SETTLE_WINDOW_MINUTES_OPTIONS,
 } from "@rooshni/db";
@@ -85,10 +89,16 @@ export async function updateDraftingSettingsAction(
   const mode = String(formData.get("email_sign_off_mode") ?? "firm_name");
   const settleRaw = String(formData.get("draft_settle_minutes") ?? "3");
   const settleMinutes = Number(settleRaw);
+  // Session 19 (PR-iv): the firm's own booking page — blank unsets it;
+  // anything set must be an absolute http(s) URL, never a half-link.
+  const bookingUrl = String(formData.get("booking_url") ?? "").trim();
 
   if (mode !== "firm_name" && mode !== "approver") return { error: "Unknown sign-off mode." };
   if (!(SETTLE_WINDOW_MINUTES_OPTIONS as readonly number[]).includes(settleMinutes)) {
     return { error: "The settle window must be instant, 1, 3 or 5 minutes." };
+  }
+  if (bookingUrl && !/^https?:\/\/\S+$/i.test(bookingUrl)) {
+    return { error: "The booking link must be a full web address (https://…)." };
   }
 
   const { db, business, actor, membershipRole } = await getAppContext();
@@ -108,6 +118,8 @@ export async function updateDraftingSettingsAction(
   else delete settings.email_sign_off; // absent = the firm display name, the only shipped default
   settings.email_sign_off_mode = mode;
   settings.draft_settle_minutes = settleMinutes;
+  if (bookingUrl) settings.booking_url = bookingUrl;
+  else delete settings.booking_url; // absent = no booking link is offered (PR-iv)
 
   const { error: writeError } = await db
     .from("businesses")
@@ -122,15 +134,99 @@ export async function updateDraftingSettingsAction(
     entity_type: "business",
     entity_id: business.id,
     payload: {
-      keys: ["email_sign_off", "email_sign_off_mode", "draft_settle_minutes"],
+      keys: ["email_sign_off", "email_sign_off_mode", "draft_settle_minutes", "booking_url"],
       email_sign_off_mode: mode,
       draft_settle_minutes: settleMinutes,
       email_sign_off_set: Boolean(signOffText),
+      booking_url_set: Boolean(bookingUrl),
     },
   });
 
   revalidatePath("/settings");
   return { error: null, saved: true };
+}
+
+/**
+ * PR-i (Session 19): store a route guide's document — bytes to the private
+ * Supabase Storage bucket (service client; files.storage_key has always
+ * pointed at a storage backend), the files row + file_links row under the
+ * caller's own RLS, any previously linked file archived (soft — the resolver
+ * reads the newest LIVE file), and the act evented. Returns an error string
+ * or null.
+ */
+async function attachGuideFile(
+  db: Awaited<ReturnType<typeof getAppContext>>["db"],
+  businessId: string,
+  actorId: string,
+  entryId: string,
+  guideFile: File
+): Promise<string | null> {
+  const service = createServiceClient();
+  // Idempotent bucket door: create if absent, ignore "already exists".
+  const { error: bucketError } = await service.storage.createBucket(FILES_BUCKET, { public: false });
+  if (bucketError && !/exist/i.test(bucketError.message)) {
+    return `Storage bucket unavailable: ${bucketError.message}`;
+  }
+
+  const bytes = Buffer.from(await guideFile.arrayBuffer());
+  const storageKey = `route-guides/${businessId}/${randomUUID()}.pdf`;
+  const { error: uploadError } = await service.storage
+    .from(FILES_BUCKET)
+    .upload(storageKey, bytes, { contentType: "application/pdf" });
+  if (uploadError) return `Upload failed: ${uploadError.message}`;
+
+  const { data: fileRow, error: fileError } = await db
+    .from("files")
+    .insert({
+      business_id: businessId,
+      storage_key: storageKey,
+      filename: guideFile.name,
+      mime_type: "application/pdf",
+      size_bytes: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      uploaded_by: actorId,
+    })
+    .select("id")
+    .single();
+  if (fileError) return `File record failed: ${fileError.message}`;
+
+  // A replacement retires the previous document SOFTLY — archived, never
+  // deleted; the guide resolver and the entry list read the newest live file.
+  const { data: oldLinks } = await db
+    .from("file_links")
+    .select("file_id")
+    .eq("entity_type", "content_item")
+    .eq("entity_id", entryId)
+    .eq("role", "attachment");
+  const oldFileIds = (oldLinks ?? []).map((l) => l.file_id).filter((f) => f !== fileRow.id);
+  if (oldFileIds.length) {
+    await db.from("files").update({ archived_at: new Date().toISOString() }).in("id", oldFileIds);
+  }
+
+  const { error: linkError } = await db.from("file_links").insert({
+    business_id: businessId,
+    file_id: fileRow.id,
+    entity_type: "content_item",
+    entity_id: entryId,
+    role: "attachment",
+  });
+  if (linkError) return `File link failed: ${linkError.message}`;
+
+  await emitEvent(db, {
+    business_id: businessId,
+    actor_id: actorId,
+    action: DRAFTING_EVENT_KINDS.knowledgeEntryUpdated,
+    entity_type: "content_item",
+    entity_id: entryId,
+    payload: {
+      file_id: fileRow.id,
+      filename: guideFile.name,
+      size_bytes: bytes.length,
+      note: "route guide document uploaded",
+      ...(oldFileIds.length ? { replaced_file_ids: oldFileIds } : {}),
+    },
+  });
+  return null;
 }
 
 export async function saveKnowledgeEntryAction(
@@ -142,9 +238,18 @@ export async function saveKnowledgeEntryAction(
   const category = String(formData.get("category") ?? "").trim();
   const visaRoute = String(formData.get("visa_route") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
+  // PR-i (Session 19): a route guide is a DOCUMENT — an entry with a file.
+  // JUDGMENT: guides are PDF-only this session (the ruling's own example;
+  // one honest format beats a half-tested many), and a guide entry's BODY
+  // is optional (the document is the content; the text field is a team
+  // note the drafter never reads). Both awaiting sign-off at close.
+  const rawFile = formData.get("file");
+  const guideFile = rawFile instanceof File && rawFile.size > 0 ? rawFile : null;
 
   if (!title) return { error: "A title is required." };
-  if (!body) return { error: "A body is required — Light drafts from what you put here." };
+  if (!body && category !== "route_guide") {
+    return { error: "A body is required — Light drafts from what you put here." };
+  }
   if (id && !isUuid(id)) return { error: "Malformed entry id." };
 
   const { db, business, actor } = await getAppContext();
@@ -154,11 +259,31 @@ export async function saveKnowledgeEntryAction(
   const vocab = await allowedVocab(db, business.id);
   if (!vocab) return { error: "No installed template declares the knowledge vocabulary yet." };
   if (!vocab.categories.has(category)) return { error: "Unknown category — pick one the template declares." };
-  if (category === "service_description" && !visaRoute) {
-    return { error: "A service description is route-scoped — pick its visa route." };
+  if ((category === "service_description" || category === "route_guide") && !visaRoute) {
+    return {
+      error:
+        category === "route_guide"
+          ? "A route guide is route-scoped — pick the visa route it covers."
+          : "A service description is route-scoped — pick its visa route.",
+    };
   }
   if (visaRoute && !vocab.routes.has(visaRoute)) {
     return { error: "Unknown visa route — pick one the template declares." };
+  }
+  if (category === "route_guide") {
+    if (!id && !guideFile) {
+      return { error: "A route guide is a document — attach its PDF (up to 8MB)." };
+    }
+    if (guideFile) {
+      if (guideFile.size > ATTACHMENT_MAX_BYTES) {
+        return { error: "The guide is over the 8MB limit — upload a smaller file." };
+      }
+      const isPdf =
+        guideFile.type === "application/pdf" || guideFile.name.toLowerCase().endsWith(".pdf");
+      if (!isPdf) return { error: "Route guides are PDF documents — upload a .pdf file." };
+    }
+  } else if (guideFile) {
+    return { error: "Only route-guide entries carry a document." };
   }
 
   const attributes: Record<string, string> = { knowledge_category: category };
@@ -199,6 +324,12 @@ export async function saveKnowledgeEntryAction(
       entity_id: inserted.id,
       payload: { title, category, ...(visaRoute ? { visa_route: visaRoute } : {}) },
     });
+
+    // PR-i: the guide's document rides in with the entry.
+    if (guideFile) {
+      const fileErr = await attachGuideFile(db, business.id, actor.id, inserted.id, guideFile);
+      if (fileErr) return { error: `The entry saved, but its document did not: ${fileErr}` };
+    }
   } else {
     const { data: current, error: lookupError } = await db
       .from("content_items")
@@ -235,6 +366,12 @@ export async function saveKnowledgeEntryAction(
       entity_id: id,
       payload: { title, category, version: nextVersion, ...(visaRoute ? { visa_route: visaRoute } : {}) },
     });
+
+    // PR-i: a new document replaces the old one softly (archived, evented).
+    if (guideFile) {
+      const fileErr = await attachGuideFile(db, business.id, actor.id, id, guideFile);
+      if (fileErr) return { error: `The entry saved, but its document did not: ${fileErr}` };
+    }
   }
 
   revalidatePath("/settings");

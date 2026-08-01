@@ -86,6 +86,17 @@ export async function KnowledgeTab() {
                         ) : (
                           <Badge variant="pending">Draft — invisible to Light</Badge>
                         )}
+                        {/* PR-i: the document ON the entry — a guide without
+                            a file is visibly incomplete, never attached. */}
+                        {entry.category === "route_guide" ? (
+                          entry.file ? (
+                            <Badge variant="source">
+                              ⎘ {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
+                            </Badge>
+                          ) : (
+                            <Badge variant="pending">no document — nothing will attach</Badge>
+                          )
+                        ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 text-[12px] whitespace-pre-wrap text-ink-soft">
                         {entry.bodyText}

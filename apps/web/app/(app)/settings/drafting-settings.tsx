@@ -31,12 +31,14 @@ export function DraftingSettings({
   signOffText,
   signOffMode,
   settleMinutes,
+  bookingUrl,
   businessName,
   isOwner,
 }: {
   signOffText: string | null;
   signOffMode: "firm_name" | "approver";
   settleMinutes: number;
+  bookingUrl: string | null;
   businessName: string;
   isOwner: boolean;
 }) {
@@ -96,6 +98,25 @@ export function DraftingSettings({
             </label>
           ))}
         </fieldset>
+
+        <label className="block">
+          <span className="mb-1 block font-mono text-[9.5px] font-semibold tracking-[.08em] text-ink-faint uppercase">
+            Booking link
+          </span>
+          <input
+            name="booking_url"
+            type="url"
+            defaultValue={bookingUrl ?? ""}
+            placeholder="https://…"
+            disabled={!isOwner}
+            className="w-full max-w-[360px] rounded-lg border border-rule bg-paper px-3 py-2 text-[13px] text-ink outline-none focus:outline-2 focus:-outline-offset-1 focus:outline-accent disabled:opacity-60"
+          />
+          <span className="mt-1 block text-[11px] text-ink-faint">
+            Your own booking page. When set, Light&rsquo;s drafts may offer it and the [link]
+            placeholder in client-facing messages resolves to this address. Blank means no booking
+            link is offered.
+          </span>
+        </label>
 
         <label className="block">
           <span className="mb-1 block font-mono text-[9.5px] font-semibold tracking-[.08em] text-ink-faint uppercase">

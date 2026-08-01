@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emitEvent } from "./events";
 import { SEND_EVENT_KINDS } from "./event-kinds";
 import { quietHoursHoldUntil, resolveQuietHours } from "./quiet-hours";
+import { renderEmailHtml, resolveEmailIdentity } from "./email-html";
+import { ATTACHMENT_MAX_BYTES, FILES_BUCKET } from "./route-guides";
 
 /**
  * The send pipeline, app side (Session 10). APPROVED ≠ SENT is the pipeline
@@ -48,12 +50,21 @@ export interface SendResult {
 /** Injectable carriers — production wires Graph + WhatsApp Cloud; tests fake.
  * A channel with no carrier configured stays `approved` (reported, retried
  * next tick once configured) — configuration absence is not message failure. */
+/** PR-i (Session 19): a mail attachment as the carrier receives it — bytes
+ * already fetched from storage, base64-encoded. */
+export interface OutboundAttachment {
+  filename: string;
+  mimeType: string;
+  contentBase64: string;
+}
+
 export interface OutboundProviders {
   sendEmail?: (input: {
     to: string;
     subject: string | null;
     body: string;
     bodyFormat: string;
+    attachments?: OutboundAttachment[];
   }) => Promise<SendResult>;
   sendWhatsApp?: (input: {
     to: string;
@@ -93,6 +104,7 @@ interface ApprovedComm {
 
 interface BusinessFacts {
   id: string;
+  name: string;
   timezone: string;
   settings: Record<string, unknown>;
   dispatch_actor_id: string;
@@ -110,8 +122,10 @@ async function q<T>(p: PromiseLike<{ data: T | null; error: { message: string } 
  * communication.approved event. Exactly one workflow actor per account;
  * ambiguity is a loud failure, not a guess. */
 async function loadBusinessFacts(db: SupabaseClient, businessId: string): Promise<BusinessFacts> {
-  const businesses = await q<{ id: string; account_id: string; timezone: string; settings: Record<string, unknown> }[]>(
-    db.from("businesses").select("id, account_id, timezone, settings").eq("id", businessId).limit(1),
+  const businesses = await q<
+    { id: string; name: string; account_id: string; timezone: string; settings: Record<string, unknown> }[]
+  >(
+    db.from("businesses").select("id, name, account_id, timezone, settings").eq("id", businessId).limit(1),
     "business lookup"
   );
   if (!businesses[0]) throw new Error(`Business ${businessId} not found`);
@@ -129,6 +143,7 @@ async function loadBusinessFacts(db: SupabaseClient, businessId: string): Promis
   }
   return {
     id: businesses[0].id,
+    name: businesses[0].name,
     timezone: businesses[0].timezone || "Europe/London",
     settings: businesses[0].settings ?? {},
     dispatch_actor_id: actors[0]!.id,
@@ -307,6 +322,7 @@ export async function dispatchApprovedCommunications(
       }
 
       let result: SendResult;
+      let sentEmailHtml: string | null = null;
       if (comm.channel === "email") {
         if (!options.providers.sendEmail) {
           report.skipped += 1;
@@ -315,6 +331,67 @@ export async function dispatchApprovedCommunications(
         }
         const to = await resolveDestination(db, contactId, "email");
         if (!to) throw new ProviderRejectedError("no live email channel on the contact", "graph");
+        // PR-iii (Session 19): the HTML dress — the SAME deterministic
+        // renderer the stamp card previewed, over the STORED body (WYSIWYS,
+        // the decision 140 pattern). Firm name + regulated-status footer come
+        // from Settings; the plain alternative derives from the same body.
+        // A row already carrying html (none is born so today) passes through.
+        if (comm.body_format === "plain") {
+          sentEmailHtml = renderEmailHtml(comm.body, resolveEmailIdentity(facts.name, facts.settings));
+        }
+        // PR-i (Session 19): declared attachments ride the send. The 0032
+        // pre-flight already proved existence, linkage and the 8MB ceiling
+        // at the stamp; here the bytes are fetched from storage. A missing
+        // or oversize file at this point is a VISIBLE refusal; a storage
+        // hiccup is transient (the row stays approved, the tick retries).
+        let attachments: OutboundAttachment[] | undefined;
+        const declared = comm.attributes?.attachments as
+          | Array<{ file_id?: string; filename?: string }>
+          | undefined;
+        if (Array.isArray(declared) && declared.length > 0) {
+          attachments = [];
+          for (const att of declared) {
+            if (!att.file_id) {
+              throw new ProviderRejectedError(`a declared attachment carries no file id`, "graph");
+            }
+            const files = await q<{ storage_key: string; filename: string; mime_type: string; size_bytes: number }[]>(
+              db
+                .from("files")
+                .select("storage_key, filename, mime_type, size_bytes")
+                .eq("id", att.file_id)
+                .is("archived_at", null)
+                .limit(1),
+              "attachment file lookup"
+            );
+            const file = files[0];
+            if (!file) {
+              throw new ProviderRejectedError(
+                `declared attachment ${att.filename ?? att.file_id} no longer exists — nothing was sent`,
+                "graph"
+              );
+            }
+            if (Number(file.size_bytes) > ATTACHMENT_MAX_BYTES) {
+              throw new ProviderRejectedError(
+                `attachment "${file.filename}" is over the 8MB limit — the send is refused (config error)`,
+                "graph"
+              );
+            }
+            const { data: blob, error: downloadError } = await db.storage
+              .from(FILES_BUCKET)
+              .download(file.storage_key);
+            if (downloadError || !blob) {
+              // Transient lane: storage unavailable ≠ message undeliverable.
+              throw new Error(
+                `attachment download failed for "${file.filename}": ${downloadError?.message ?? "no data"}`
+              );
+            }
+            attachments.push({
+              filename: file.filename,
+              mimeType: file.mime_type,
+              contentBase64: Buffer.from(await blob.arrayBuffer()).toString("base64"),
+            });
+          }
+        }
         // Client-facing subject law (founder-ruled at the first witnessed
         // send): the message's own rendered subject travels on the row;
         // the thread's subject — which may be an internal label — is only
@@ -322,8 +399,9 @@ export async function dispatchApprovedCommunications(
         result = await options.providers.sendEmail({
           to,
           subject: (comm.attributes?.subject as string | undefined) ?? threads[0]?.subject ?? null,
-          body: comm.body,
-          bodyFormat: comm.body_format,
+          body: sentEmailHtml ?? comm.body,
+          bodyFormat: sentEmailHtml ? "html" : comm.body_format,
+          ...(attachments?.length ? { attachments } : {}),
         });
       } else {
         if (!options.providers.sendWhatsApp) {
@@ -352,6 +430,31 @@ export async function dispatchApprovedCommunications(
         p_provider_message_id: result.providerMessageId,
       });
       if (sentError) throw new Error(`mark_communication_sent failed: ${sentError.message}`);
+
+      // PR-iii (Session 19): The Record stores what was sent — the row's body
+      // becomes the exact dispatched HTML with body_format moved to html (the
+      // ruling's words), and attributes.plain_body preserves the approved
+      // plain source (the compliance check row pins it too). The pre-flight
+      // and stamp already ran on the plain words; this write records
+      // carriage, it changes no status. JUDGMENT: a failure here never
+      // unwinds a successful send — it lands in the report as a visible
+      // bookkeeping error instead.
+      let recordedFormat = comm.body_format;
+      if (sentEmailHtml) {
+        const { error: recordError } = await db
+          .from("communications")
+          .update({
+            body: sentEmailHtml,
+            body_format: "html",
+            attributes: { ...comm.attributes, plain_body: comm.body },
+          })
+          .eq("id", comm.id);
+        if (recordError) {
+          report.errors.push(`comm ${comm.id}: sent, but recording the dispatched HTML failed: ${recordError.message}`);
+        } else {
+          recordedFormat = "html";
+        }
+      }
 
       if (comm.engagement_id && stageBefore) {
         const stageAfter = await currentStage(db, comm.engagement_id);
@@ -384,6 +487,9 @@ export async function dispatchApprovedCommunications(
           provider_message_id: result.providerMessageId,
           engagement_id: comm.engagement_id,
           contact_id: contactId,
+          // PR-iii: how the mail actually left — html rows carry the exact
+          // dispatched document on the communication row itself.
+          body_format: recordedFormat,
           ...(comm.attributes?.workflow_run_id ? { workflow_run_id: comm.attributes.workflow_run_id } : {}),
         },
       });

@@ -176,6 +176,7 @@ export async function GeneralTab() {
       <DraftingSettings
         signOffText={str(s, "email_sign_off")}
         signOffMode={s.email_sign_off_mode === "approver" ? "approver" : "firm_name"}
+        bookingUrl={str(s, "booking_url")}
         settleMinutes={
           typeof s.draft_settle_minutes === "number" &&
           [0, 1, 3, 5].includes(s.draft_settle_minutes)

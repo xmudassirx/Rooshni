@@ -68,6 +68,13 @@ async function toCardProps(row: ApprovalInboxRow): Promise<InboxCardProps> {
         ? `sign-off resolves to you at the stamp — shown as it will send: ${detail.signOff.resolvedTo}`
         : "sign-off resolves to the stamping approver at the stamp"
       : null,
+    // PR-iii (Session 19): the stamp view can show the rendered mail — the
+    // same deterministic renderer dispatch uses, over the same words.
+    emailHtmlPreview: detail?.emailHtmlPreview ?? null,
+    // PR-i (Session 19): the declared attachment(s), named on the card.
+    attachmentNotes: (detail?.attachments ?? []).map(
+      (a) => `⎘ ${a.filename} · ${(a.sizeBytes / 1024 / 1024).toFixed(1)}MB`
+    ),
   };
 }
 

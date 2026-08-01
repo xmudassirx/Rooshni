@@ -172,6 +172,27 @@ export interface InboundWhatsAppInput {
   occurred_at: string;
 }
 
+/**
+ * The consent an inbound WhatsApp message earns — PURE, so the harness can
+ * prove the law (founder-ruled, 1 Aug 2026): "an inbound message on a
+ * channel is transactional consent to be answered on that channel."
+ * Transactional only; MARKETING consent is never inferred and any prior
+ * marketing value passes through untouched.
+ */
+export function whatsAppInboundConsent(
+  prior: Record<string, unknown> | null | undefined,
+  occurredAt: string,
+  serviceWindow: { opened_at: string; expires_at: string; source: string }
+): Record<string, unknown> {
+  return {
+    ...(prior ?? {}),
+    transactional: true,
+    granted_at: occurredAt,
+    source: "inbound_message",
+    service_window: serviceWindow,
+  };
+}
+
 export interface InboundRecordResult {
   communication_id: string;
   thread_id: string;
@@ -248,29 +269,39 @@ export async function recordInboundWhatsApp(
     });
   }
 
-  // Consent refresh per Meta's service-window rules: the client's own inbound
-  // message opens a 24h window in which service replies are lawful — recorded
-  // as transactional consent on the whatsapp channel row (marketing consent
-  // is NEVER inferred from an inbound message). The window state itself lives
-  // on the thread.
-  const waChannel = matches.find((c) => c.channel === "whatsapp");
+  // Consent refresh — founder-ruled (1 Aug 2026, Session 19 fold-in): "an
+  // inbound message on a channel is transactional consent to be answered on
+  // that channel." Ingest creates-or-refreshes a TRANSACTIONAL consent row
+  // on the whatsapp channel FOR THE MATCHED CONTACT (source:
+  // inbound_message); marketing consent is NEVER inferred from an inbound
+  // message and is left untouched. The 24h service-window state also rides
+  // the row; its display truth lives on the thread. The row is scoped to
+  // contactId — when several contacts share a number, the consent lands on
+  // the contact the message was filed under, never a namesake's row.
+  const waChannel = matches.find((c) => c.channel === "whatsapp" && c.contact_id === contactId);
   const serviceWindow = { opened_at: input.occurred_at, expires_at: windowExpiresAt, source: "whatsapp_inbound" };
   if (waChannel) {
     await q(
       db
         .from("contact_channels")
         .update({
-          consent: {
-            ...(waChannel.consent ?? {}),
-            transactional: true,
-            service_window: serviceWindow,
-          },
+          consent: whatsAppInboundConsent(waChannel.consent, input.occurred_at, serviceWindow),
         })
         .eq("id", waChannel.id)
         .select("id"),
       "consent refresh"
     );
   } else {
+    const ownWa = await q<{ id: string }[]>(
+      db
+        .from("contact_channels")
+        .select("id")
+        .eq("contact_id", contactId)
+        .eq("channel", "whatsapp")
+        .is("archived_at", null)
+        .limit(1),
+      "own whatsapp channel check"
+    );
     await q(
       db
         .from("contact_channels")
@@ -280,17 +311,25 @@ export async function recordInboundWhatsApp(
           contact_id: contactId,
           channel: "whatsapp",
           value: e164,
-          is_primary: !matches.some((c) => c.channel === "whatsapp"),
-          consent: {
-            transactional: true,
-            granted_at: input.occurred_at,
-            source: "whatsapp_inbound",
-            service_window: serviceWindow,
-          },
+          is_primary: ownWa.length === 0,
+          consent: whatsAppInboundConsent(null, input.occurred_at, serviceWindow),
         })
         .select("id"),
       "whatsapp channel insert"
     );
+    await emitEvent(db, {
+      business_id: binding.business_id,
+      actor_id: binding.integration_actor_id,
+      action: "contact.channel_consented",
+      entity_type: "contact",
+      entity_id: contactId,
+      payload: {
+        channel: "whatsapp",
+        consent: "transactional",
+        source: "inbound_message",
+        note: "an inbound message on a channel is transactional consent to be answered on that channel",
+      },
+    });
   }
 
   const thread = await ensureThread(db, binding, contactId, "whatsapp", null);

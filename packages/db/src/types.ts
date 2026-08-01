@@ -192,6 +192,12 @@ export interface WorkflowStepConfig {
   /** fire_conversion: which Meta signal the (Phase 1: STUB) executor logs. */
   signal?: string;
   cooling?: RealDuration;
+  /** PR-ii (Session 19): draft_comm companion touches — additional channels
+   * the step drafts ALONGSIDE the primary, each its own draft and its own
+   * individual stamp (decision 113: bulk approve never). A companion that
+   * cannot fire (no consent, no approved template mapping) is silently
+   * correct: the primary stands alone. */
+  companion_channels?: string[];
   [key: string]: unknown;
 }
 

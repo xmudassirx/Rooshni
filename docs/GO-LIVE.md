@@ -248,3 +248,31 @@ Add to this list during build; check items off only at go-live.
       past them. They leave with the existing demo-data purge items — until
       that purge, they sit `approved` forever by design, and no real message
       is ever sent to the fixture addresses.
+- [ ] **Apply 0032 live + run the Session 19 chores** (introduced Session
+      19): `npm run db:migrate` (0032: route_guide vocabulary + the
+      declared-ATTACHMENTS pre-flight), then
+      `npm run backfill:wa-consent --workspace=@rooshni/db` (the founder-
+      ruled consent law applied to existing inbound-bearing contacts —
+      idempotent, evented, counts reported), then
+      `npm run chore:install-multitouch-intro --workspace=@rooshni/db -- --approve-as-owner`
+      (meta_lead_to_consultation v2: the multi-touch intro as a NEW
+      definition version through the pipeline; the flag stamps as the
+      owner running the chore and pauses v1 so one version consumes
+      triggers).
+- [ ] **Grant Mail.ReadWrite for 3–8MB guide attachments** (introduced
+      Session 19, PR-i): Graph's one-shot sendMail carries attachments only
+      up to ~3MB; larger guides ride the draft-message + upload-session
+      flow, which needs the **Mail.ReadWrite** application permission.
+      Console steps: Azure portal → Microsoft Entra ID → App registrations
+      → the existing Barakah app → API permissions → Add a permission →
+      Microsoft Graph → Application permissions → Mail → **Mail.ReadWrite**
+      → Add permissions → **Grant admin consent**. Until granted, a send
+      with a 3–8MB attachment fails VISIBLY (ErrorAccessDenied → failed
+      state with the reason); guides ≤3MB need nothing. Uploads over 8MB
+      are refused everywhere (upload door, stamp pre-flight, dispatch).
+- [ ] **Verify the `files` storage bucket exists on live** (introduced
+      Session 19, PR-i): the first route-guide upload creates the private
+      bucket idempotently via the service key; after the first upload,
+      confirm in Supabase Studio → Storage that `files` exists and is
+      PRIVATE (no public access). Guide bytes leave only as mail
+      attachments.
