@@ -26,6 +26,7 @@
     "backfill:wa-consent": "tsx scripts/backfill-wa-consent.ts",
     "chore:install-multitouch-intro": "tsx scripts/install-multitouch-intro.ts",
     "circuit:drafting": "tsx scripts/circuit-drafting.ts",
+    "circuit:conversion": "tsx scripts/circuit-conversion.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

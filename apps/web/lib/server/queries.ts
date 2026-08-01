@@ -5,6 +5,7 @@ import {
   readGmailEnv,
   readGraphEnv,
   renderEmailHtml,
+  resolveConversionsConfig,
   resolveEmailIdentity,
   resolveMailProvider,
   resolveSignOffBody,
@@ -2896,6 +2897,44 @@ export async function getMailPipeState(): Promise<MailPipeState> {
       carrierConfigured: readGmailEnv() !== null,
       mailbox: typeof gmailSettings.mailbox === "string" ? gmailSettings.mailbox : null,
     },
+  };
+}
+
+export interface ConversionsRowState {
+  isOwner: boolean;
+  enabled: boolean;
+  datasetId: string | null;
+  testEventCode: string | null;
+  /** Env presence as a boolean, never a value (the s20 wiring-state law). */
+  tokenPresent: boolean;
+  /** Is the Lead Ads page binding in place (settings.meta.page_id)? */
+  pageBound: boolean;
+}
+
+/**
+ * Session 22 (WS1, ruling 1d) — the Conversions row's state, honestly read:
+ * the toggle, the dataset id and test event code as stored, token presence
+ * as a boolean, and whether the Session 10 page binding exists. Nothing here
+ * invents a connection.
+ */
+export async function getConversionsState(): Promise<ConversionsRowState> {
+  const { db, business, membershipRole } = await getAppContext();
+  const { data: bizRow, error } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (error) throw new Error(`conversions settings query failed: ${error.message}`);
+  const settings = (bizRow?.settings ?? {}) as Record<string, unknown>;
+  const config = resolveConversionsConfig(settings);
+  const meta = (settings.meta ?? {}) as Record<string, unknown>;
+  return {
+    isOwner: membershipRole === "owner",
+    enabled: config.enabled,
+    datasetId: config.dataset_id,
+    testEventCode: config.test_event_code,
+    tokenPresent: !!process.env.META_ACCESS_TOKEN,
+    pageBound: typeof meta.page_id === "string" && meta.page_id !== "",
   };
 }
 

@@ -46,6 +46,15 @@ import { whatsAppInboundConsent } from "../src/inbound";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
 import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
 import { rankGuideCandidates, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
+import {
+  buildConversionPayload,
+  buildConversionUserData,
+  classifyMetaSpendError,
+  MAX_CONVERSION_ATTEMPTS,
+  resolveConversionsConfig,
+  selectConversionCandidates,
+  sha256Hex,
+} from "../src/conversions";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -3768,6 +3777,193 @@ async function main() {
         throw new Error(`a ${status} definition must never offer Withdraw`);
       }
     }
+  });
+
+  // Session 22 (WS1) — the Meta Conversions loop: the founder-ruled mapping,
+  // hashing law and isolation proven at the pure seams the sweep runs on.
+  console.log("\nSession 22 — the Meta Conversions loop (WS1):");
+
+  const s22Config = { enabled: true, dataset_id: "1234567890", test_event_code: "TEST99" };
+  const s22Facts = new Map([
+    [
+      "eng-meta",
+      {
+        engagement_id: "eng-meta",
+        source: "meta",
+        leadgen_id: "444455556666777",
+        email: " Ayesha.Khan@Example.COM ",
+        phone: "+44 7700 900123",
+        invoice: null,
+      },
+    ],
+    [
+      "eng-meta-fee",
+      {
+        engagement_id: "eng-meta-fee",
+        source: "meta",
+        leadgen_id: "444455556666778",
+        email: "lead2@example.com",
+        phone: "+447700900124",
+        invoice: { total: 1500, currency: "GBP" },
+      },
+    ],
+    [
+      "eng-organic",
+      {
+        engagement_id: "eng-organic",
+        source: "website",
+        leadgen_id: null,
+        email: "organic@example.com",
+        phone: null,
+        invoice: null,
+      },
+    ],
+  ]);
+  const s22Now = new Date("2026-08-01T12:00:00Z");
+  const s22Moves = [
+    { stage_history_id: "sh-1", engagement_id: "eng-meta", to_stage_key: "consultation_booked", moved_at: "2026-08-01T11:00:00Z" },
+    { stage_history_id: "sh-2", engagement_id: "eng-meta-fee", to_stage_key: "instructed", moved_at: "2026-08-01T11:30:00Z" },
+    { stage_history_id: "sh-3", engagement_id: "eng-meta", to_stage_key: "disqualified", moved_at: "2026-08-01T11:40:00Z" },
+    { stage_history_id: "sh-4", engagement_id: "eng-meta", to_stage_key: "unresponsive", moved_at: "2026-08-01T11:41:00Z" },
+    { stage_history_id: "sh-5", engagement_id: "eng-organic", to_stage_key: "consultation_booked", moved_at: "2026-08-01T11:42:00Z" },
+  ];
+
+  await expectOk("conversions fire on the ruled transitions ONLY — junk and every other stage teach Meta nothing", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    const names = candidates.map((c) => `${c.stage_history_id}:${c.event_name}`).sort();
+    if (names.join(",") !== "sh-1:Schedule,sh-2:Purchase") {
+      throw new Error(`ruled mapping broken — got ${names.join(",")}`);
+    }
+  });
+
+  await expectOk("a non-Meta engagement never converts (isolation, ruling 1e)", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[4]!],
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    if (candidates.length !== 0) throw new Error("an organic-source engagement produced a conversion");
+  });
+
+  await expectOk("toggle OFF fires nothing — the default until the founder flips it", async () => {
+    const candidates = selectConversionCandidates({
+      config: { enabled: false, dataset_id: "1234567890", test_event_code: null },
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    if (candidates.length !== 0) throw new Error("a disabled business produced conversions");
+    const resolved = resolveConversionsConfig({ meta: {} });
+    if (resolved.enabled) throw new Error("an absent conversions block must resolve to OFF");
+  });
+
+  await expectOk("hashed fields only — raw email and phone never appear in the payload as sent", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[0]!],
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    const payload = buildConversionPayload(candidates[0]!, s22Config.test_event_code);
+    const json = JSON.stringify(payload);
+    if (/ayesha|khan|example\.com|7700|900123/i.test(json)) {
+      throw new Error("raw PII leaked into the CAPI payload");
+    }
+    const userData = payload.data[0]!.user_data;
+    if (userData.em?.[0] !== sha256Hex("ayesha.khan@example.com")) {
+      throw new Error("email hash is not the SHA-256 of the normalised (trimmed, lowercased) address");
+    }
+    if (userData.ph?.[0] !== sha256Hex("447700900123")) {
+      throw new Error("phone hash is not the SHA-256 of the digits-only E.164 form");
+    }
+    if (userData.lead_id !== 444455556666777) throw new Error("the leadgen id must ride user_data.lead_id");
+    if (payload.test_event_code !== "TEST99") throw new Error("test_event_code must pass through when set");
+    if (payload.data[0]!.event_id !== "sh-1") throw new Error("the stage_history id must be the CAPI event_id");
+  });
+
+  await expectOk("Purchase carries value ONLY when a money row exists — an amount is never invented", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[1]!],
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    const withFee = candidates[0]!;
+    if (withFee.custom_data.value !== 1500 || withFee.custom_data.currency !== "GBP") {
+      throw new Error("the recorded fee (invoice total + currency) must ride custom_data");
+    }
+    const noFeeFacts = new Map(s22Facts);
+    noFeeFacts.set("eng-meta-fee", { ...s22Facts.get("eng-meta-fee")!, invoice: null });
+    const bare = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[1]!],
+      facts: noFeeFacts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    })[0]!;
+    if ("value" in bare.custom_data || "currency" in bare.custom_data) {
+      throw new Error("a Purchase with no money row must carry NO value field");
+    }
+  });
+
+  await expectOk("an already-sent stage move never fires twice, and the attempt ceiling retires a failing one", async () => {
+    const sent = selectConversionCandidates({
+      config: s22Config,
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(["sh-1"]),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    if (sent.some((c) => c.stage_history_id === "sh-1")) throw new Error("a sent conversion re-fired");
+    const retired = selectConversionCandidates({
+      config: s22Config,
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map([["sh-2", MAX_CONVERSION_ATTEMPTS]]),
+      now: s22Now,
+    });
+    if (retired.some((c) => c.stage_history_id === "sh-2")) {
+      throw new Error("a candidate past the attempt ceiling must be retired (its trail is on The Record)");
+    }
+  });
+
+  await expectOk("a leadgen id that cannot round-trip as a JSON number is omitted, never mangled", async () => {
+    const exact = buildConversionUserData({ leadgen_id: "444455556666777", email: null, phone: null });
+    if (exact.lead_id !== 444455556666777) throw new Error("a safe leadgen id must be carried");
+    const unsafe = buildConversionUserData({ leadgen_id: "99999999999999999999", email: "a@b.com", phone: null });
+    if (unsafe.lead_id !== undefined) throw new Error("a precision-unsafe leadgen id must be omitted");
+    if (!unsafe.em) throw new Error("matching must still ride the hashed fields");
+  });
+
+  await expectOk("the spend pull fails closed naming the missing ads_read scope", async () => {
+    const classified = classifyMetaSpendError({
+      message: "(#200) Ad account access requires ads_read or ads_management permission",
+      type: "OAuthException",
+      code: 200,
+    });
+    if (!classified.missing_scope) throw new Error("a permissions refusal must classify as a scope gap");
+    if (!/ads_read/.test(classified.reason)) throw new Error("the skip must NAME the missing scope");
+    const other = classifyMetaSpendError({ message: "Unsupported get request", type: "GraphMethodException", code: 100 });
+    if (other.missing_scope) throw new Error("an unrelated error must not masquerade as a scope gap");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

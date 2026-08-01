@@ -1,7 +1,8 @@
-import { Mail, MessageCircle, LayoutGrid, CalendarClock, PoundSterling } from "lucide-react";
+import { Mail, MessageCircle, LayoutGrid, CalendarClock, PoundSterling, Radar } from "lucide-react";
 
 import { HonestButton } from "@/components/ui/honest-button";
-import { getIntegrationStates, getMailPipeState } from "@/lib/server/queries";
+import { getConversionsState, getIntegrationStates, getMailPipeState } from "@/lib/server/queries";
+import { ConversionsControl } from "./conversions-control";
 import { MailProviderControl } from "./mail-provider-control";
 
 /*
@@ -16,7 +17,7 @@ import { MailProviderControl } from "./mail-provider-control";
  */
 
 const ROWS: {
-  key: "mail" | "whatsapp" | "meta" | "calendar" | "stripe";
+  key: "mail" | "whatsapp" | "meta" | "conversions" | "calendar" | "stripe";
   icon: React.ComponentType<{ className?: string }>;
   name: string;
   meta: string;
@@ -47,6 +48,14 @@ const ROWS: {
       "Per-tenant connect arrives with its wiring session — the platform webhook and page binding already exist (Session 10).",
   },
   {
+    key: "conversions",
+    icon: Radar,
+    name: "Meta Conversions",
+    meta: "outcomes back to the ad platform · Schedule + Purchase only, hashed match keys",
+    notice:
+      "Session 22: the loop is built and OFF by default. The control below is the one door — toggle, dataset id and test event code; nothing fires until the owner flips it.",
+  },
+  {
     key: "calendar",
     icon: CalendarClock,
     name: "Calendar",
@@ -65,7 +74,11 @@ const ROWS: {
 ];
 
 export async function IntegrationsTab() {
-  const [states, mailPipe] = await Promise.all([getIntegrationStates(), getMailPipeState()]);
+  const [states, mailPipe, conversions] = await Promise.all([
+    getIntegrationStates(),
+    getMailPipeState(),
+    getConversionsState(),
+  ]);
   const stateByKey = new Map(states.map((s) => [s.key, s]));
 
   return (
@@ -74,6 +87,32 @@ export async function IntegrationsTab() {
         Integrations · every provider is an actor with grants
       </h2>
       {ROWS.map((row) => {
+        // Session 22: the Conversions row carries a REAL control (decision
+        // 116 — no honest-placeholder button where a working door exists);
+        // its state chip is the toggle's truth in ACCENT, never green.
+        if (row.key === "conversions") {
+          return (
+            <div key={row.key} className="border-b border-ink/10 px-4.5 py-3.5 last:border-b-0">
+              <div className="flex items-center gap-3">
+                <row.icon className="size-[18px] shrink-0 text-ink-soft" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13.5px] font-bold">{row.name}</div>
+                  <div className="text-[11.5px] text-ink-soft">{row.meta}</div>
+                </div>
+                <span
+                  className={
+                    conversions.enabled
+                      ? "rounded-md border border-accent/40 bg-accent/10 px-2 py-1 font-mono text-[9.5px] tracking-wide text-accent uppercase"
+                      : "rounded-md border border-ink/15 bg-paper-deep px-2 py-1 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase"
+                  }
+                >
+                  {conversions.enabled ? "on" : "off"}
+                </span>
+              </div>
+              <ConversionsControl state={conversions} />
+            </div>
+          );
+        }
         const state = stateByKey.get(row.key);
         const connected = state?.connected ?? false;
         return (
