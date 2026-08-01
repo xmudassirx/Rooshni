@@ -1,7 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { emitEvent, DRAFTING_EVENT_KINDS } from "@rooshni/db";
+import {
+  emitEvent,
+  DRAFTING_EVENT_KINDS,
+  FIRST_LIGHT_EVENT_KINDS,
+  SETTLE_WINDOW_MINUTES_OPTIONS,
+} from "@rooshni/db";
 import { getAppContext } from "@/lib/server/context";
 
 /**
@@ -59,6 +64,73 @@ async function allowedVocab(
     );
   };
   return { categories: keysOf("knowledge_category"), routes: keysOf("visa_route") };
+}
+
+export interface DraftingSettingsState {
+  error: string | null;
+  saved?: boolean;
+}
+
+/**
+ * Session 16 — Settings → General: the drafting policy trio (PR-C sign-off
+ * text redeems the Session 15 JUDGMENT mark; PR-F mode; PR-C settle window).
+ * Business-level policy is the owner's pen; each save is one settings merge
+ * and one settings.updated line on The Record.
+ */
+export async function updateDraftingSettingsAction(
+  _prev: DraftingSettingsState,
+  formData: FormData
+): Promise<DraftingSettingsState> {
+  const signOffText = String(formData.get("email_sign_off") ?? "").trim();
+  const mode = String(formData.get("email_sign_off_mode") ?? "firm_name");
+  const settleRaw = String(formData.get("draft_settle_minutes") ?? "3");
+  const settleMinutes = Number(settleRaw);
+
+  if (mode !== "firm_name" && mode !== "approver") return { error: "Unknown sign-off mode." };
+  if (!(SETTLE_WINDOW_MINUTES_OPTIONS as readonly number[]).includes(settleMinutes)) {
+    return { error: "The settle window must be instant, 1, 3 or 5 minutes." };
+  }
+
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "Drafting policy is the owner's pen — ask the owner to change it." };
+  }
+
+  const { data: bizRow, error: readError } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (readError) return { error: `Settings read failed: ${readError.message}` };
+  const settings = { ...((bizRow?.settings ?? {}) as Record<string, unknown>) };
+
+  if (signOffText) settings.email_sign_off = signOffText;
+  else delete settings.email_sign_off; // absent = the firm display name, the only shipped default
+  settings.email_sign_off_mode = mode;
+  settings.draft_settle_minutes = settleMinutes;
+
+  const { error: writeError } = await db
+    .from("businesses")
+    .update({ settings })
+    .eq("id", business.id);
+  if (writeError) return { error: `Save failed: ${writeError.message}` };
+
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: FIRST_LIGHT_EVENT_KINDS.settingsUpdated,
+    entity_type: "business",
+    entity_id: business.id,
+    payload: {
+      keys: ["email_sign_off", "email_sign_off_mode", "draft_settle_minutes"],
+      email_sign_off_mode: mode,
+      draft_settle_minutes: settleMinutes,
+      email_sign_off_set: Boolean(signOffText),
+    },
+  });
+
+  revalidatePath("/settings");
+  return { error: null, saved: true };
 }
 
 export async function saveKnowledgeEntryAction(

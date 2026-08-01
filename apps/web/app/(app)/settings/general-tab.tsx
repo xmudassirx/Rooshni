@@ -1,5 +1,7 @@
 import { HonestButton } from "@/components/ui/honest-button";
+import { getAppContext } from "@/lib/server/context";
 import { getBusinessConfig, getTemplateContent } from "@/lib/server/queries";
+import { DraftingSettings } from "./drafting-settings";
 
 /*
  * Settings → General, master mockup v2 (setSTab 'general'): identity and
@@ -46,7 +48,11 @@ const EDIT_NOTICE =
 export async function GeneralTab() {
   // Session 11: vertical content (display name, pack categories, no-go
   // rules) renders FROM the installed template definition.
-  const [config, template] = await Promise.all([getBusinessConfig(), getTemplateContent()]);
+  const [config, template, { business, membershipRole }] = await Promise.all([
+    getBusinessConfig(),
+    getTemplateContent(),
+    getAppContext(),
+  ]);
   const s = config.settings;
 
   const edit = (
@@ -164,6 +170,21 @@ export async function GeneralTab() {
           }
         />
       </div>
+      {/* Session 16 — the drafting policy trio: sign-off text (the Session 15
+          JUDGMENT mark redeemed), sign-off mode (PR-F) and the reply settle
+          window (PR-C). */}
+      <DraftingSettings
+        signOffText={str(s, "email_sign_off")}
+        signOffMode={s.email_sign_off_mode === "approver" ? "approver" : "firm_name"}
+        settleMinutes={
+          typeof s.draft_settle_minutes === "number" &&
+          [0, 1, 3, 5].includes(s.draft_settle_minutes)
+            ? s.draft_settle_minutes
+            : 3
+        }
+        businessName={business.name}
+        isOwner={membershipRole === "owner"}
+      />
     </>
   );
 }

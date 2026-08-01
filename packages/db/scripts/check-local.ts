@@ -33,6 +33,7 @@ import {
   SETTLE_WINDOW_DEFAULT_MINUTES,
 } from "../src/supersede";
 import { parseReferenceIds } from "../src/graph";
+import { resolveSignOffBody, resolveSignOffMode, resolveSignOffText } from "../src/sign-off";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -2942,6 +2943,32 @@ async function main() {
     }
     if (composed.credit_line.cache?.read_tokens !== 700) {
       throw new Error("cache figures did not land on the credit line");
+    }
+  });
+
+  // --- PR-F: the sign-off resolver (WYSIWYS by construction) --------------
+  await expectOk("approver sign-off resolves ONLY a known sign-off line, deterministically, render = stamp", async () => {
+    if (resolveSignOffMode({}) !== "firm_name") throw new Error("mode default is not firm_name");
+    if (resolveSignOffMode({ email_sign_off_mode: "approver" }) !== "approver") throw new Error("approver mode not honoured");
+    if (resolveSignOffText({}, "Test Firm") !== "Test Firm") {
+      throw new Error("the firm display name is not the shipped default");
+    }
+    const body = "Hello Amina,\n\nThank you for your message.\n\nKind regards,\nTest Firm";
+    const resolved = resolveSignOffBody(body, ["Test Firm"], "Sarah Malik");
+    if (resolved !== "Hello Amina,\n\nThank you for your message.\n\nKind regards,\nSarah Malik") {
+      throw new Error(`resolution wrong: ${JSON.stringify(resolved)}`);
+    }
+    // Idempotent: already the approver's name → nothing to change.
+    if (resolveSignOffBody(resolved!, ["Test Firm", "Sarah Malik"], "Sarah Malik") !== null) {
+      throw new Error("an already-resolved body was re-resolved");
+    }
+    // A second approver re-resolves from the recorded name.
+    const reResolved = resolveSignOffBody(resolved!, ["Test Firm", "Sarah Malik"], "Mudassir");
+    if (!reResolved?.endsWith("\nMudassir")) throw new Error("hand-over between approvers failed");
+    // A body whose last line is NOT a known sign-off changes NOTHING — what
+    // was seen (unresolved) is what sends (unresolved): WYSIWYS trivially.
+    if (resolveSignOffBody("Hello,\nNo sign-off here.", ["Test Firm"], "Sarah Malik") !== null) {
+      throw new Error("an unknown final line was rewritten — the resolver overreached");
     }
   });
 

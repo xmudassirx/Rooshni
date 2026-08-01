@@ -110,6 +110,13 @@ export const INBOUND_EVENT_KINDS = {
   /** A pending draft was superseded (terminal) — reason and the replacing
    * communication id in the payload. new_inbound | human_replied. */
   communicationSuperseded: "communication.superseded",
+  /** PR-F (133e): at the stamp, the approver-mode sign-off resolved to the
+   * stamping approver's display name — the resolved name in the payload;
+   * WYSIWYS: the body the approver saw is the body that dispatches. */
+  communicationSignOffResolved: "communication.sign_off_resolved",
+  /** PR-D: a per-conversation auto-draft pause was toggled, or the settle
+   * override changed — the thread and the new value in the payload. */
+  threadDraftingPreferenceChanged: "thread.drafting_preference_changed",
 } as const satisfies Record<string, EventAction>;
 
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

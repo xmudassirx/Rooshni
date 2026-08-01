@@ -1,5 +1,6 @@
 import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
+import { resolveSignOffBody, resolveSignOffMode, resolveSignOffText } from "@rooshni/db";
 import { scaleDurationMs } from "@rooshni/config";
 import { getAppContext } from "./context";
 
@@ -195,6 +196,9 @@ export interface CommunicationCreditLine {
   budgetTokens: number;
   attempts: number;
   packEntries: { id: string; title: string }[];
+  /** Session 16 (PR-E) — cache read/written tokens from the provider's usage
+   * fields; the fallback reason is recorded when caching was refused. */
+  cache: { readTokens: number; writtenTokens: number; fallbackReason: string | null } | null;
 }
 
 export interface CommunicationDetail {
@@ -214,6 +218,16 @@ export interface CommunicationDetail {
   /** Session 15 fix round — the latest human edit of this pending body,
    * read from draft_feedback (no new store). A fact, not a stamp act. */
   editedBy: { name: string; at: string } | null;
+  /** Session 16 (PR-B, decision 133a) — this draft replaces an earlier
+   * pending draft; the card says so, with how many client messages arrived
+   * since that draft was written. */
+  supersedes: { communicationId: string; newMessagesSince: number } | null;
+  /** Session 16 (PR-F, decision 133e) — approver sign-off mode. When the
+   * viewer holds stamp authority, `body` is ALREADY the render-resolved form
+   * (their name where the stamp will write it — WYSIWYS) and resolvedTo
+   * names them; a viewer without stamp authority sees the firm form with
+   * resolvedTo null. */
+  signOff: { mode: "approver"; resolvedTo: string | null } | null;
 }
 
 /** Full draft for the inbox detail panel — the view carries only a preview. */
@@ -346,6 +360,10 @@ export async function getCommunicationDetail(
       const titleById = new Map((entries ?? []).map((e) => [e.id as string, e.title as string]));
       packEntries = entryIds.map((entryId) => ({ id: entryId, title: titleById.get(entryId) ?? "entry" }));
     }
+    // Session 16 (PR-E): the cache figures ride the credit line.
+    const rawCache = (rawCredit as { cache?: unknown }).cache as
+      | { read_tokens?: unknown; written_tokens?: unknown; fallback_reason?: unknown }
+      | undefined;
     creditLine = {
       tier: String(rawCredit.tier ?? "standard"),
       model: String(rawCredit.model ?? ""),
@@ -354,6 +372,15 @@ export async function getCommunicationDetail(
       budgetTokens: Number(rawCredit.budget_tokens ?? 0),
       attempts: Number(rawCredit.attempts ?? 1),
       packEntries,
+      cache:
+        rawCache && typeof rawCache === "object"
+          ? {
+              readTokens: Number(rawCache.read_tokens ?? 0),
+              writtenTokens: Number(rawCache.written_tokens ?? 0),
+              fallbackReason:
+                typeof rawCache.fallback_reason === "string" ? rawCache.fallback_reason : null,
+            }
+          : null,
     };
   }
 
@@ -377,9 +404,62 @@ export async function getCommunicationDetail(
     editedBy = { name: editor?.display_name ?? "a team member", at: lastEdit.created_at };
   }
 
+  // Session 16 (PR-B): the supersede note the card renders.
+  const rawSupersedes = commAttrs.supersedes as
+    | { communication_id?: unknown; new_messages_since?: unknown }
+    | undefined;
+  const supersedes =
+    rawSupersedes && typeof rawSupersedes.communication_id === "string"
+      ? {
+          communicationId: rawSupersedes.communication_id,
+          newMessagesSince: Number(rawSupersedes.new_messages_since ?? 0),
+        }
+      : null;
+
+  // Session 16 (PR-F, decision 133e): approver sign-off mode. Render-resolve
+  // for a stamp-authority viewer uses THE SAME deterministic resolver the
+  // stamp act uses (sign-off.ts) — what they see is what sends.
+  let body: string = data.body;
+  let signOff: CommunicationDetail["signOff"] = null;
+  const { db: ctxDb, business: ctxBusiness, actor: ctxActor, membershipRole } = await getAppContext();
+  const { data: bizRow } = await ctxDb
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  const bizSettings = (bizRow?.settings ?? {}) as Record<string, unknown>;
+  if (resolveSignOffMode(bizSettings) === "approver" && data.channel === "email") {
+    let hasStampAuthority = membershipRole === "owner";
+    if (!hasStampAuthority) {
+      const { data: grants } = await ctxDb
+        .from("grants")
+        .select("id")
+        .eq("business_id", business.id)
+        .eq("grantee_actor_id", ctxActor.id)
+        .eq("tool", "approvals.comms")
+        .eq("access", "execute")
+        .is("revoked_at", null)
+        .is("archived_at", null)
+        .limit(1);
+      hasStampAuthority = Boolean(grants?.length);
+    }
+    if (hasStampAuthority) {
+      const candidates = [
+        resolveSignOffText(bizSettings, ctxBusiness.name),
+        ctxBusiness.name,
+        ...(typeof commAttrs.sign_off_resolved_to === "string" ? [commAttrs.sign_off_resolved_to] : []),
+      ];
+      const resolved = resolveSignOffBody(data.body, candidates, ctxActor.display_name);
+      body = resolved ?? data.body;
+      signOff = { mode: "approver", resolvedTo: ctxActor.display_name };
+    } else {
+      signOff = { mode: "approver", resolvedTo: null };
+    }
+  }
+
   return {
     id: data.id,
-    body: data.body,
+    body,
     channel: data.channel,
     subject: thread?.subject ?? null,
     contactName: contact?.display_name ?? null,
@@ -388,12 +468,16 @@ export async function getCommunicationDetail(
     creditLine,
     complianceRequired: Boolean(data.compliance_required),
     editedBy,
+    supersedes,
+    signOff,
   };
 }
 
 export interface InboxHistoryRow {
   eventId: string;
-  action: "approved" | "rejected";
+  /** Session 16: superseded joins the decided states — terminal, evented,
+   * never deletable (decision 133a); rendered in neutral chrome. */
+  action: "approved" | "rejected" | "superseded";
   occurredAt: string;
   actorName: string | null;
   reason: string | null;
@@ -416,7 +500,7 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
     .from("events")
     .select("id, action, occurred_at, entity_id, payload, actors(display_name)")
     .eq("business_id", business.id)
-    .in("action", ["communication.approved", "communication.rejected"])
+    .in("action", ["communication.approved", "communication.rejected", "communication.superseded"])
     .gte("occurred_at", since)
     .order("occurred_at", { ascending: false })
     .limit(200);
@@ -454,7 +538,12 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
     return [
       {
         eventId: e.id,
-        action: e.action === "communication.approved" ? ("approved" as const) : ("rejected" as const),
+        action:
+          e.action === "communication.approved"
+            ? ("approved" as const)
+            : e.action === "communication.superseded"
+              ? ("superseded" as const)
+              : ("rejected" as const),
         occurredAt: e.occurred_at,
         actorName: Array.isArray(actorRel)
           ? (actorRel[0]?.display_name ?? null)

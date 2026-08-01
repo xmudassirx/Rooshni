@@ -12,6 +12,7 @@ import {
   type ThreadMessage,
 } from "./drafting";
 import type { FormAnswer } from "./meta";
+import { resolveSignOffText } from "./sign-off";
 
 /**
  * The settle window and the supersede engine, app side (Session 16, PR-B/C/D;
@@ -347,14 +348,10 @@ async function processSettledThread(
   );
   const businessName = businesses[0]?.name ?? "";
   const settings = businesses[0]?.settings ?? {};
-  const rawSignOff = settings["email_sign_off"];
-  const signOffText =
-    typeof rawSignOff === "string"
-      ? rawSignOff.trim()
-      : rawSignOff && typeof rawSignOff === "object" && typeof (rawSignOff as { text?: unknown }).text === "string"
-        ? String((rawSignOff as { text: string }).text).trim()
-        : "";
-  const signOff = signOffText || businessName;
+  // PR-F: the PENDING body always carries the configured sign-off (firm
+  // display name by default) — approver mode resolves at render+stamp, never
+  // at generation.
+  const signOff = resolveSignOffText(settings, businessName);
 
   const contacts = await q<{ display_name: string; given_name: string | null }[]>(
     db.from("contacts").select("display_name, given_name").eq("id", thread.contact_id).limit(1),

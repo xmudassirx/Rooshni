@@ -15,6 +15,7 @@ import {
   type DraftAttestation,
 } from "./drafting";
 import type { FormAnswer } from "./meta";
+import { resolveSignOffText } from "./sign-off";
 import type {
   EventRow,
   RealDuration,
@@ -504,8 +505,9 @@ async function templateVars(db: SupabaseClient, facts: EngagementFacts): Promise
   // JUDGMENT: the settings key is `email_sign_off` (businesses.settings, the
   // General-tab identity store); the Settings edit surface arrives with its
   // session — until then the firm display name is the value.
-  const rawSignOff = (businesses[0]?.settings ?? {})["email_sign_off"];
-  const signOff = typeof rawSignOff === "string" && rawSignOff.trim() ? rawSignOff.trim() : businessName;
+  // Session 16 (PR-F): one resolver module (sign-off.ts) is the truth for
+  // the text; approver mode resolves at render+stamp, never at generation.
+  const signOff = resolveSignOffText(businesses[0]?.settings ?? {}, businessName);
   return {
     first_name: facts.contact?.given_name ?? fullName.split(/\s+/)[0] ?? "",
     full_name: fullName,

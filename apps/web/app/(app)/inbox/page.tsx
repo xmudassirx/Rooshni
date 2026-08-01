@@ -55,6 +55,19 @@ async function toCardProps(row: ApprovalInboxRow): Promise<InboxCardProps> {
     editedNote: detail?.editedBy
       ? `edited by ${detail.editedBy.name} · ${formatWhen(detail.editedBy.at)}`
       : null,
+    // Session 16 (decision 133a): the card names what it replaced.
+    supersedeNote: detail?.supersedes
+      ? `supersedes an earlier draft · ${detail.supersedes.newMessagesSince} new ${
+          detail.supersedes.newMessagesSince === 1 ? "message" : "messages"
+        } since`
+      : null,
+    // Session 16 (PR-F): approver mode — the body above is already the
+    // render-resolved form for this viewer (WYSIWYS); the note states it.
+    signOffNote: detail?.signOff
+      ? detail.signOff.resolvedTo
+        ? `sign-off resolves to you at the stamp — shown as it will send: ${detail.signOff.resolvedTo}`
+        : "sign-off resolves to the stamping approver at the stamp"
+      : null,
   };
 }
 
@@ -66,10 +79,18 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
           "mt-0.5 rounded-md border px-2 py-0.5 font-mono text-[9.5px] font-semibold tracking-wide uppercase",
           row.action === "approved"
             ? "border-ledger/40 bg-ledger/10 text-ledger"
-            : "border-stamp/40 bg-stamp/10 text-stamp"
+            : row.action === "superseded"
+              ? // Session 16: superseded is a FACT in neutral chrome — not a
+                // stamp act (red), not done (green), not Light's channel.
+                "border-rule bg-paper-deep text-ink-soft"
+              : "border-stamp/40 bg-stamp/10 text-stamp"
         )}
       >
-        {row.action === "approved" ? "✓ Approved" : "✗ Rejected"}
+        {row.action === "approved"
+          ? "✓ Approved"
+          : row.action === "superseded"
+            ? "⇢ Superseded"
+            : "✗ Rejected"}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
@@ -84,7 +105,17 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
           <p className="mt-1 line-clamp-1 text-[12.5px] text-ink-soft">{row.preview}</p>
         ) : null}
         {row.reason ? (
-          <p className="mt-1 text-[12px] text-stamp">&ldquo;{row.reason}&rdquo;</p>
+          row.action === "superseded" ? (
+            <p className="mt-1 font-mono text-[10.5px] tracking-wide text-ink-soft">
+              {row.reason === "human_replied"
+                ? "a human replied on the thread — the draft was retired"
+                : row.reason === "new_inbound"
+                  ? "a new client message arrived — regenerated against the full thread"
+                  : row.reason}
+            </p>
+          ) : (
+            <p className="mt-1 text-[12px] text-stamp">&ldquo;{row.reason}&rdquo;</p>
+          )
         ) : null}
         <div className="mt-1.5 flex gap-3 font-mono text-[10px] tracking-wide uppercase">
           {row.threadId ? (
