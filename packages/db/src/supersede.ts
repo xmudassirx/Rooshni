@@ -12,6 +12,8 @@ import {
   type ThreadMessage,
 } from "./drafting";
 import type { FormAnswer } from "./meta";
+import { assessAiBudget, guardGenerationBudget, maybeEmitSoftCapCrossed } from "./ai-budget";
+import { priceGeneration } from "./model-router";
 import { resolveSignOffText } from "./sign-off";
 import { resolveBookingUrl } from "./booking-link";
 import { plainTextOfBody } from "./email-html";
@@ -421,7 +423,13 @@ async function processSettledThread(
   };
 
   let composed: ComposeDraftResult;
+  let budgetBefore: Awaited<ReturnType<typeof assessAiBudget>> | null = null;
   try {
+    // Session 22 (WS2, ruling 2b): the hard cap refuses reply GENERATION
+    // here too — the same server-side gate as the workflow drafter, the same
+    // visible-failure lane below. Nothing else on the thread is touched.
+    budgetBefore = await assessAiBudget(db, thread.business_id, deps.now);
+    guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
     composed = await composeReplyDraft(deps.generator, composeInput);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -577,12 +585,53 @@ async function processSettledThread(
           }
         : {}),
     },
-    cost: {
-      provider: "anthropic",
-      model: composed.credit_line.model,
-      tokens: composed.usage.input_tokens + composed.usage.output_tokens,
-    },
+    cost: (() => {
+      // Session 22 (WS2): the priced cost block — list rates + recorded fx
+      // (model-router.ts); our recorded cost, no margin invented (2a).
+      const price = priceGeneration({
+        model: composed.credit_line.model,
+        input_tokens: composed.usage.input_tokens,
+        output_tokens: composed.usage.output_tokens,
+        cache_read_tokens: composed.credit_line.cache?.read_tokens,
+        cache_write_tokens: composed.credit_line.cache?.written_tokens,
+      });
+      return {
+        provider: "anthropic",
+        model: composed.credit_line.model,
+        tokens: composed.usage.input_tokens + composed.usage.output_tokens,
+        input_tokens: composed.usage.input_tokens,
+        output_tokens: composed.usage.output_tokens,
+        ...(composed.credit_line.cache
+          ? {
+              cache_read_tokens: composed.credit_line.cache.read_tokens,
+              cache_write_tokens: composed.credit_line.cache.written_tokens,
+            }
+          : {}),
+        ...(price ? { amount_gbp: price.amount_gbp, amount_usd: price.amount_usd, fx_rate: price.fx_rate } : {}),
+      };
+    })(),
   });
+
+  // WS2: a soft-cap crossing lands once per month on The Record — never a block.
+  if (budgetBefore) {
+    const replyPrice = priceGeneration({
+      model: composed.credit_line.model,
+      input_tokens: composed.usage.input_tokens,
+      output_tokens: composed.usage.output_tokens,
+      cache_read_tokens: composed.credit_line.cache?.read_tokens,
+      cache_write_tokens: composed.credit_line.cache?.written_tokens,
+    });
+    if (replyPrice) {
+      await maybeEmitSoftCapCrossed(db, {
+        business_id: thread.business_id,
+        actor_id: drafter,
+        before_gbp: budgetBefore.spend_gbp,
+        after_gbp: budgetBefore.spend_gbp + replyPrice.amount_gbp,
+        budget: budgetBefore,
+        now: deps.now,
+      });
+    }
+  }
 
   if (oldDraft) {
     // The 0030 pipeline: retire the old draft, submit the successor through

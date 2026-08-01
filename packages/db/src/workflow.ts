@@ -16,6 +16,8 @@ import {
 } from "./drafting";
 import type { FormAnswer } from "./meta";
 import { fireEngagementConversions } from "./conversions";
+import { assessAiBudget, guardGenerationBudget, maybeEmitSoftCapCrossed } from "./ai-budget";
+import { priceGeneration } from "./model-router";
 import { resolveSignOffText } from "./sign-off";
 import { resolveBookingUrl, substituteBookingLink } from "./booking-link";
 import { declareAttachment, findPublishedRouteGuide, type RouteGuide } from "./route-guides";
@@ -877,6 +879,7 @@ async function executeDraftComm(
     let composeInput: Parameters<typeof composeDraft>[1] | null = null;
     let attestation: DraftAttestation;
     let guide: RouteGuide | null = null;
+    let budgetBefore: Awaited<ReturnType<typeof assessAiBudget>> | null = null;
 
     if (generative) {
       const generator = createAnthropicGenerator();
@@ -902,6 +905,13 @@ async function executeDraftComm(
       const formAnswers = (facts.attributes?.form_answers as FormAnswer[] | undefined) ?? [];
       const leadText = `${leadTextFromAnswers(formAnswers)}\n${facts.title}`;
       try {
+        // Session 22 (WS2, ruling 2b): the hard cap refuses GENERATION here,
+        // server-side, before any model call — the s15 permanent-failure lane
+        // (the catch below records the visible failure naming the cap and the
+        // step fails loudly). The template path and every send continue; the
+        // approval gate never sees this check.
+        budgetBefore = await assessAiBudget(db, run.business_id);
+        guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
         const retrieval = await retrieveKnowledgeEntries(db, run.business_id, leadText);
         const noGoRules = await loadNoGoRules(db, run.business_id);
         // PR-i (Session 19): the intro email carries the route-matched
@@ -1108,6 +1118,10 @@ async function executeDraftComm(
       try {
         const generator = createAnthropicGenerator();
         if (generator) {
+          // WS2: the retry is generation too — the hard cap binds it the
+          // same way; a refusal here leaves attempt 1's recorded breach
+          // standing (visible, unapprovable, honest).
+          if (budgetBefore) guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
           const retry = await composeDraft(generator, composeInput, {
             escalationOverride: {
               tier: composed.credit_line.tier,
@@ -1178,6 +1192,16 @@ async function executeDraftComm(
     if (composed) {
       // The credit line on The Record (doctrine: no invisible spend — every
       // metered act is a priced line; events.cost feeds the billing surface).
+      // Session 22 (WS2): the cost block now carries the token split and the
+      // PRICED amount (list rates + recorded fx, model-router.ts) — our
+      // recorded cost, no margin invented (ruling 2a).
+      const price = priceGeneration({
+        model: composed.credit_line.model,
+        input_tokens: composed.usage.input_tokens,
+        output_tokens: composed.usage.output_tokens,
+        cache_read_tokens: composed.credit_line.cache?.read_tokens,
+        cache_write_tokens: composed.credit_line.cache?.written_tokens,
+      });
       await emitEvent(db, {
         business_id: run.business_id,
         actor_id: drafter,
@@ -1197,8 +1221,28 @@ async function executeDraftComm(
           provider: "anthropic",
           model: composed.credit_line.model,
           tokens: composed.usage.input_tokens + composed.usage.output_tokens,
+          input_tokens: composed.usage.input_tokens,
+          output_tokens: composed.usage.output_tokens,
+          ...(composed.credit_line.cache
+            ? {
+                cache_read_tokens: composed.credit_line.cache.read_tokens,
+                cache_write_tokens: composed.credit_line.cache.written_tokens,
+              }
+            : {}),
+          ...(price ? { amount_gbp: price.amount_gbp, amount_usd: price.amount_usd, fx_rate: price.fx_rate } : {}),
         },
       });
+      // WS2: a soft-cap crossing lands once per month on The Record; it
+      // never blocks — the banner is the pages' live read.
+      if (budgetBefore && price) {
+        await maybeEmitSoftCapCrossed(db, {
+          business_id: run.business_id,
+          actor_id: drafter,
+          before_gbp: budgetBefore.spend_gbp,
+          after_gbp: budgetBefore.spend_gbp + price.amount_gbp,
+          budget: budgetBefore,
+        });
+      }
     }
 
     await submitCommunication(db, {

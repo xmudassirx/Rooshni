@@ -1,10 +1,15 @@
 import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
 import {
+  evaluateAiBudget,
+  MONTH_SPEND_ROW_BOUND,
+  monthWindowUtc,
   plainTextOfBody,
+  pricedAmountGbp,
   readGmailEnv,
   readGraphEnv,
   renderEmailHtml,
+  resolveAiBudget,
   resolveConversionsConfig,
   resolveEmailIdentity,
   resolveMailProvider,
@@ -674,9 +679,20 @@ export interface DashboardData {
    * and the monitor honestly cannot run.
    */
   stuck: StuckEnquiry[] | null;
-  /** Metered credits on the ledger this calendar month. */
-  creditsThisMonth: number;
+  /** Priced metered cost on the ledger this month, GBP (WS2: the tile reads
+   * the same truth as Billing & usage). */
+  meteredCostGbpThisMonth: number;
   meteredEventsThisMonth: number;
+  /** Pre-s22 cost lines with no priced amount — counted, never invented. */
+  unpricedEventsThisMonth: number;
+  /** WS2: the cap banner's live truth (computed here so the dashboard needs
+   * no second read of the month's cost rows). */
+  budget: {
+    softCapGbp: number | null;
+    hardCapGbp: number | null;
+    softCrossed: boolean;
+    hardCrossed: boolean;
+  };
 }
 
 export async function getDashboard(): Promise<DashboardData> {
@@ -689,7 +705,7 @@ export async function getDashboard(): Promise<DashboardData> {
   const startOfMonth = new Date(startOfToday);
   startOfMonth.setDate(1);
 
-  const [newRows, taskRows, slaRows, costRows] = await Promise.all([
+  const [newRows, taskRows, slaRows, costRows, bizSettingsRow] = await Promise.all([
     db
       .from("engagements")
       .select("*", { count: "exact", head: true })
@@ -716,13 +732,16 @@ export async function getDashboard(): Promise<DashboardData> {
       .select("cost")
       .eq("business_id", business.id)
       .gte("occurred_at", startOfMonth.toISOString())
-      .not("cost", "is", null),
+      .not("cost", "is", null)
+      .limit(MONTH_SPEND_ROW_BOUND),
+    db.from("businesses").select("settings").eq("id", business.id).maybeSingle(),
   ]);
   for (const [label, result] of [
     ["engagements (new today)", newRows],
     ["tasks (today)", taskRows],
     ["engagements (stage SLA)", slaRows],
     ["events (cost)", costRows],
+    ["businesses (settings)", bizSettingsRow],
   ] as const) {
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
@@ -757,16 +776,16 @@ export async function getDashboard(): Promise<DashboardData> {
     stuck = null;
   }
 
-  let credits = 0;
+  // WS2: the tile reads the same priced truth as Billing & usage — GBP from
+  // the cost block's amount; pre-pricing lines counted, never invented.
+  let meteredCost = 0;
   let metered = 0;
+  let unpriced = 0;
   for (const row of costRows.data ?? []) {
-    const cost = row.cost as EventRow["cost"];
-    if (typeof cost?.credits === "number") {
-      credits += cost.credits;
-      metered += 1;
-    } else if (cost) {
-      metered += 1;
-    }
+    const amount = pricedAmountGbp(row.cost as Record<string, unknown> | null);
+    metered += 1;
+    if (amount === null) unpriced += 1;
+    else meteredCost += amount;
   }
 
   return {
@@ -781,8 +800,19 @@ export async function getDashboard(): Promise<DashboardData> {
       };
     }),
     stuck,
-    creditsThisMonth: credits,
+    meteredCostGbpThisMonth: meteredCost,
     meteredEventsThisMonth: metered,
+    unpricedEventsThisMonth: unpriced,
+    budget: (() => {
+      const budget = resolveAiBudget((bizSettingsRow.data?.settings ?? {}) as Record<string, unknown>);
+      const assessment = evaluateAiBudget(meteredCost, budget);
+      return {
+        softCapGbp: budget.soft_cap_gbp,
+        hardCapGbp: budget.hard_cap_gbp,
+        softCrossed: assessment.soft_crossed,
+        hardCrossed: assessment.hard_crossed,
+      };
+    })(),
   };
 }
 
@@ -1457,42 +1487,100 @@ export async function getMemberDetail(actorId: string): Promise<MemberDetail | n
 
 // --- Billing & usage ---------------------------------------------------------------
 
-export interface CreditUsage {
-  totalCredits: number;
-  /** Metered actions this calendar month, grouped by ledger action. */
-  byAction: { action: string; count: number; credits: number }[];
+export interface MeteredUsage {
+  /** Priced metered cost this UTC month, GBP (ruling 2a: our recorded cost,
+   * no margin — labelled "metered cost" honestly). */
+  totalGbp: number;
+  pricedLines: number;
+  /** Cost lines recorded before the s22 pricing landed — shown as token
+   * counts, never retro-priced. */
+  unpricedLines: number;
+  unpricedTokens: number;
+  byDay: { day: string; gbp: number; lines: number }[];
+  byAction: { action: string; lines: number; gbp: number; tokens: number }[];
+  budget: {
+    softCapGbp: number | null;
+    hardCapGbp: number | null;
+    softCrossed: boolean;
+    hardCrossed: boolean;
+  };
+  isOwner: boolean;
 }
 
-export async function getCreditUsage(): Promise<CreditUsage> {
-  const { db, business } = await getAppContext();
-  const startOfMonth = new Date();
-  startOfMonth.setDate(1);
-  startOfMonth.setHours(0, 0, 0, 0);
+/**
+ * Session 22 (WS2, ruling 2a) — the meter reads events.cost, the s15
+ * producer's truth: this month's spend by day and by action kind, priced
+ * lines summed in GBP, pre-pricing lines counted honestly as tokens.
+ * Bounded read (law 5e's spirit — never unbounded rows).
+ */
+export async function getMeteredUsage(): Promise<MeteredUsage> {
+  const { db, business, membershipRole } = await getAppContext();
+  const now = new Date();
+  const window = monthWindowUtc(now);
 
-  const { data, error } = await db
-    .from("events")
-    .select("action, cost")
-    .eq("business_id", business.id)
-    .gte("occurred_at", startOfMonth.toISOString())
-    .not("cost", "is", null);
-  if (error) throw new Error(`events query failed: ${error.message}`);
+  const [{ data, error }, { data: bizRow, error: bizError }] = await Promise.all([
+    db
+      .from("events")
+      .select("action, occurred_at, cost")
+      .eq("business_id", business.id)
+      .not("cost", "is", null)
+      .gte("occurred_at", window.start)
+      .lt("occurred_at", window.end)
+      .limit(MONTH_SPEND_ROW_BOUND),
+    db.from("businesses").select("settings").eq("id", business.id).maybeSingle(),
+  ]);
+  if (error) throw new Error(`metered usage query failed: ${error.message}`);
+  if (bizError) throw new Error(`budget settings query failed: ${bizError.message}`);
 
-  const byAction = new Map<string, { count: number; credits: number }>();
-  let total = 0;
+  let totalGbp = 0;
+  let pricedLines = 0;
+  let unpricedLines = 0;
+  let unpricedTokens = 0;
+  const byDay = new Map<string, { gbp: number; lines: number }>();
+  const byAction = new Map<string, { lines: number; gbp: number; tokens: number }>();
   for (const row of data ?? []) {
-    const cost = row.cost as EventRow["cost"];
-    const credits = typeof cost?.credits === "number" ? cost.credits : 0;
-    total += credits;
-    const entry = byAction.get(row.action) ?? { count: 0, credits: 0 };
-    entry.count += 1;
-    entry.credits += credits;
-    byAction.set(row.action, entry);
+    const cost = row.cost as Record<string, unknown> | null;
+    const amount = pricedAmountGbp(cost);
+    const tokens = typeof cost?.tokens === "number" ? (cost.tokens as number) : 0;
+    const day = String(row.occurred_at).slice(0, 10);
+    const dayEntry = byDay.get(day) ?? { gbp: 0, lines: 0 };
+    const actionEntry = byAction.get(row.action) ?? { lines: 0, gbp: 0, tokens: 0 };
+    dayEntry.lines += 1;
+    actionEntry.lines += 1;
+    actionEntry.tokens += tokens;
+    if (amount === null) {
+      unpricedLines += 1;
+      unpricedTokens += tokens;
+    } else {
+      totalGbp += amount;
+      pricedLines += 1;
+      dayEntry.gbp += amount;
+      actionEntry.gbp += amount;
+    }
+    byDay.set(day, dayEntry);
+    byAction.set(row.action, actionEntry);
   }
+
+  const budget = resolveAiBudget((bizRow?.settings ?? {}) as Record<string, unknown>);
+  const assessment = evaluateAiBudget(totalGbp, budget);
   return {
-    totalCredits: total,
+    totalGbp,
+    pricedLines,
+    unpricedLines,
+    unpricedTokens,
+    byDay: [...byDay.entries()]
+      .map(([day, v]) => ({ day, ...v }))
+      .sort((a, b) => b.day.localeCompare(a.day)),
     byAction: [...byAction.entries()]
       .map(([action, v]) => ({ action, ...v }))
-      .sort((a, b) => b.credits - a.credits),
+      .sort((a, b) => b.gbp - a.gbp || b.lines - a.lines),
+    budget: {
+      softCapGbp: budget.soft_cap_gbp,
+      hardCapGbp: budget.hard_cap_gbp,
+      softCrossed: assessment.soft_crossed,
+      hardCrossed: assessment.hard_crossed,
+    },
+    isOwner: membershipRole === "owner",
   };
 }
 

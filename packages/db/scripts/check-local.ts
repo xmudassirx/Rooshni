@@ -55,6 +55,14 @@ import {
   selectConversionCandidates,
   sha256Hex,
 } from "../src/conversions";
+import {
+  evaluateAiBudget,
+  guardGenerationBudget,
+  pricedAmountGbp,
+  resolveAiBudget,
+  softCapJustCrossed,
+} from "../src/ai-budget";
+import { priceGeneration, USD_TO_GBP_RATE } from "../src/model-router";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -3964,6 +3972,84 @@ async function main() {
     if (!/ads_read/.test(classified.reason)) throw new Error("the skip must NAME the missing scope");
     const other = classifyMetaSpendError({ message: "Unsupported get request", type: "GraphMethodException", code: 100 });
     if (other.missing_scope) throw new Error("an unrelated error must not masquerade as a scope gap");
+  });
+
+  // Session 22 (WS2) — billing caps and the priced meter: enforcement lives
+  // in the drafting path via these seams; the approval/send doors above run
+  // with no budget dependency at all (the structural proof that sends
+  // continue — nothing in the SQL pipeline reads a cap).
+  console.log("\nSession 22 — billing caps and the priced meter (WS2):");
+
+  await expectOk("the caps resolve from settings.ai_budget — absent, zero or junk means no cap", async () => {
+    const none = resolveAiBudget({});
+    if (none.soft_cap_gbp !== null || none.hard_cap_gbp !== null) throw new Error("absent caps must be null");
+    const junk = resolveAiBudget({ ai_budget: { soft_cap: -5, hard_cap: "ten" } });
+    if (junk.soft_cap_gbp !== null || junk.hard_cap_gbp !== null) throw new Error("junk caps must be null");
+    const set = resolveAiBudget({ ai_budget: { soft_cap: 5, hard_cap: 20 } });
+    if (set.soft_cap_gbp !== 5 || set.hard_cap_gbp !== 20) throw new Error("set caps must read back");
+  });
+
+  await expectError(
+    "the hard cap refuses generation VISIBLY, naming the cap — the s15 permanent-failure lane",
+    /hard cap.*£1\.00.*generation refuses/i,
+    async () => {
+      guardGenerationBudget(1.02, { soft_cap_gbp: null, hard_cap_gbp: 1 });
+    }
+  );
+
+  await expectOk("under the hard cap (or with only a soft cap) generation proceeds — soft NEVER throws", async () => {
+    guardGenerationBudget(0.99, { soft_cap_gbp: null, hard_cap_gbp: 1 });
+    guardGenerationBudget(999, { soft_cap_gbp: 5, hard_cap_gbp: null });
+    guardGenerationBudget(999, { soft_cap_gbp: null, hard_cap_gbp: null });
+  });
+
+  await expectOk("the hard-cap refusal is the s15 lane's PermanentGenerationError (never a silent stub)", async () => {
+    try {
+      guardGenerationBudget(2, { soft_cap_gbp: null, hard_cap_gbp: 1 });
+      throw new Error("no refusal was raised");
+    } catch (err) {
+      if (!(err instanceof PermanentGenerationError)) {
+        throw new Error("the refusal must ride the permanent-failure lane so the step fails visibly");
+      }
+      if (!/template-path drafts continue|sends.*continue/i.test((err as Error).message)) {
+        throw new Error("the refusal must state that non-generative work continues");
+      }
+    }
+  });
+
+  await expectOk("the soft cap banners without blocking — crossing detected exactly once", async () => {
+    const budget = { soft_cap_gbp: 5, hard_cap_gbp: null };
+    if (!softCapJustCrossed(4.9, 5.1, budget)) throw new Error("the crossing must be detected");
+    if (softCapJustCrossed(3, 4, budget)) throw new Error("no crossing below the cap");
+    if (softCapJustCrossed(5.2, 6, budget)) throw new Error("an already-crossed month must not re-fire");
+    if (softCapJustCrossed(1, 9, { soft_cap_gbp: null, hard_cap_gbp: null })) {
+      throw new Error("no soft cap means no crossing");
+    }
+    const assessed = evaluateAiBudget(5.1, budget);
+    if (!assessed.soft_crossed || assessed.hard_crossed) {
+      throw new Error("a soft crossing must never read as a hard stop");
+    }
+  });
+
+  await expectOk("the meter prices at list rates with the recorded fx — an unknown model stays unpriced", async () => {
+    const floor = priceGeneration({ model: LIGHT_MODEL_FLOOR.model, input_tokens: 1_000_000, output_tokens: 0 });
+    if (!floor || floor.amount_usd !== 1 || floor.amount_gbp !== Math.round(1 * USD_TO_GBP_RATE * 1e6) / 1e6) {
+      throw new Error("floor input pricing must be the list rate times the recorded fx");
+    }
+    const cached = priceGeneration({
+      model: LIGHT_MODEL_FLOOR.model,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 1_000_000,
+    });
+    if (!cached || cached.amount_usd !== 0.1) throw new Error("cache reads price at the cache-read rate");
+    if (priceGeneration({ model: "some-future-model", input_tokens: 1000, output_tokens: 10 }) !== null) {
+      throw new Error("an unknown model must stay unpriced, never guessed");
+    }
+    if (pricedAmountGbp({ provider: "anthropic", model: LIGHT_MODEL_FLOOR.model, tokens: 1200 }) !== null) {
+      throw new Error("a pre-meter cost block must read as unpriced, never retro-priced");
+    }
+    if (pricedAmountGbp({ amount_gbp: 0.02 }) !== 0.02) throw new Error("a priced line must read back");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

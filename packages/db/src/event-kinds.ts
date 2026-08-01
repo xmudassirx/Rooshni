@@ -152,4 +152,14 @@ export const CONVERSION_EVENT_KINDS = {
   spendPullSkipped: "meta.spend_pull_skipped",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 22 — billing & usage (WS2). Same JUDGMENT as above: kinds are TS
+ * constants, the single truth every emitter imports.
+ */
+export const BILLING_EVENT_KINDS = {
+  /** The month's metered spend crossed the owner-set soft cap — once per
+   * month on The Record; the pages banner from live truth (ruling 2b). */
+  softCapCrossed: "billing.soft_cap_crossed",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

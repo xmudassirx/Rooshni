@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BudgetBanner } from "@/components/shell/budget-banner";
 import { EmptyState } from "@/components/shell/empty-state";
 import { OpenFirstLightButton } from "@/components/shell/open-first-light";
 import { PageHead } from "@/components/shell/page-head";
@@ -165,6 +166,17 @@ export default async function DashboardPage() {
         sub="Vigilance and tiles over live rows — attention curation arrives with the monitors session"
       />
 
+      {/* WS2 (Session 22): the cap banner renders from live truth — soft
+          warns, hard says generation is refusing; the ledger holds the
+          crossing event once per month. */}
+      <BudgetBanner
+        softCapGbp={dash.budget.softCapGbp}
+        hardCapGbp={dash.budget.hardCapGbp}
+        softCrossed={dash.budget.softCrossed}
+        hardCrossed={dash.budget.hardCrossed}
+        spendGbp={dash.meteredCostGbpThisMonth}
+      />
+
       {/* Morning digest — Light's slot. Light has not written one yet, and an
           unwritten digest never pretends otherwise (decision 19 caveat). */}
       <div className="light-panel mb-4 rounded-xl p-4">
@@ -280,15 +292,21 @@ export default async function DashboardPage() {
           )}
         </Tile>
 
-        <Tile href="/record" head="AI credits · this month">
+        <Tile href="/billing" head="Metered cost · this month">
           <div className="font-display text-[22px] leading-none font-black">
-            {dash.creditsThisMonth} credit{dash.creditsThisMonth === 1 ? "" : "s"}
+            £{dash.meteredCostGbpThisMonth.toFixed(2)}
           </div>
           <div className="mt-1.5 text-xs text-ink-soft">
             {dash.meteredEventsThisMonth
-              ? `${dash.meteredEventsThisMonth} metered action${dash.meteredEventsThisMonth === 1 ? "" : "s"} on The Record this month.`
+              ? `${dash.meteredEventsThisMonth} metered action${dash.meteredEventsThisMonth === 1 ? "" : "s"} on The Record this month${
+                  dash.unpricedEventsThisMonth
+                    ? ` (${dash.unpricedEventsThisMonth} pre-meter, unpriced)`
+                    : ""
+                }.`
               : "No metered actions on The Record this month."}{" "}
-            Caps and the meter arrive with Billing &amp; usage.
+            {dash.budget.hardCapGbp !== null || dash.budget.softCapGbp !== null
+              ? "Caps set in Billing & usage."
+              : "No caps set — Billing & usage is the door."}
           </div>
         </Tile>
       </div>

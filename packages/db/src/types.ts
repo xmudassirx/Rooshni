@@ -29,6 +29,16 @@ export interface EventRow {
     provider?: string;
     model?: string;
     tokens?: number;
+    /** Session 22 (WS2): the priced meter — the token split and the amount
+     * at provider list rates with the recorded fx (ruling 2a, no margin).
+     * Pre-s22 lines lack these and stay honestly unpriced. */
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+    amount_gbp?: number;
+    amount_usd?: number;
+    fx_rate?: number;
   } | null;
   occurred_at: string;
 }
