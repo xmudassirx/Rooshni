@@ -2,8 +2,11 @@ import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
 import {
   plainTextOfBody,
+  readGmailEnv,
+  readGraphEnv,
   renderEmailHtml,
   resolveEmailIdentity,
+  resolveMailProvider,
   resolveSignOffBody,
   resolveSignOffMode,
   resolveSignOffText,
@@ -2811,6 +2814,45 @@ export interface IntegrationState {
   key: "mail" | "whatsapp" | "meta" | "calendar" | "stripe";
   connected: boolean;
   detail: string | null;
+}
+
+export interface MailPipeState {
+  /** The selected carrier — graph unless settings say gmail (Session 20). */
+  provider: "graph" | "gmail";
+  isOwner: boolean;
+  graph: { carrierConfigured: boolean; mailbox: string | null };
+  gmail: { carrierConfigured: boolean; mailbox: string | null };
+}
+
+/**
+ * Session 20 — which pipe carries the firm's tenant email, and how far each
+ * pipe's wiring has actually got: carrier env present (a boolean, never a
+ * value) and the inbound mailbox binding from businesses.settings. Honest
+ * state only — nothing here invents a connection.
+ */
+export async function getMailPipeState(): Promise<MailPipeState> {
+  const { db, business, membershipRole } = await getAppContext();
+  const { data: bizRow, error } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (error) throw new Error(`mail pipe settings query failed: ${error.message}`);
+  const settings = (bizRow?.settings ?? {}) as Record<string, unknown>;
+  const graphSettings = (settings.graph ?? {}) as Record<string, unknown>;
+  const gmailSettings = (settings.gmail ?? {}) as Record<string, unknown>;
+  return {
+    provider: resolveMailProvider(settings),
+    isOwner: membershipRole === "owner",
+    graph: {
+      carrierConfigured: readGraphEnv() !== null,
+      mailbox: typeof graphSettings.mailbox === "string" ? graphSettings.mailbox : null,
+    },
+    gmail: {
+      carrierConfigured: readGmailEnv() !== null,
+      mailbox: typeof gmailSettings.mailbox === "string" ? gmailSettings.mailbox : null,
+    },
+  };
 }
 
 /** Connection state, read the way the predicates read it: a live grant to an

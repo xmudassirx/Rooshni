@@ -3,8 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
   createAnthropicGenerator,
+  createGmailInboundReader,
   createGraphInboundReader,
   dispatchApprovedCommunications,
+  pollGmailInbound,
   pollGraphInbound,
   runWorkflowTick,
   sweepPreActiveSignups,
@@ -90,6 +92,13 @@ async function tick(request: NextRequest): Promise<NextResponse> {
   // no-op and never a tick failure.
   const inbound = await pollGraphInbound(db, createGraphInboundReader());
 
+  // Session 20: the Gmail sibling rides the same cron through the same poll
+  // engine — its own claims (gmail_mail_events), its own binding
+  // (settings.gmail.mailbox), its own cursor. Absent configuration is a
+  // visible non-report; a consent/scope gap is a visible error, never a
+  // silent no-op and never a tick failure.
+  const gmail = await pollGmailInbound(db, createGmailInboundReader());
+
   // Session 16 (PR-B/C/D): the settle sweep runs AFTER the inbound poll —
   // a burst that just settled (including mail this same tick ingested under
   // an instant window) yields its ONE reply draft now; pending drafts the
@@ -103,11 +112,13 @@ async function tick(request: NextRequest): Promise<NextResponse> {
       signups.errors.length === 0 &&
       dispatch.errors.length === 0 &&
       inbound.errors.length === 0 &&
+      gmail.errors.length === 0 &&
       settle.errors.length === 0,
     report,
     signups,
     dispatch,
     inbound,
+    gmail,
     settle,
   });
 }

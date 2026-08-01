@@ -276,3 +276,73 @@ Add to this list during build; check items off only at go-live.
       confirm in Supabase Studio → Storage that `files` exists and is
       PRIVATE (no public access). Guide bytes leave only as mail
       attachments.
+- [ ] **Enable the Supabase Azure provider — the Microsoft door's one
+      remaining tick** (introduced Session 20, WS1; this closes the standing
+      "Microsoft sign-in before the first external pilot" item above). The
+      app side ships fail-closed: the button fires
+      `provider=azure&scopes=email` and Supabase answers 400
+      "provider is not enabled" until these steps run.
+      1. Supabase Dashboard → Authentication → Sign In / Providers → Azure:
+         enable; Client ID = `AZURE_CLIENT_ID`'s value; Secret = a client
+         secret VALUE from the same app registration (the
+         `AZURE_CLIENT_SECRET` value works; minting a separate secret named
+         "supabase-signin" keeps rotation independent of Graph mail —
+         recommended). Azure Tenant URL: `https://login.microsoftonline.com/organizations`
+         covers work accounts of ANY tenant; `/common` also admits personal
+         Microsoft accounts. Recommendation: `organizations` now (pilots are
+         firms), widen to `common` only if a pilot needs a personal account.
+         Note the Callback URL the dashboard shows
+         (`https://<project-ref>.supabase.co/auth/v1/callback`).
+      2. Azure portal → Microsoft Entra ID → App registrations → the
+         existing Barakah app → Authentication → Add a platform → **Web** →
+         Redirect URI = that exact callback URL → Configure. (The app-only
+         Graph mail flow is unaffected by adding a platform.)
+      3. Same app → Overview → "Supported account types": for external
+         pilots' own Microsoft tenants this must be "Accounts in any
+         organizational directory" (add "and personal Microsoft accounts"
+         only with `/common` above). Changing audience is Manifest →
+         `signInAudience` or the Authentication blade — founder's tick;
+         single-tenant means only X Law's own tenant can walk the door.
+      4. Same app → Manifest → add the optional claim so Supabase can TRUST
+         Entra's email verification and auto-link the same email to the one
+         existing account (the one-account law): under `optionalClaims`,
+         add `{"name": "xms_edov", "essential": false}` to BOTH `idToken`
+         and `accessToken` arrays. Without it an unverified-email account
+         forks to a second auth user, which now fails closed to the holding
+         page (Session 20 guard) instead of linking.
+      5. Prove the DoD: an allowlisted Microsoft account lands in the
+         shell; an unallowed one meets the nameless holding page.
+- [ ] **Gmail (Google Workspace) wiring — the staged Session 20 DoD, the
+      founder's morning steps** (introduced Session 20, WS2; built
+      fail-closed and harness-proven — nothing sends or polls until these
+      run, and X Law stays on Graph regardless):
+      1. Google Cloud console → a project for Barakah → APIs & Services →
+         Library → enable **Gmail API**.
+      2. APIs & Services → OAuth consent screen: User type **Internal**
+         (Workspace — no Google review), app name Barakah, add scopes
+         `gmail.send` and `gmail.readonly`. Internal type requires the
+         mailbox's Workspace domain; a plain @gmail.com test mailbox needs
+         External + test-user listing instead.
+      3. Credentials → Create credentials → OAuth client ID → **Web
+         application** → Authorised redirect URI exactly
+         `http://localhost:8765/callback` (the gmail:authorize listener).
+      4. Put `GMAIL_CLIENT_ID` + `GMAIL_CLIENT_SECRET` in `.env.local`,
+         then `npm run gmail:authorize --workspace=@rooshni/db`, sign in AS
+         the firm's mailbox, and place the printed `GMAIL_REFRESH_TOKEN` +
+         `GMAIL_SENDER_ADDRESS` in `.env.local` and Vercel. Where they
+         live: .env.local + Vercel env vars. What they grant: sending and
+         reading mail as that mailbox. Rotation: revoke under the Google
+         account's Security → Third-party access (a Workspace admin can
+         also revoke); re-run gmail:authorize to re-mint; an Internal
+         consent screen's refresh tokens do not expire on the 7-day
+         testing clock.
+      5. Apply 0033 live: `npm run db:migrate` (rides the same apply as
+         0032 if both are pending).
+      6. Bind inbound: `npm run wire-inbound --workspace=@rooshni/db -- --gmail <mailbox> <business_id>`.
+      7. Select the pipe: Settings → Integrations → mail row → Google
+         Workspace (owner's pen). Selection is absolute — that business's
+         mail then leaves ONLY via Gmail; the Graph-bound X Law business is
+         untouched.
+      8. Prove: send one stamped email out and reply to it inbound; the
+         reply threads by its References ids and appears in Conversations
+         within a tick (5 min).

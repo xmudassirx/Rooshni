@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ProviderRejectedError, type SendResult } from "./send";
+import { parseReferenceIds, type InboundMailMessage, type MailboxInboundReader } from "./mailbox";
 
 /**
  * Microsoft Graph mail — the firm's outbound email carrier (Session 10).
@@ -81,38 +82,10 @@ async function graphJson<T>(
   return { status: response.status, body };
 }
 
-/** One inbound mail as the poll reads it (Session 16, PR-A). */
-export interface GraphInboundMessage {
-  id: string;
-  internetMessageId: string | null;
-  receivedDateTime: string;
-  subject: string | null;
-  fromAddress: string | null;
-  fromName: string | null;
-  /** Plain-text body (Prefer: outlook.body-content-type="text"). */
-  bodyText: string;
-  /** RFC 5322 message ids this mail replies into (In-Reply-To + References). */
-  referenceIds: string[];
-}
-
-export interface GraphInboundReader {
-  mailbox: string;
-  /** New inbox mail strictly after the cursor, oldest first, capped. */
-  listNewMessages: (sinceIso: string, top?: number) => Promise<
-    Array<{ id: string; internetMessageId: string | null; receivedDateTime: string; subject: string | null; fromAddress: string | null; fromName: string | null }>
-  >;
-  /** Full detail for one message: text body + reply headers. */
-  getMessage: (id: string) => Promise<GraphInboundMessage>;
-}
-
-/** Extract every <rfc-id> from In-Reply-To/References header values. */
-export function parseReferenceIds(headerValues: string[]): string[] {
-  const ids = new Set<string>();
-  for (const value of headerValues) {
-    for (const match of value.matchAll(/<[^<>\s]+>/g)) ids.add(match[0]);
-  }
-  return [...ids];
-}
+/** The provider-neutral shapes moved to mailbox.ts (Session 20) — Graph's
+ * names stay as aliases so Session 16 call sites read unchanged. */
+export type GraphInboundMessage = InboundMailMessage;
+export type GraphInboundReader = MailboxInboundReader;
 
 /**
  * Builds the inbound mailbox reader, or null when Graph is not configured

@@ -58,19 +58,53 @@ export interface OutboundAttachment {
   contentBase64: string;
 }
 
+export type SendEmailFn = (input: {
+  to: string;
+  subject: string | null;
+  body: string;
+  bodyFormat: string;
+  attachments?: OutboundAttachment[];
+}) => Promise<SendResult>;
+
 export interface OutboundProviders {
-  sendEmail?: (input: {
-    to: string;
-    subject: string | null;
-    body: string;
-    bodyFormat: string;
-    attachments?: OutboundAttachment[];
-  }) => Promise<SendResult>;
+  /** The Microsoft Graph email carrier — the tenant default since Session 10. */
+  sendEmail?: SendEmailFn;
+  /** The Gmail email carrier (Session 20) — carries ONLY businesses whose
+   * settings select mail_provider "gmail"; a Graph business never touches it. */
+  sendGmail?: SendEmailFn;
   sendWhatsApp?: (input: {
     to: string;
     body: string;
     template: WaTemplateRef | null;
   }) => Promise<SendResult>;
+}
+
+/** Which mail pipe carries a business's tenant email (Session 20). Selected
+ * per business in businesses.settings.mail_provider; anything but the
+ * literal "gmail" reads as the Graph default — an unknown value can never
+ * route mail to an unintended carrier. */
+export type TenantMailProvider = "graph" | "gmail";
+
+export function resolveMailProvider(settings: Record<string, unknown> | null | undefined): TenantMailProvider {
+  return settings?.mail_provider === "gmail" ? "gmail" : "graph";
+}
+
+/**
+ * The ONE place a business's email carrier is chosen (Session 20) — pure, so
+ * the harness proves the isolation law: selection is absolute, a business
+ * never falls back to the OTHER provider's carrier (the firm's mail leaves
+ * only as the firm configured it), and an unconfigured selected carrier
+ * returns null — the dispatcher's visible skip, never a silent reroute.
+ */
+export function selectEmailCarrier(
+  providers: OutboundProviders,
+  settings: Record<string, unknown> | null | undefined
+): { provider: TenantMailProvider; send: SendEmailFn | null } {
+  const provider = resolveMailProvider(settings);
+  return {
+    provider,
+    send: (provider === "gmail" ? providers.sendGmail : providers.sendEmail) ?? null,
+  };
 }
 
 export interface DispatchReport {
@@ -324,13 +358,22 @@ export async function dispatchApprovedCommunications(
       let result: SendResult;
       let sentEmailHtml: string | null = null;
       if (comm.channel === "email") {
-        if (!options.providers.sendEmail) {
+        // Session 20: the business's selected mail pipe carries its email —
+        // the pure selectEmailCarrier decides (isolation proven in the
+        // harness), and an unconfigured selected carrier is a visible skip.
+        const { provider: mailProvider, send: sendViaProvider } = selectEmailCarrier(
+          options.providers,
+          facts.settings
+        );
+        if (!sendViaProvider) {
           report.skipped += 1;
-          report.errors.push(`comm ${comm.id}: email carrier not configured — it stays approved`);
+          report.errors.push(
+            `comm ${comm.id}: ${mailProvider === "gmail" ? "Gmail" : "email (Graph)"} carrier not configured — it stays approved`
+          );
           continue;
         }
         const to = await resolveDestination(db, contactId, "email");
-        if (!to) throw new ProviderRejectedError("no live email channel on the contact", "graph");
+        if (!to) throw new ProviderRejectedError("no live email channel on the contact", mailProvider);
         // PR-iii (Session 19): the HTML dress — the SAME deterministic
         // renderer the stamp card previewed, over the STORED body (WYSIWYS,
         // the decision 140 pattern). Firm name + regulated-status footer come
@@ -352,7 +395,7 @@ export async function dispatchApprovedCommunications(
           attachments = [];
           for (const att of declared) {
             if (!att.file_id) {
-              throw new ProviderRejectedError(`a declared attachment carries no file id`, "graph");
+              throw new ProviderRejectedError(`a declared attachment carries no file id`, mailProvider);
             }
             const files = await q<{ storage_key: string; filename: string; mime_type: string; size_bytes: number }[]>(
               db
@@ -367,13 +410,13 @@ export async function dispatchApprovedCommunications(
             if (!file) {
               throw new ProviderRejectedError(
                 `declared attachment ${att.filename ?? att.file_id} no longer exists — nothing was sent`,
-                "graph"
+                mailProvider
               );
             }
             if (Number(file.size_bytes) > ATTACHMENT_MAX_BYTES) {
               throw new ProviderRejectedError(
                 `attachment "${file.filename}" is over the 8MB limit — the send is refused (config error)`,
-                "graph"
+                mailProvider
               );
             }
             const { data: blob, error: downloadError } = await db.storage
@@ -396,7 +439,7 @@ export async function dispatchApprovedCommunications(
         // send): the message's own rendered subject travels on the row;
         // the thread's subject — which may be an internal label — is only
         // the fallback for hand-written replies on subject-titled threads.
-        result = await options.providers.sendEmail({
+        result = await sendViaProvider({
           to,
           subject: (comm.attributes?.subject as string | undefined) ?? threads[0]?.subject ?? null,
           body: sentEmailHtml ?? comm.body,

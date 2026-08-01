@@ -1,5 +1,6 @@
 import "server-only";
 import {
+  createGmailEmailSender,
   createGraphEmailSender,
   createServiceClient,
   createWhatsAppSender,
@@ -9,10 +10,12 @@ import {
 } from "@rooshni/db";
 
 /**
- * The web app's outbound carriers, wired from env (Session 10). Tenant comms
- * only: email rides Microsoft Graph as the firm, WhatsApp rides the Cloud
- * API. Platform mail rides Resend in platform-mail.ts and the two pipes
- * never mix (decision 87).
+ * The web app's outbound carriers, wired from env (Session 10; Gmail joined
+ * at Session 20). Tenant comms only: email rides the business's SELECTED
+ * provider — Microsoft Graph by default, the Gmail API where
+ * settings.mail_provider says so — and WhatsApp rides the Cloud API.
+ * Platform mail rides Resend in platform-mail.ts and the two pipes never
+ * mix (decision 87).
  *
  * An unconfigured carrier is simply absent — the dispatcher leaves those
  * rows approved and says so in its report; nothing fails silently and
@@ -21,6 +24,7 @@ import {
 export function outboundProviders(): OutboundProviders {
   return {
     sendEmail: createGraphEmailSender() ?? undefined,
+    sendGmail: createGmailEmailSender() ?? undefined,
     sendWhatsApp: createWhatsAppSender() ?? undefined,
   };
 }

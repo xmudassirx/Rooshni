@@ -147,6 +147,63 @@ export async function updateDraftingSettingsAction(
 }
 
 /**
+ * Session 20 — Settings → Integrations: which pipe carries the firm's
+ * tenant email. Owner-gated like every business-level policy; one settings
+ * merge, one settings.updated line on The Record. Selection is config, not
+ * connection — the carrier's credentials and the inbound mailbox binding
+ * remain founder wiring (env + wire-inbound), and the tab renders that
+ * state honestly.
+ */
+export interface MailProviderActionState {
+  error: string | null;
+  saved?: boolean;
+}
+
+export async function setMailProviderAction(
+  _prev: MailProviderActionState,
+  formData: FormData
+): Promise<MailProviderActionState> {
+  const provider = String(formData.get("mail_provider") ?? "");
+  if (provider !== "graph" && provider !== "gmail") {
+    return { error: "Unknown mail provider." };
+  }
+
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "The mail pipe is the owner's pen — ask the owner to change it." };
+  }
+
+  const { data: bizRow, error: readError } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (readError || !bizRow) return { error: `Settings read failed: ${readError?.message ?? "no row"}` };
+
+  const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
+  if (provider === "gmail") settings.mail_provider = "gmail";
+  else delete settings.mail_provider; // absent = the Graph default, one truth
+
+  const { error: writeError } = await db
+    .from("businesses")
+    .update({ settings })
+    .eq("id", business.id);
+  if (writeError) return { error: `Save failed: ${writeError.message}` };
+
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: FIRST_LIGHT_EVENT_KINDS.settingsUpdated,
+    entity_type: "business",
+    entity_id: business.id,
+    payload: { keys: ["mail_provider"], mail_provider: provider },
+  });
+
+  revalidatePath("/settings");
+  return { error: null, saved: true };
+}
+
+/**
  * PR-i (Session 19): store a route guide's document — bytes to the private
  * Supabase Storage bucket (service client; files.storage_key has always
  * pointed at a storage backend), the files row + file_links row under the
@@ -270,20 +327,27 @@ export async function saveKnowledgeEntryAction(
   if (visaRoute && !vocab.routes.has(visaRoute)) {
     return { error: "Unknown visa route — pick one the template declares." };
   }
-  if (category === "route_guide") {
-    if (!id && !guideFile) {
-      return { error: "A route guide is a document — attach its PDF (up to 8MB)." };
+  // Founder ruling (1 Aug 2026, recorded this hotfix): a guide document may
+  // ride ANY route-scoped entry — one Spouse entry carrying text AND the PDF
+  // is the preferred curation shape; a separate route_guide row remains
+  // valid but optional. The door therefore offers the file wherever a route
+  // can be declared; route_guide still REQUIRES its document (that category
+  // is nothing without one), while a service description's document is
+  // optional.
+  const routeScoped = category === "service_description" || category === "route_guide";
+  if (category === "route_guide" && !id && !guideFile) {
+    return { error: "A route guide is a document — attach its PDF (up to 8MB)." };
+  }
+  if (guideFile) {
+    if (!routeScoped) {
+      return { error: "A document attaches to a route-scoped entry — pick a route category." };
     }
-    if (guideFile) {
-      if (guideFile.size > ATTACHMENT_MAX_BYTES) {
-        return { error: "The guide is over the 8MB limit — upload a smaller file." };
-      }
-      const isPdf =
-        guideFile.type === "application/pdf" || guideFile.name.toLowerCase().endsWith(".pdf");
-      if (!isPdf) return { error: "Route guides are PDF documents — upload a .pdf file." };
+    if (guideFile.size > ATTACHMENT_MAX_BYTES) {
+      return { error: "The guide is over the 8MB limit — upload a smaller file." };
     }
-  } else if (guideFile) {
-    return { error: "Only route-guide entries carry a document." };
+    const isPdf =
+      guideFile.type === "application/pdf" || guideFile.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) return { error: "Guide documents are PDFs — upload a .pdf file." };
   }
 
   const attributes: Record<string, string> = { knowledge_category: category };

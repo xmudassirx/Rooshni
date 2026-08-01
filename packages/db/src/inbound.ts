@@ -3,7 +3,7 @@ import { emitEvent } from "./events";
 import { INBOUND_EVENT_KINDS } from "./event-kinds";
 import { normalisePhone } from "./meta";
 import { armSettleTimer } from "./supersede";
-import type { GraphInboundReader } from "./graph";
+import type { MailboxInboundReader } from "./mailbox";
 
 /**
  * Inbound capture (Session 16, PR-A) — the supersede engine's prerequisite.
@@ -39,13 +39,14 @@ export interface InboundBinding {
 /**
  * Which tenant does an inbound door belong to? The binding lives in
  * businesses.settings (settings.whatsapp.phone_number_id for the WhatsApp
- * number, settings.graph.mailbox for the polled mailbox) — set by
- * `npm run wire-inbound`. Exactly one match is lawful; ambiguity or absence
- * is a loud failure, never a guess (the resolveMetaBusiness pattern).
+ * number, settings.graph.mailbox / settings.gmail.mailbox for the polled
+ * mailbox of each provider) — set by `npm run wire-inbound`. Exactly one
+ * match is lawful; ambiguity or absence is a loud failure, never a guess
+ * (the resolveMetaBusiness pattern).
  */
 export async function resolveInboundBusiness(
   db: SupabaseClient,
-  binding: { whatsapp_phone_number_id?: string; graph_mailbox?: string }
+  binding: { whatsapp_phone_number_id?: string; graph_mailbox?: string; gmail_mailbox?: string }
 ): Promise<InboundBinding> {
   let query = db.from("businesses").select("id, account_id").is("archived_at", null);
   let label: string;
@@ -55,6 +56,9 @@ export async function resolveInboundBusiness(
   } else if (binding.graph_mailbox) {
     query = query.eq("settings->graph->>mailbox", binding.graph_mailbox.toLowerCase());
     label = `mailbox ${binding.graph_mailbox}`;
+  } else if (binding.gmail_mailbox) {
+    query = query.eq("settings->gmail->>mailbox", binding.gmail_mailbox.toLowerCase());
+    label = `Gmail mailbox ${binding.gmail_mailbox}`;
   } else {
     throw new Error("resolveInboundBusiness needs a binding value");
   }
@@ -401,7 +405,7 @@ export async function recordInboundWhatsApp(
   };
 }
 
-export interface GraphPollReport {
+export interface MailPollReport {
   configured: boolean;
   polled: number;
   ingested: number;
@@ -410,18 +414,40 @@ export interface GraphPollReport {
   cursor: string | null;
 }
 
-/** Read-modify-write of the settings.graph cursor (service-role act). */
-async function writeGraphCursor(db: SupabaseClient, businessId: string, cursorIso: string): Promise<void> {
+/** The Session 16 name, kept for its call sites. */
+export type GraphPollReport = MailPollReport;
+
+/** Per-provider wiring for the shared mailbox poll (Session 20): where the
+ * binding and cursor live in businesses.settings, which claim table takes
+ * the idempotency insert, and which external_refs system names the rows. */
+interface MailProviderConfig {
+  provider: "graph" | "gmail";
+  claimTable: "graph_mail_events" | "gmail_mail_events";
+  providerIdColumn: "graph_message_id" | "gmail_message_id";
+}
+
+const MAIL_POLL_CONFIGS: Record<"graph" | "gmail", MailProviderConfig> = {
+  graph: { provider: "graph", claimTable: "graph_mail_events", providerIdColumn: "graph_message_id" },
+  gmail: { provider: "gmail", claimTable: "gmail_mail_events", providerIdColumn: "gmail_message_id" },
+};
+
+/** Read-modify-write of the settings.<provider> cursor (service-role act). */
+async function writeMailCursor(
+  db: SupabaseClient,
+  businessId: string,
+  provider: "graph" | "gmail",
+  cursorIso: string
+): Promise<void> {
   const rows = await q<{ settings: Record<string, unknown> }[]>(
     db.from("businesses").select("settings").eq("id", businessId).limit(1),
     "settings read"
   );
   const settings = rows[0]?.settings ?? {};
-  const graph = (settings.graph ?? {}) as Record<string, unknown>;
+  const providerSettings = (settings[provider] ?? {}) as Record<string, unknown>;
   await q(
     db
       .from("businesses")
-      .update({ settings: { ...settings, graph: { ...graph, inbound_cursor: cursorIso } } })
+      .update({ settings: { ...settings, [provider]: { ...providerSettings, inbound_cursor: cursorIso } } })
       .eq("id", businessId)
       .select("id"),
     "cursor write"
@@ -429,30 +455,36 @@ async function writeGraphCursor(db: SupabaseClient, businessId: string, cursorIs
 }
 
 /**
- * Poll the connected tenant mailbox for new inbound mail (PR-A: the existing
- * 5-minute cron; Graph webhook subscriptions are the recorded GO-LIVE future
- * tightening). Thread-matched by References/In-Reply-To against the ids our
- * outbound rows carry, then by sender address; unmatched inbound with a
- * known contact opens a new thread; inbound from strangers is skipped with a
- * recorded outcome. Idempotent on the RFC message id (graph_mail_events).
+ * Poll a connected tenant mailbox for new inbound mail (Session 16 PR-A for
+ * Graph, on the existing 5-minute cron; Session 20 adds the Gmail sibling
+ * through the same engine — webhook/push subscriptions remain the recorded
+ * GO-LIVE future tightening). Thread-matched by References/In-Reply-To
+ * against the ids our outbound rows carry, then by sender address; unmatched
+ * inbound with a known contact opens a new thread; inbound from strangers is
+ * skipped with a recorded outcome. Idempotent on the RFC message id
+ * (graph_mail_events / gmail_mail_events).
  *
- * FAIL VISIBLY: an unconfigured carrier or a Graph permission refusal
- * (Mail.Read application consent not yet granted) lands in the report's
- * errors — never a silent no-op, never a crash that blocks the tick.
+ * FAIL VISIBLY: an unconfigured carrier or a provider permission refusal
+ * (Mail.Read consent, Gmail scope consent) lands in the report's errors —
+ * never a silent no-op, never a crash that blocks the tick.
  */
-export async function pollGraphInbound(
+async function pollMailboxInbound(
   db: SupabaseClient,
-  reader: GraphInboundReader | null,
+  reader: MailboxInboundReader | null,
+  cfg: MailProviderConfig,
   options: { now?: Date; top?: number } = {}
-): Promise<GraphPollReport> {
-  const report: GraphPollReport = { configured: false, polled: 0, ingested: 0, skipped: 0, errors: [], cursor: null };
+): Promise<MailPollReport> {
+  const report: MailPollReport = { configured: false, polled: 0, ingested: 0, skipped: 0, errors: [], cursor: null };
   if (!reader) return report;
   report.configured = true;
   const now = options.now ?? new Date();
 
   let binding: InboundBinding;
   try {
-    binding = await resolveInboundBusiness(db, { graph_mailbox: reader.mailbox });
+    binding = await resolveInboundBusiness(
+      db,
+      cfg.provider === "graph" ? { graph_mailbox: reader.mailbox } : { gmail_mailbox: reader.mailbox }
+    );
   } catch (err) {
     report.errors.push(err instanceof Error ? err.message : String(err));
     return report;
@@ -462,14 +494,14 @@ export async function pollGraphInbound(
     db.from("businesses").select("settings").eq("id", binding.business_id).limit(1),
     "settings read"
   );
-  const graphSettings = (settingsRows[0]?.settings?.graph ?? {}) as Record<string, unknown>;
-  let cursor = typeof graphSettings.inbound_cursor === "string" ? graphSettings.inbound_cursor : null;
+  const providerSettings = (settingsRows[0]?.settings?.[cfg.provider] ?? {}) as Record<string, unknown>;
+  let cursor = typeof providerSettings.inbound_cursor === "string" ? providerSettings.inbound_cursor : null;
   if (!cursor) {
     // First run establishes the baseline: only mail arriving AFTER wiring is
     // ingested — the mailbox's history is not ours to trawl.
     cursor = now.toISOString();
     try {
-      await writeGraphCursor(db, binding.business_id, cursor);
+      await writeMailCursor(db, binding.business_id, cfg.provider, cursor);
     } catch (err) {
       report.errors.push(`cursor baseline write failed: ${err instanceof Error ? err.message : err}`);
       return report;
@@ -478,12 +510,13 @@ export async function pollGraphInbound(
     return report;
   }
 
-  let listed: Awaited<ReturnType<GraphInboundReader["listNewMessages"]>>;
+  let listed: Awaited<ReturnType<MailboxInboundReader["listNewMessages"]>>;
   try {
     listed = await reader.listNewMessages(cursor, options.top ?? 25);
   } catch (err) {
-    // The Mail.Read consent gap lands here as ErrorAccessDenied — visible,
-    // recorded, retried next tick; the founder's console steps lift it.
+    // A consent gap lands here (Graph's ErrorAccessDenied, Gmail's 403) —
+    // visible, recorded, retried next tick; the founder's console steps
+    // lift it.
     report.errors.push(`inbox list failed: ${err instanceof Error ? err.message : err}`);
     return report;
   }
@@ -491,13 +524,13 @@ export async function pollGraphInbound(
 
   let advancedTo: string | null = null;
   for (const head of listed) {
-    const claimKey = head.internetMessageId ?? `graph:${head.id}`;
+    const claimKey = head.internetMessageId ?? `${cfg.provider}:${head.id}`;
     try {
       // Idempotency claim on the RFC message id — an overlapping poll or a
       // cursor replay changes nothing.
-      const { error: claimError } = await db.from("graph_mail_events").insert({
+      const { error: claimError } = await db.from(cfg.claimTable).insert({
         internet_message_id: claimKey,
-        graph_message_id: head.id,
+        [cfg.providerIdColumn]: head.id,
         mailbox: reader.mailbox,
       });
       if (claimError) {
@@ -510,7 +543,7 @@ export async function pollGraphInbound(
       }
       const stamp = async (outcome: string) => {
         await db
-          .from("graph_mail_events")
+          .from(cfg.claimTable)
           .update({ processed_at: new Date().toISOString(), outcome })
           .eq("internet_message_id", claimKey);
       };
@@ -535,7 +568,15 @@ export async function pollGraphInbound(
           db
             .from("communications")
             .select("thread_id, business_id")
-            .contains("external_refs", JSON.stringify([{ system: "graph", external_id: refId }]))
+            // JUDGMENT (Session 20): the reference match reads BOTH mail
+            // systems' refs — an RFC message id is globally unique whichever
+            // carrier minted it, and a thread whose history spans a provider
+            // switch must still match. Business isolation is the check below,
+            // never the system string.
+            .or(
+              `external_refs.cs.${JSON.stringify([{ system: "graph", external_id: refId }])},` +
+                `external_refs.cs.${JSON.stringify([{ system: "gmail", external_id: refId }])}`
+            )
             .limit(1),
           "reference match lookup"
         );
@@ -610,7 +651,7 @@ export async function pollGraphInbound(
             },
             external_refs: [
               {
-                system: "graph",
+                system: cfg.provider,
                 external_id: detail.internetMessageId ?? claimKey,
                 synced_at: new Date().toISOString(),
               },
@@ -662,7 +703,7 @@ export async function pollGraphInbound(
 
   if (advancedTo && advancedTo > cursor) {
     try {
-      await writeGraphCursor(db, binding.business_id, advancedTo);
+      await writeMailCursor(db, binding.business_id, cfg.provider, advancedTo);
       report.cursor = advancedTo;
     } catch (err) {
       report.errors.push(`cursor advance failed: ${err instanceof Error ? err.message : err}`);
@@ -671,4 +712,22 @@ export async function pollGraphInbound(
     report.cursor = cursor;
   }
   return report;
+}
+
+/** The Microsoft Graph poll (Session 16 shape, unchanged behaviour). */
+export async function pollGraphInbound(
+  db: SupabaseClient,
+  reader: MailboxInboundReader | null,
+  options: { now?: Date; top?: number } = {}
+): Promise<MailPollReport> {
+  return pollMailboxInbound(db, reader, MAIL_POLL_CONFIGS.graph, options);
+}
+
+/** The Gmail poll (Session 20) — same engine, same laws, its own claims. */
+export async function pollGmailInbound(
+  db: SupabaseClient,
+  reader: MailboxInboundReader | null,
+  options: { now?: Date; top?: number } = {}
+): Promise<MailPollReport> {
+  return pollMailboxInbound(db, reader, MAIL_POLL_CONFIGS.gmail, options);
 }

@@ -98,13 +98,16 @@ function EntryDialog({
               </>
             ) : null}
           </div>
-          {/* PR-i (Session 19): a route guide is a DOCUMENT — an entry with a
-              file. PDF only, 8MB ceiling (refused loudly at upload, at the
-              stamp, and at dispatch alike). */}
-          {category === "route_guide" ? (
+          {/* PR-i (Session 19) + founder ruling (1 Aug 2026): a guide document
+              may ride ANY route-scoped entry — one route entry carrying text
+              AND the PDF is the preferred shape. PDF only, 8MB ceiling
+              (refused loudly at upload, at the stamp, and at dispatch alike). */}
+          {category === "route_guide" || category === "service_description" ? (
             <label className="mt-2.5 block">
               <span className="mb-1 block font-mono text-[9.5px] font-semibold tracking-[.14em] text-ink-faint uppercase">
-                Document (PDF, up to 8MB)
+                {category === "route_guide"
+                  ? "Document (PDF, up to 8MB)"
+                  : "Guide document (optional PDF, up to 8MB)"}
               </span>
               <input
                 type="file"
@@ -115,7 +118,7 @@ function EntryDialog({
               <span className="mt-1 block text-[11px] text-ink-faint">
                 {entry?.file
                   ? `Current document: ${entry.file.filename} (${(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB) — uploading a new one replaces it (the old file is archived, never deleted).`
-                  : "Once published, Light attaches this guide to intro emails for its route. No file, no attachment — never a placeholder."}
+                  : "Once published, Light attaches this document to intro emails for its route. No file, no attachment — never a placeholder."}
               </span>
             </label>
           ) : null}
