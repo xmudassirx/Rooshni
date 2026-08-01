@@ -1,7 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { dispatchApprovedCommunications, runWorkflowTick, sweepPreActiveSignups } from "@rooshni/db";
+import {
+  createGraphInboundReader,
+  dispatchApprovedCommunications,
+  pollGraphInbound,
+  runWorkflowTick,
+  sweepPreActiveSignups,
+} from "@rooshni/db";
 import { sendSignupReminder } from "@/lib/server/platform-mail";
 import { outboundProviders } from "@/lib/server/outbound";
 
@@ -71,11 +77,23 @@ async function tick(request: NextRequest): Promise<NextResponse> {
   // distinction this phase makes real.
   const dispatch = await dispatchApprovedCommunications(db, { providers: outboundProviders() });
 
+  // Session 16 (PR-A): email inbound rides the same cron — the connected
+  // mailbox is polled for new client mail (Graph webhook subscriptions are
+  // the recorded GO-LIVE future tightening). A missing carrier or a
+  // Mail.Read consent gap is a VISIBLE entry in the report, never a silent
+  // no-op and never a tick failure.
+  const inbound = await pollGraphInbound(db, createGraphInboundReader());
+
   return NextResponse.json({
-    ok: report.errors.length === 0 && signups.errors.length === 0 && dispatch.errors.length === 0,
+    ok:
+      report.errors.length === 0 &&
+      signups.errors.length === 0 &&
+      dispatch.errors.length === 0 &&
+      inbound.errors.length === 0,
     report,
     signups,
     dispatch,
+    inbound,
   });
 }
 

@@ -14,6 +14,7 @@
     "tick": "tsx scripts/tick.ts",
     "tick:watch": "tsx scripts/tick.ts --watch",
     "wire-meta": "tsx scripts/wire-meta.ts",
+    "wire-inbound": "tsx scripts/wire-inbound.ts",
     "circuit:wa-draft": "tsx scripts/circuit-wa-draft.ts",
     "demo:reset": "tsx scripts/demo-reset.ts",
     "first-light:drive": "tsx scripts/first-light-drive.ts",

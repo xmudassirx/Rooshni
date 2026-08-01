@@ -99,4 +99,17 @@ export const DRAFTING_EVENT_KINDS = {
   draftFeedbackRecorded: "draft.feedback_recorded",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 16 — inbound capture and the supersede engine. Same JUDGMENT as
+ * above: kinds are TS constants, the single truth every emitter imports.
+ */
+export const INBOUND_EVENT_KINDS = {
+  /** A client message arrived (WhatsApp webhook or Graph poll) and became a
+   * communications row — provider ids and window state in the payload. */
+  communicationReceived: "communication.received",
+  /** A pending draft was superseded (terminal) — reason and the replacing
+   * communication id in the payload. new_inbound | human_replied. */
+  communicationSuperseded: "communication.superseded",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];
