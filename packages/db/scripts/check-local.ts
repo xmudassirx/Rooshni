@@ -9,7 +9,7 @@ import { quietHoursHoldUntil, QUIET_HOURS_DEFAULT } from "../src/quiet-hours";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
-import { resolveTemplateBody } from "../src/workflow";
+import { canWithdrawWorkflowDefinition, resolveTemplateBody } from "../src/workflow";
 import { formAnswersFromFieldData } from "../src/meta";
 import {
   composeDraft,
@@ -3627,6 +3627,146 @@ async function main() {
     });
     if (!stripped.includes("Salaam,") || !stripped.includes("Can you & the team help?") || /<p>/.test(stripped)) {
       throw new Error(`html-only mail must yield the words, never markup: "${stripped}"`);
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 21 — the stuck-definition escape hatch (0034): an OWNER may
+  // withdraw a pending_approval definition; withdrawn is terminal, frozen,
+  // never deletable, and a withdrawn definition never executes. The ordered
+  // coverage: terminal + evented reason on the row; never executes; the
+  // Withdraw control renders only for pending definitions and only to the
+  // owner (the pure render-gate, the s20 selectEmailCarrier pattern).
+  // ---------------------------------------------------------------------
+  console.log("\nSession 21 — the stuck-definition escape hatch (0034):");
+
+  const s21Pending = await db.query<{ id: string }>(
+    `insert into public.workflow_definitions (business_id, created_by, key, template_id, status, description_plain)
+     values ($1, $2, 'wf_withdraw_test', $3, 'pending_approval', 'A stranded proposal awaiting the escape hatch.')
+     returning id`,
+    [f.business_id, f.human_id, f.template_id]
+  );
+  const s21PendingId = s21Pending.rows[0]!.id;
+  const s21Draft = await db.query<{ id: string }>(
+    `insert into public.workflow_definitions (business_id, created_by, key, template_id, status, description_plain)
+     values ($1, $2, 'wf_withdraw_draft', $3, 'draft', 'A draft — not withdrawable.')
+     returning id`,
+    [f.business_id, f.human_id, f.template_id]
+  );
+  const s21DraftId = s21Draft.rows[0]!.id;
+
+  await expectError("withdrawal requires a reason — it is recorded on the row and the ledger", /reason/, () =>
+    db.query(`select public.withdraw_workflow_definition($1, $2, '   ')`, [s21PendingId, f.human_id])
+  );
+
+  // Owner ONLY (founder-ruled): even a human holding the workflow stamp is
+  // refused — withdrawing is not a stamp act, and the stamps stay absent
+  // until the definition-approval pipeline's own session.
+  await db.query(grantSql, [f.business_id, f.human_id, h2.human2_id, "approvals.workflows", "execute", bizScope, "standing", null, f.human_id, "chat"]);
+  await expectError("a non-owner member cannot withdraw, even holding approvals.workflows", /owner/, () =>
+    db.query(`select public.withdraw_workflow_definition($1, $2, 'not my call')`, [s21PendingId, h2.human2_id])
+  );
+  await expectError("an agent cannot withdraw a definition", /owner/, () =>
+    db.query(`select public.withdraw_workflow_definition($1, $2, 'machine overreach')`, [s21PendingId, f.agent_id])
+  );
+
+  await expectError("only a stamp-awaiting definition can be withdrawn — a draft is refused", /stamp-awaiting/, () =>
+    db.query(`select public.withdraw_workflow_definition($1, $2, 'wrong state')`, [s21DraftId, f.human_id])
+  );
+
+  await expectError("no definition is born withdrawn", /born withdrawn/, () =>
+    db.query(
+      `insert into public.workflow_definitions (business_id, created_by, key, template_id, status, description_plain)
+       values ($1, $2, 'wf_born_withdrawn', $3, 'withdrawn', 'Should never exist.')`,
+      [f.business_id, f.human_id, f.template_id]
+    )
+  );
+  await expectError("withdrawal columns cannot be smuggled onto a birth", /born withdrawn/, () =>
+    db.query(
+      `insert into public.workflow_definitions (business_id, created_by, key, template_id, status, description_plain, withdrawn_at, withdrawn_by_actor_id, withdrawal_reason)
+       values ($1, $2, 'wf_smuggled_withdrawal', $3, 'draft', 'Should never exist.', now(), $2, 'smuggled')`,
+      [f.business_id, f.human_id, f.template_id]
+    )
+  );
+
+  await expectError("status never moves to withdrawn by direct update, even for the superuser", /moves only through/, () =>
+    db.query(`update public.workflow_definitions set status = 'withdrawn' where id = $1`, [s21PendingId])
+  );
+
+  await expectOk("the owner withdraws a pending definition — terminal, reason recorded on the row, gone from the inbox", async () => {
+    const before = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.approval_inbox where item_id = $1`,
+      [s21PendingId]
+    );
+    if (before.rows[0]!.n !== 1) throw new Error("the pending definition should sit in the inbox before withdrawal");
+    await db.query(`select public.withdraw_workflow_definition($1, $2, 'superseded by a later version')`, [
+      s21PendingId,
+      f.human_id,
+    ]);
+    const r = await db.query<{
+      status: string;
+      withdrawn_at: string | null;
+      withdrawn_by_actor_id: string | null;
+      withdrawal_reason: string | null;
+    }>(
+      `select status, withdrawn_at, withdrawn_by_actor_id, withdrawal_reason from public.workflow_definitions where id = $1`,
+      [s21PendingId]
+    );
+    const row = r.rows[0]!;
+    if (row.status !== "withdrawn") throw new Error(`status is ${row.status}`);
+    if (!row.withdrawn_at || row.withdrawn_by_actor_id !== f.human_id) throw new Error("who/when not recorded");
+    if (row.withdrawal_reason !== "superseded by a later version") throw new Error("the reason is not on the row");
+    const after = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.approval_inbox where item_id = $1`,
+      [s21PendingId]
+    );
+    if (after.rows[0]!.n !== 0) throw new Error("a withdrawn definition is still in the inbox");
+  });
+
+  await expectError("withdrawn is terminal — the approve pipeline refuses it", /stamp-awaiting/, () =>
+    db.query(`select public.approve_workflow_definition($1, $2)`, [s21PendingId, f.human_id])
+  );
+  await expectError("withdrawn is terminal — the reject pipeline refuses it", /stamp-awaiting/, () =>
+    db.query(`select public.reject_workflow_definition($1, $2, 'too late')`, [s21PendingId, f.human_id])
+  );
+  await expectError("withdrawn is terminal — it cannot be re-submitted", /draft definitions/, () =>
+    db.query(`select public.submit_workflow_definition($1, $2)`, [s21PendingId, f.human_id])
+  );
+  await expectError("withdrawn is terminal — it cannot be withdrawn twice", /stamp-awaiting/, () =>
+    db.query(`select public.withdraw_workflow_definition($1, $2, 'again')`, [s21PendingId, f.human_id])
+  );
+  await expectError("a withdrawn row is frozen — no update of any kind lands", /never left|never changes/, () =>
+    db.query(`update public.workflow_definitions set attributes = '{"touched":true}'::jsonb where id = $1`, [
+      s21PendingId,
+    ])
+  );
+  await expectError("a withdrawn definition is never deleted — the Record never purges", /never purges|never deleted/, () =>
+    db.query(`delete from public.workflow_definitions where id = $1`, [s21PendingId])
+  );
+
+  await expectError("a withdrawn definition never executes — start_workflow_run refuses it", /active/, () =>
+    db.query(`select public.start_workflow_run($1, $2, $3)`, [s21PendingId, engagementId, f.agent_id])
+  );
+  await expectOk("the trigger scan's active-only filter never sees a withdrawn definition", async () => {
+    const r = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.workflow_definitions
+       where status = 'active' and archived_at is null and id = $1`,
+      [s21PendingId]
+    );
+    if (r.rows[0]!.n !== 0) throw new Error("the scan filter matched a withdrawn definition");
+  });
+
+  await expectOk("the Withdraw control renders only for pending definitions and only to the owner", async () => {
+    if (!canWithdrawWorkflowDefinition({ status: "pending_approval", isOwner: true })) {
+      throw new Error("the owner must be offered Withdraw on a pending definition");
+    }
+    if (canWithdrawWorkflowDefinition({ status: "pending_approval", isOwner: false })) {
+      throw new Error("a non-owner must never see the control");
+    }
+    for (const status of ["draft", "active", "paused", "withdrawn"]) {
+      if (canWithdrawWorkflowDefinition({ status, isOwner: true })) {
+        throw new Error(`a ${status} definition must never offer Withdraw`);
+      }
     }
   });
 
