@@ -1275,3 +1275,43 @@ report and are NOT recorded here.
      live)." Landed as 0031 (communications joins the supabase_realtime
      publication; authorisation is RLS) + the shell-mounted single
      subscription that re-renders server-side.
+
+## Session 18 (1 August 2026) — canonical URL + register chores, rulings recorded on in-prompt authority
+
+Entry 142 is the founder pre-ruling from the Session 18 prompt ("record as
+DECISIONS candidate quoting this prompt", 1 August 2026 — the §8
+quoted-approval pattern). Entry 143 quotes the founder's mid-session ruling
+of the same day, issued at the Lane C stop when Session 17's parallel work
+appeared in Session 18's working tree. The session's Lane B calls await
+sign-off in the close report and are NOT recorded here.
+
+142. **No em or en dashes in client-facing drafted copy (the register
+     rule).** Quoted from the Session 18 prompt (1 August 2026): "no em
+     dashes or en dashes in client-facing drafted copy. The generation
+     prompt instructs commas and full stops instead; add a register check
+     to the composition smoke (a drafted body containing an em or en dash
+     fails the harness). Scope: generated client-facing bodies (email +
+     WhatsApp free-form). Do NOT add a pre-flight blocking check for
+     human-authored text; humans may punctuate as they wish." Landed as
+     the register punctuation line in BOTH generation prompts
+     (intro/nudge and reply) and a composition-layer output screen beside
+     the braces check in `packages/db/src/drafting.ts`
+     (`findRegisterBreach`), refusal-tested in the harness. Machine-drafted
+     bodies only; human-authored text (including decision-21
+     insert-at-approved and client inbound) is never screened.
+
+143. **Parallel sessions require parallel checkouts — one folder is one
+     session.** Quoted from the founder's mid-session ruling (1 August
+     2026, at Session 18's Lane C stop): "The collision is a founder-side
+     process error: two sessions were started in one folder. The law is now
+     set and will be recorded: parallel sessions require parallel checkouts
+     (worktree or second clone); one folder is one session." Context: the
+     Session 17 marketing session, declared as running on its own branch,
+     materialised `apps/marketing/` and hunks in `turbo.json` and
+     `.env.example` inside Session 18's working folder mid-flight; Session
+     18 stopped per §3.2, the founder stopped Session 17 until Session 18's
+     close and merge, declared the foreign paths expected-dirty, and
+     granted explicit say-so for hunk-scoped staging (Session 17's hunks
+     left uncommitted in place, never `git add -A`). This strengthens the
+     §3.2 single-session rule from "separate worktrees, each granted in its
+     prompt" to a standing checkout law.
