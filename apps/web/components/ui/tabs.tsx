@@ -42,7 +42,9 @@ function TabsTrigger({
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"
       className={cn(
-        "rounded-md px-3 py-1.5 font-mono text-[11px] font-semibold tracking-wide text-ink-soft uppercase transition-colors data-[state=active]:bg-ink data-[state=active]:text-paper focus-visible:ring-2 focus-visible:ring-ledger/40 outline-none",
+        // WS4 (Session 22): tab triggers clear a thumb target on phone widths;
+        // the list already wraps, so tab rows stay usable at any width.
+        "rounded-md px-3 py-1.5 font-mono text-[11px] font-semibold tracking-wide text-ink-soft uppercase transition-colors data-[state=active]:bg-ink data-[state=active]:text-paper focus-visible:ring-2 focus-visible:ring-ledger/40 outline-none max-[560px]:min-h-10",
         className
       )}
       {...props}

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { durationSince, formatTime } from "@/lib/format";
 import {
   getDashboard,
-  getInbox,
+  getInboxSummary,
   getLightPerformance,
   getPipeline,
   type StuckEnquiry,
@@ -26,9 +26,9 @@ const ITEM_TYPE_LABELS: Record<string, [string, string]> = {
   stage_move: ["stage move", "stage moves"],
 };
 
-function typeBreakdown(byType: Map<string, number>): string {
-  return [...byType.entries()]
-    .map(([type, count]) => {
+function typeBreakdown(byType: { type: string; count: number }[]): string {
+  return byType
+    .map(({ type, count }) => {
       const [one, many] = ITEM_TYPE_LABELS[type] ?? [type, `${type}s`];
       return `${count} ${count === 1 ? one : many}`;
     })
@@ -111,18 +111,16 @@ function StuckItems({ stuck }: { stuck: StuckEnquiry[] }) {
 }
 
 export default async function DashboardPage() {
+  // WS5e (Session 22): the stamps-owed numbers are COUNT aggregates + one
+  // oldest row — never a full inbox fetch to count it.
   const [dash, inbox, pipeline, perf] = await Promise.all([
     getDashboard(),
-    getInbox(),
+    getInboxSummary(),
     getPipeline(),
     getLightPerformance(),
   ]);
 
-  const byType = new Map<string, number>();
-  for (const row of inbox) {
-    byType.set(row.item_type, (byType.get(row.item_type) ?? 0) + 1);
-  }
-  const oldest = inbox[0]?.awaiting_since ?? null;
+  const oldest = inbox.oldestAwaitingSince;
 
   const stageCounts = pipeline.map((s) => ({
     label: s.label,
@@ -132,12 +130,12 @@ export default async function DashboardPage() {
   const maxCount = Math.max(1, ...stageCounts.map((s) => s.count));
   const pipelineTotal = stageCounts.reduce((sum, s) => sum + s.count, 0);
 
-  const monitorsClear = inbox.length === 0 && (dash.stuck?.length ?? 0) === 0;
+  const monitorsClear = inbox.total === 0 && (dash.stuck?.length ?? 0) === 0;
 
   // Day one, before the first enquiry or stamp: the true empty state
   // (Session 11 mockup). It never shows an invented number — and it points
   // honestly at First Light instead of claiming a crawl that hasn't run.
-  if (pipelineTotal === 0 && inbox.length === 0) {
+  if (pipelineTotal === 0 && inbox.total === 0) {
     return (
       <>
         <PageHead title="Dashboard" sub="Your day, once there is one" />
@@ -194,7 +192,7 @@ export default async function DashboardPage() {
           </b>
           {" · "}
           <b>
-            {inbox.length} stamp{inbox.length === 1 ? "" : "s"} owed
+            {inbox.total} stamp{inbox.total === 1 ? "" : "s"} owed
           </b>
           {" · "}
           <b>
@@ -206,7 +204,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* Vigilance — deterministic monitors only; nothing invented. */}
-      {inbox.length > 0 ? (
+      {inbox.total > 0 ? (
         <VigilanceItem
           tone="red"
           monitor="Monitor: inbox age · advise-only — Light never acts past a gate"
@@ -217,7 +215,7 @@ export default async function DashboardPage() {
           }
         >
           <b>
-            {inbox.length} approval{inbox.length === 1 ? "" : "s"} waiting:
+            {inbox.total} approval{inbox.total === 1 ? "" : "s"} waiting:
           </b>{" "}
           the oldest has waited {oldest ? durationSince(oldest) : "—"} for your
           stamp.
@@ -241,11 +239,11 @@ export default async function DashboardPage() {
       <div className="mt-4 grid grid-cols-1 gap-3 min-[680px]:grid-cols-2 min-[1600px]:grid-cols-4">
         <Tile href="/inbox" head="Stamps owed">
           <div className="font-display text-3xl leading-none font-black">
-            {inbox.length}
+            {inbox.total}
           </div>
           <div className="mt-1.5 text-xs text-ink-soft">
-            {inbox.length
-              ? `${typeBreakdown(byType)} — oldest ${oldest ? durationSince(oldest) : "—"}`
+            {inbox.total
+              ? `${typeBreakdown(inbox.byType)} — oldest ${oldest ? durationSince(oldest) : "—"}`
               : "Nothing waits for your stamp."}
           </div>
         </Tile>

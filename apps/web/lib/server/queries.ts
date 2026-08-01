@@ -1,8 +1,12 @@
 import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
 import {
+  clampPage,
+  clampPageSize,
   computeLightPerformance,
+  DEFAULT_LIST_WINDOW,
   evaluateAiBudget,
+  pageRange,
   MONTH_SPEND_ROW_BOUND,
   monthWindowUtc,
   plainTextOfBody,
@@ -160,15 +164,104 @@ export async function getPipeline(): Promise<PipelineStage[]> {
 
 // --- The Approval Inbox -----------------------------------------------------
 
-export async function getInbox(): Promise<ApprovalInboxRow[]> {
+/**
+ * Session 22 (WS5a) — the Approval Inbox reads a WINDOW: server-side
+ * pagination, oldest-wait-first (awaiting_since keys to submitted_at, D134),
+ * default 20, selector 10/20/50. The total is a COUNT aggregate (5e) so the
+ * page never fetches rows to count them.
+ */
+export interface InboxPage {
+  rows: ApprovalInboxRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  /** Pending COMMUNICATIONS in the full filtered set — the bulk-reject
+   * scope's honest denominator (count aggregate). */
+  pendingCommunications: number;
+}
+
+export async function getInboxPage(input: { page?: number; pageSize?: number } = {}): Promise<InboxPage> {
   const { db, business } = await getAppContext();
-  const { data, error } = await db
-    .from("approval_inbox")
-    .select("*")
-    .eq("business_id", business.id)
-    .order("awaiting_since", { ascending: true });
-  if (error) throw new Error(`approval_inbox query failed: ${error.message}`);
-  return (data ?? []) as ApprovalInboxRow[];
+  const pageSize = clampPageSize(input.pageSize);
+  const page = clampPage(input.page);
+  const range = pageRange(page, pageSize);
+
+  const [rowsResult, totalResult, commResult] = await Promise.all([
+    db
+      .from("approval_inbox")
+      .select("*")
+      .eq("business_id", business.id)
+      .order("awaiting_since", { ascending: true })
+      .range(range.from, range.to),
+    db
+      .from("approval_inbox")
+      .select("*", { count: "exact", head: true })
+      .eq("business_id", business.id),
+    db
+      .from("approval_inbox")
+      .select("*", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("item_type", "communication"),
+  ]);
+  if (rowsResult.error) throw new Error(`approval_inbox query failed: ${rowsResult.error.message}`);
+  if (totalResult.error) throw new Error(`approval_inbox count failed: ${totalResult.error.message}`);
+  if (commResult.error) throw new Error(`approval_inbox comm count failed: ${commResult.error.message}`);
+  const total = totalResult.count ?? 0;
+  return {
+    rows: (rowsResult.data ?? []) as ApprovalInboxRow[],
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    pendingCommunications: commResult.count ?? 0,
+  };
+}
+
+/**
+ * WS5e — the dashboard's stamps-owed tile from COUNT aggregates only: the
+ * total, the per-type breakdown (one head count per known type) and the
+ * single oldest row for the waiting line. Never a full fetch to count.
+ */
+export interface InboxSummary {
+  total: number;
+  byType: { type: string; count: number }[];
+  oldestAwaitingSince: string | null;
+}
+
+const INBOX_ITEM_TYPES = ["communication", "content", "task", "workflow_definition"];
+
+export async function getInboxSummary(): Promise<InboxSummary> {
+  const { db, business } = await getAppContext();
+  const [totalResult, oldestResult, ...typeResults] = await Promise.all([
+    db.from("approval_inbox").select("*", { count: "exact", head: true }).eq("business_id", business.id),
+    db
+      .from("approval_inbox")
+      .select("awaiting_since")
+      .eq("business_id", business.id)
+      .order("awaiting_since", { ascending: true })
+      .limit(1),
+    ...INBOX_ITEM_TYPES.map((type) =>
+      db
+        .from("approval_inbox")
+        .select("*", { count: "exact", head: true })
+        .eq("business_id", business.id)
+        .eq("item_type", type)
+    ),
+  ]);
+  if (totalResult.error) throw new Error(`inbox summary count failed: ${totalResult.error.message}`);
+  if (oldestResult.error) throw new Error(`inbox summary oldest failed: ${oldestResult.error.message}`);
+  const byType = INBOX_ITEM_TYPES.flatMap((type, i) => {
+    const result = typeResults[i]!;
+    if (result.error) throw new Error(`inbox summary ${type} count failed: ${result.error.message}`);
+    const count = result.count ?? 0;
+    return count > 0 ? [{ type, count }] : [];
+  });
+  return {
+    total: totalResult.count ?? 0,
+    byType,
+    oldestAwaitingSince: (oldestResult.data?.[0]?.awaiting_since as string | undefined) ?? null,
+  };
 }
 
 /** Open tasks for the sidebar badge — an earned count or nothing. */
@@ -530,30 +623,53 @@ export interface InboxHistoryRow {
   engagementId: string | null;
 }
 
+const HISTORY_ACTIONS = [
+  "communication.approved",
+  "communication.rejected",
+  "communication.superseded",
+  "workflow.definition_withdrawn",
+];
+
+export interface InboxHistoryPage {
+  rows: InboxHistoryRow[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
+
 /** Session 11 — the inbox History tab: stamped and refused decisions read
  * from The Record (the events ARE the history; the default view stays
- * stamps-owed-only). */
-export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> {
+ * stamps-owed-only). Session 22 (WS5d): windowed server-side, default 20,
+ * the total a COUNT aggregate. */
+export async function getInboxHistory(days: 7 | 30, page = 1): Promise<InboxHistoryPage> {
   const { db, business } = await getAppContext();
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const range = pageRange(page, DEFAULT_LIST_WINDOW);
 
-  const { data: events, error } = await db
-    .from("events")
-    .select("id, action, occurred_at, entity_id, payload, actors(display_name)")
-    .eq("business_id", business.id)
-    // Session 21: a withdrawn workflow definition is a decided item too —
-    // it lands here from The Record like every other decision.
-    .in("action", [
-      "communication.approved",
-      "communication.rejected",
-      "communication.superseded",
-      "workflow.definition_withdrawn",
-    ])
-    .gte("occurred_at", since)
-    .order("occurred_at", { ascending: false })
-    .limit(200);
+  const [{ data: events, error }, countResult] = await Promise.all([
+    db
+      .from("events")
+      .select("id, action, occurred_at, entity_id, payload, actors(display_name)")
+      .eq("business_id", business.id)
+      // Session 21: a withdrawn workflow definition is a decided item too —
+      // it lands here from The Record like every other decision.
+      .in("action", HISTORY_ACTIONS)
+      .gte("occurred_at", since)
+      .order("occurred_at", { ascending: false })
+      .range(range.from, range.to),
+    db
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .in("action", HISTORY_ACTIONS)
+      .gte("occurred_at", since),
+  ]);
   if (error) throw new Error(`inbox history query failed: ${error.message}`);
-  if (!events?.length) return [];
+  if (countResult.error) throw new Error(`inbox history count failed: ${countResult.error.message}`);
+  const total = countResult.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / DEFAULT_LIST_WINDOW));
+  const emptyPage = { total, page: clampPage(page), pageCount };
+  if (!events?.length) return { rows: [], ...emptyPage };
 
   const commIds = [
     ...new Set(
@@ -574,7 +690,7 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
   if (commError) throw new Error(`history communications query failed: ${commError.message}`);
   const commById = new Map((comms ?? []).map((c) => [c.id, c]));
 
-  return events.flatMap((e): InboxHistoryRow[] => {
+  const rows: InboxHistoryRow[] = events.flatMap((e): InboxHistoryRow[] => {
     if (!e.entity_id) return [];
     if (e.action === "workflow.definition_withdrawn") {
       // Session 21: the payload carries the definition's key/version and the
@@ -650,6 +766,7 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
       },
     ];
   });
+  return { rows, ...emptyPage };
 }
 
 // --- Dashboard ---------------------------------------------------------------

@@ -7,7 +7,9 @@ import { cn } from "@/lib/utils";
 const buttonVariants = cva(
   // Decision 61: primary buttons and focus rings are chrome — they take the
   // accent. The stamp stays red; Light's buttons ride Light's channel.
-  "inline-flex items-center justify-center gap-2 rounded-lg text-[13px] font-semibold whitespace-nowrap transition-transform active:scale-[.98] disabled:pointer-events-none disabled:opacity-50 outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
+  // WS4 (Session 22): on phone widths every button clears a thumb-sized
+  // target — solicitors stamp one-handed; sizes above 560px are unchanged.
+  "inline-flex items-center justify-center gap-2 rounded-lg text-[13px] font-semibold whitespace-nowrap transition-transform active:scale-[.98] disabled:pointer-events-none disabled:opacity-50 outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0 max-[560px]:min-h-11",
   {
     variants: {
       variant: {

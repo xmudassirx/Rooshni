@@ -194,24 +194,45 @@ export async function bulkRejectAction(
   _prev: BulkRejectState,
   formData: FormData
 ): Promise<BulkRejectState> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(String(formData.get("communicationIds") ?? "[]"));
-  } catch {
-    return { error: "The selection could not be read — please reselect and try again." };
-  }
-  const ids = Array.isArray(parsed)
-    ? [...new Set(parsed.filter((id): id is string => typeof id === "string" && isUuid(id)))]
-    : [];
   const reason = String(formData.get("reason") ?? "").trim();
-  if (ids.length === 0) return { error: "No drafts were selected." };
   if (!reason) {
     return {
       error: "A shared reason is required — it is recorded on every draft and the ledger.",
     };
   }
+  const scope = String(formData.get("scope") ?? "selected");
 
   const { db, business, actor } = await getAppContext();
+
+  let ids: string[];
+  if (scope === "all_pending") {
+    // WS5a (Session 22): the bulk refusal operates on the FULL filtered set
+    // SERVER-SIDE — the paginated view's visible page is never the scope.
+    // The set is read here, bounded per invocation; an over-ceiling backlog
+    // reports its remainder honestly rather than truncating silently.
+    const CEILING = 1000;
+    const { data, error } = await db
+      .from("approval_inbox")
+      .select("item_id")
+      .eq("business_id", business.id)
+      .eq("item_type", "communication")
+      .order("awaiting_since", { ascending: true })
+      .limit(CEILING);
+    if (error) return { error: `The pending set could not be read: ${error.message}` };
+    ids = [...new Set((data ?? []).map((r) => r.item_id as string))];
+    if (ids.length === 0) return { error: "Nothing is pending — there is no set to reject." };
+  } else {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(String(formData.get("communicationIds") ?? "[]"));
+    } catch {
+      return { error: "The selection could not be read — please reselect and try again." };
+    }
+    ids = Array.isArray(parsed)
+      ? [...new Set(parsed.filter((id): id is string => typeof id === "string" && isUuid(id)))]
+      : [];
+    if (ids.length === 0) return { error: "No drafts were selected." };
+  }
 
   // JUDGMENT: builder's call per the session prompt — no batch RPC, no
   // migration. The loop runs in small concurrent chunks so ~78 refusals fit

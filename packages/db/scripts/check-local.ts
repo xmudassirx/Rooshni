@@ -64,6 +64,13 @@ import {
 } from "../src/ai-budget";
 import { priceGeneration, USD_TO_GBP_RATE } from "../src/model-router";
 import { computeLightPerformance, weekWindowUtc } from "../src/light-performance";
+import {
+  clampPage,
+  clampPageSize,
+  DEFAULT_PAGE_SIZE,
+  MAX_LIST_WINDOW,
+  pageRange,
+} from "../src/read-policy";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -4100,6 +4107,52 @@ async function main() {
     if (midWeek.end !== "2026-08-03T00:00:00.000Z") throw new Error(`end: ${midWeek.end}`);
     const onMonday = weekWindowUtc(new Date("2026-07-27T00:30:00Z"));
     if (onMonday.start !== "2026-07-27T00:00:00.000Z") throw new Error("a Monday belongs to its own week");
+  });
+
+  // Session 22 (WS5) — the read-layer diet: the window policy and the
+  // founder-ruled counts law (5e), with the inbox query's bound PINNED by a
+  // file tripwire (the s20 bodySizeLimit precedent).
+  console.log("\nSession 22 — the read-layer diet (WS5):");
+
+  await expectOk("the page-size policy clamps every request into the ruled selector (10/20/50, default 20)", async () => {
+    if (clampPageSize(undefined) !== DEFAULT_PAGE_SIZE) throw new Error("no size means the default");
+    if (clampPageSize(50) !== 50 || clampPageSize(10) !== 10) throw new Error("selector sizes must pass");
+    if (clampPageSize(5000) !== DEFAULT_PAGE_SIZE) throw new Error("an off-selector size must clamp to the default");
+    if (clampPage(-3) !== 1 || clampPage(undefined) !== 1) throw new Error("page floors at 1");
+    const range = pageRange(3, 20);
+    if (range.from !== 40 || range.to !== 59) throw new Error(`page 3 of 20 must be rows 40..59, got ${range.from}..${range.to}`);
+    const capped = pageRange(1, 9999);
+    if (capped.to - capped.from + 1 > MAX_LIST_WINDOW) {
+      throw new Error("no window may ever exceed MAX_LIST_WINDOW, whatever the caller asks");
+    }
+  });
+
+  await expectOk("the inbox query's bound is pinned — the paginated read calls .range() and the unbounded read is gone", async () => {
+    // cwd is packages/db (the workspace script), matching the migrations read.
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    const inboxPage = queriesSource.slice(queriesSource.indexOf("export async function getInboxPage"));
+    const inboxPageBody = inboxPage.slice(0, inboxPage.indexOf("\n}\n"));
+    if (!inboxPageBody.includes(".range(range.from, range.to)")) {
+      throw new Error("getInboxPage no longer windows its approval_inbox read — the 5a bound is broken");
+    }
+    if (!/clampPageSize|pageRange/.test(inboxPageBody)) {
+      throw new Error("getInboxPage no longer clamps through the read policy");
+    }
+    if (/export async function getInbox\(\)/.test(queriesSource)) {
+      throw new Error("the unbounded getInbox() read has returned — the diet forbids it");
+    }
+  });
+
+  await expectOk("the counts law (5e): sidebar and dashboard counts come from COUNT aggregates, never fetched rows", async () => {
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    for (const fn of ["getInboxCount", "getOpenTaskCount", "getInboxSummary"]) {
+      const start = queriesSource.indexOf(`export async function ${fn}`);
+      if (start < 0) throw new Error(`${fn} is missing`);
+      const body = queriesSource.slice(start, start + 2200);
+      if (!body.includes(`count: "exact", head: true`)) {
+        throw new Error(`${fn} must count with a head COUNT aggregate`);
+      }
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
