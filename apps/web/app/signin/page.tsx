@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { GoogleSignInButton } from "./google-button";
+import { OAuthSignInButtons } from "./oauth-buttons";
 
 export const dynamic = "force-dynamic";
 
@@ -14,10 +14,10 @@ export const metadata: Metadata = {
 };
 
 /**
- * The sign-in door (Session 5). Google is the only provider. Signing in does
- * not grant anything by itself: the middleware lets a session through only
- * when its email is on the allowlist, and the tenancy wall behind that is
- * memberships + RLS.
+ * The sign-in door (Session 5; Microsoft joined at Session 20). Two providers,
+ * one door: signing in does not grant anything by itself — the middleware lets
+ * a session through only when its email is on the allowlist, and the tenancy
+ * wall behind that is memberships + RLS. Both checks are provider-blind.
  */
 export default async function SignInPage() {
   const supabase = await createSupabaseServerClient();
@@ -42,7 +42,7 @@ export default async function SignInPage() {
         Sign in
       </div>
       <div className="mt-8">
-        <GoogleSignInButton />
+        <OAuthSignInButtons />
       </div>
       <p className="mt-6 max-w-[44ch] text-[12.5px] leading-relaxed text-ink-faint">
         Access is by invitation. If your account has not been invited, signing

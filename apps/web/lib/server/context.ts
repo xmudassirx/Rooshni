@@ -53,18 +53,21 @@ export const getAppContext = cache(async (): Promise<AppContext> => {
         .limit(1)
         .maybeSingle(),
     ]);
-  if (actorError || !actor) {
-    throw new Error(
-      `No human actor maps to this sign-in (${actorError?.message ?? "no rows"}) — ` +
-        "an allowlisted user needs an actors row with their user_id."
-    );
+  // JUDGMENT (Session 20, Lane B): an allowlisted session that CLEANLY maps
+  // to no actor or membership meets the holding page, never a 500. The
+  // reachable cause is the identity-linking fork — an unverified provider
+  // email makes Supabase create a second auth user with the same address
+  // instead of linking, which passes the email-keyed allowlist while holding
+  // no membership. Fail closed like every other outsider; RLS remains the
+  // wall. A query ERROR still throws — a database hiccup must stay visible,
+  // never quietly holding-page a real member.
+  if (actorError) {
+    throw new Error(`Actor lookup failed for this sign-in: ${actorError.message}`);
   }
-  if (mError || !membership) {
-    throw new Error(
-      `No membership for this sign-in (${mError?.message ?? "no rows"}) — ` +
-        "an allowlisted user needs a memberships row for their business."
-    );
+  if (mError) {
+    throw new Error(`Membership lookup failed for this sign-in: ${mError.message}`);
   }
+  if (!actor || !membership) redirect("/construction");
 
   const business = membership.businesses as unknown as {
     id: string;
