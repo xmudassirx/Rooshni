@@ -147,6 +147,63 @@ export async function updateDraftingSettingsAction(
 }
 
 /**
+ * Session 20 — Settings → Integrations: which pipe carries the firm's
+ * tenant email. Owner-gated like every business-level policy; one settings
+ * merge, one settings.updated line on The Record. Selection is config, not
+ * connection — the carrier's credentials and the inbound mailbox binding
+ * remain founder wiring (env + wire-inbound), and the tab renders that
+ * state honestly.
+ */
+export interface MailProviderActionState {
+  error: string | null;
+  saved?: boolean;
+}
+
+export async function setMailProviderAction(
+  _prev: MailProviderActionState,
+  formData: FormData
+): Promise<MailProviderActionState> {
+  const provider = String(formData.get("mail_provider") ?? "");
+  if (provider !== "graph" && provider !== "gmail") {
+    return { error: "Unknown mail provider." };
+  }
+
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "The mail pipe is the owner's pen — ask the owner to change it." };
+  }
+
+  const { data: bizRow, error: readError } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (readError || !bizRow) return { error: `Settings read failed: ${readError?.message ?? "no row"}` };
+
+  const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
+  if (provider === "gmail") settings.mail_provider = "gmail";
+  else delete settings.mail_provider; // absent = the Graph default, one truth
+
+  const { error: writeError } = await db
+    .from("businesses")
+    .update({ settings })
+    .eq("id", business.id);
+  if (writeError) return { error: `Save failed: ${writeError.message}` };
+
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: FIRST_LIGHT_EVENT_KINDS.settingsUpdated,
+    entity_type: "business",
+    entity_id: business.id,
+    payload: { keys: ["mail_provider"], mail_provider: provider },
+  });
+
+  revalidatePath("/settings");
+  return { error: null, saved: true };
+}
+
+/**
  * PR-i (Session 19): store a route guide's document — bytes to the private
  * Supabase Storage bucket (service client; files.storage_key has always
  * pointed at a storage backend), the files row + file_links row under the
