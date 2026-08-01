@@ -1782,11 +1782,19 @@ async function main() {
     [f.business_id, f.agent_id, waContact.rows[0]!.id]
   );
 
+  // Session 16: one pending outbound per thread+channel is now law (0030) —
+  // each test draft takes its own thread so unresolved pendings from earlier
+  // refusal tests cannot collide with later ones.
   const draftWa = async (body: string, attributes: string) => {
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'whatsapp') returning id`,
+      [f.business_id, f.agent_id, waContact.rows[0]!.id]
+    );
     const r = await db.query<{ id: string }>(
       `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id, attributes)
        values ($1, $2, $3, $4, 'whatsapp', 'outbound', 'draft', $5, $2, $6::jsonb) returning id`,
-      [f.business_id, f.agent_id, waThread.rows[0]!.id, waContact.rows[0]!.id, body, attributes]
+      [f.business_id, f.agent_id, t.rows[0]!.id, waContact.rows[0]!.id, body, attributes]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, f.agent_id]);
     await recordCompliance(r.rows[0]!.id);
@@ -2320,11 +2328,19 @@ async function main() {
      values ($1, $2, $3, 'email') returning id`,
     [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
   );
+  // Session 16: one pending outbound per thread+channel is now law (0030) —
+  // each compliance test draft takes its own thread so unresolved pendings
+  // from refusal tests cannot collide with later submissions.
   const s15Draft = async (body: string) => {
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'email') returning id`,
+      [activation!.business_id, activation!.light_actor_id, s15Contact.rows[0]!.id]
+    );
     const r = await db.query<{ id: string }>(
       `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
        values ($1, $2, $3, $4, 'email', 'outbound', 'draft', $5, $2) returning id`,
-      [activation!.business_id, activation!.light_actor_id, s15Thread.rows[0]!.id, s15Contact.rows[0]!.id, body]
+      [activation!.business_id, activation!.light_actor_id, t.rows[0]!.id, s15Contact.rows[0]!.id, body]
     );
     await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.light_actor_id]);
     return r.rows[0]!.id;
@@ -2590,6 +2606,231 @@ async function main() {
     if (second.rows[0]!.submitted_at === first.rows[0]!.submitted_at) {
       throw new Error("a genuine re-submission did not restart the clock");
     }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 16 — inbound capture (0028) and the supersede engine
+  // (0029/0030). Refusal-first: the guard, the terminal state and the
+  // service-only pipeline are all attempted from the wrong side.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 16 — inbound capture and the supersede engine:");
+
+  const s16Contact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Supersede Lead') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s16ContactId = s16Contact.rows[0]!.id;
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'supersede.lead@example.test', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s16ContactId]
+  );
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'whatsapp', '+447700900456', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s16ContactId]
+  );
+  const s16Engagement = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'Supersede enquiry', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s16EngagementId = s16Engagement.rows[0]!.id;
+  const s16NewThread = async (channel: string, withEngagement = true) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, engagement_id, channel)
+       values ($1, $2, $3, $4, '${channel}') returning id`,
+      [f.business_id, f.agent_id, s16ContactId, withEngagement ? s16EngagementId : null]
+    );
+    return r.rows[0]!.id;
+  };
+  const s16NewDraft = async (threadId: string, channel: string, body: string) => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, drafted_by_actor_id)
+       select $1, $2, $3, $4, t.engagement_id, '${channel}', 'outbound', 'draft', $5, $2
+       from public.comm_threads t where t.id = $3 returning id`,
+      [f.business_id, f.agent_id, threadId, s16ContactId, body]
+    );
+    return r.rows[0]!.id;
+  };
+
+  // --- 0028: the inbound claim tables are service-side only ---------------
+  await expectOk("inbound claim tables: idempotent on the provider id; invisible and closed to signed-in sessions", async () => {
+    await db.query(
+      `insert into public.wa_webhook_events (wamid, phone_number_id, payload) values ('wamid.s16-1', '111', '{}'::jsonb)`
+    );
+    let threw = false;
+    try {
+      await db.query(`insert into public.wa_webhook_events (wamid) values ('wamid.s16-1')`);
+    } catch (err) {
+      threw = /duplicate key/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!threw) throw new Error("a replayed wamid claimed twice");
+    await db.query(
+      `insert into public.graph_mail_events (internet_message_id, mailbox) values ('<s16@example.test>', 'firm@example.test')`
+    );
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    try {
+      const wa = await db.query<{ n: number }>(`select count(*)::int as n from public.wa_webhook_events`);
+      const gm = await db.query<{ n: number }>(`select count(*)::int as n from public.graph_mail_events`);
+      if (wa.rows[0]!.n !== 0 || gm.rows[0]!.n !== 0) {
+        throw new Error("a signed-in session can read raw provider payloads");
+      }
+      let insertRefused = false;
+      try {
+        await db.query(`insert into public.wa_webhook_events (wamid) values ('wamid.forged')`);
+      } catch (err) {
+        insertRefused = /row-level security|permission denied/.test(err instanceof Error ? err.message : String(err));
+      }
+      if (!insertRefused) throw new Error("a signed-in session wrote a claim row");
+    } finally {
+      await db.exec(`reset role`);
+      await db.exec(`set request.jwt.claim.sub = ''`);
+    }
+  });
+
+  // --- 0030: the one-pending guard ----------------------------------------
+  let s16FirstPendingId = "";
+  await expectError(
+    "one pending outbound draft per engagement per channel — the second submission is refused by the DATABASE",
+    /one_pending_per_engagement_channel/,
+    async () => {
+      const t1 = await s16NewThread("email");
+      s16FirstPendingId = await s16NewDraft(t1, "email", "First answer, still awaiting the stamp.");
+      await db.query(`select public.submit_communication($1, $2)`, [s16FirstPendingId, f.agent_id]);
+      const t2 = await s16NewThread("email");
+      const second = await s16NewDraft(t2, "email", "A second pending answer must not exist.");
+      await db.query(`select public.submit_communication($1, $2)`, [second, f.agent_id]);
+    }
+  );
+
+  await expectOk("the guard is per CHANNEL — a WhatsApp draft may pend beside the email draft", async () => {
+    const t = await s16NewThread("whatsapp");
+    const id = await s16NewDraft(t, "whatsapp", "Channel-parallel pending is lawful.");
+    await db.query(`select public.submit_communication($1, $2)`, [id, f.agent_id]);
+    // Retire it through the pipeline so later smokes start clean.
+    await db.query(`select public.supersede_communication($1, 'new_inbound')`, [id]);
+  });
+
+  await expectOk("engagement-less threads carry the same guard, keyed by thread", async () => {
+    const t = await s16NewThread("email", false);
+    const a = await s16NewDraft(t, "email", "Pre-qualification draft one.");
+    await db.query(`select public.submit_communication($1, $2)`, [a, f.agent_id]);
+    const b = await s16NewDraft(t, "email", "Pre-qualification draft two.");
+    let threw = false;
+    try {
+      await db.query(`select public.submit_communication($1, $2)`, [b, f.agent_id]);
+    } catch (err) {
+      threw = /one_pending_per_thread_channel/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!threw) throw new Error("a second engagement-less pending was admitted");
+    await db.query(`select public.supersede_communication($1, 'new_inbound')`, [a]);
+  });
+
+  // --- 0030: supersede inherits the client's clock (decision 134) ---------
+  await expectOk("a superseding draft INHERITS the original submitted_at — the client's wait never resets", async () => {
+    const oldClock = await db.query<{ submitted_at: string }>(
+      `select submitted_at::text as submitted_at from public.communications where id = $1`,
+      [s16FirstPendingId]
+    );
+    if (!oldClock.rows[0]!.submitted_at) throw new Error("fixture draft has no submission stamp");
+    await db.query(`select pg_sleep(0.01)`);
+    const t = await s16NewThread("email");
+    const successor = await s16NewDraft(t, "email", "Regenerated against the full thread — both messages answered.");
+    await db.query(`select public.supersede_communication($1, 'new_inbound', $2, $3)`, [
+      s16FirstPendingId,
+      successor,
+      f.agent_id,
+    ]);
+    const after = await db.query<{ old_status: string; succ_status: string; succ_clock: string; reason: string; successor_id: string }>(
+      `select o.status::text as old_status, s.status::text as succ_status,
+              s.submitted_at::text as succ_clock,
+              o.attributes -> 'superseded' ->> 'reason' as reason,
+              o.attributes -> 'superseded' ->> 'successor_id' as successor_id
+       from public.communications o, public.communications s
+       where o.id = $1 and s.id = $2`,
+      [s16FirstPendingId, successor]
+    );
+    const r = after.rows[0]!;
+    if (r.old_status !== "superseded") throw new Error(`old draft is ${r.old_status}`);
+    if (r.succ_status !== "pending_approval") throw new Error(`successor is ${r.succ_status}`);
+    if (r.succ_clock !== oldClock.rows[0]!.submitted_at) {
+      throw new Error(`the clock reset: ${r.succ_clock} vs original ${oldClock.rows[0]!.submitted_at}`);
+    }
+    if (r.reason !== "new_inbound" || r.successor_id !== successor) {
+      throw new Error("the superseded marker does not name its reason and successor");
+    }
+    const inbox = await db.query<{ awaiting_since: string }>(
+      `select awaiting_since::text as awaiting_since from public.approval_inbox where item_id = $1`,
+      [successor]
+    );
+    if (inbox.rows[0]!.awaiting_since !== oldClock.rows[0]!.submitted_at) {
+      throw new Error("the inbox queue position did not follow the inherited clock");
+    }
+  });
+
+  await expectError(
+    "supersede is a service pipeline — a signed-in session cannot call it",
+    /permission denied/,
+    async () => {
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+      try {
+        await db.query(`select public.supersede_communication($1, 'new_inbound')`, [s16FirstPendingId]);
+      } finally {
+        await db.exec(`reset role`);
+        await db.exec(`set request.jwt.claim.sub = ''`);
+      }
+    }
+  );
+
+  // --- 0030: a human reply auto-supersedes, in the same transaction -------
+  let s16SupersededId = "";
+  await expectOk("a HUMAN outbound on the thread auto-supersedes the pending draft (reason human_replied, no orphan)", async () => {
+    const t = await s16NewThread("whatsapp");
+    s16SupersededId = await s16NewDraft(t, "whatsapp", "Light's answer, awaiting the stamp.");
+    await db.query(`select public.submit_communication($1, $2)`, [s16SupersededId, f.agent_id]);
+    // The human replies from Conversations: decision-21 insert-at-approved.
+    // (WhatsApp free-form passes pre-flight — the fixture holds no recent
+    // inbound, so ride the approved-template path like a real manual send.)
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, approved_by_actor_id, attributes)
+       values ($1, $2, $3, $4, $5, 'whatsapp', 'outbound', 'approved', 'Human answer, sent directly.', $2,
+               '{"wa_template": {"name": "enquiry_nudge", "language": "en_GB"}}'::jsonb)`,
+      [f.business_id, f.human_id, t, s16ContactId, s16EngagementId]
+    );
+    const after = await db.query<{ status: string; reason: string; needs_event: string }>(
+      `select status::text as status,
+              attributes -> 'superseded' ->> 'reason' as reason,
+              attributes -> 'superseded' ->> 'needs_event' as needs_event
+       from public.communications where id = $1`,
+      [s16SupersededId]
+    );
+    const r = after.rows[0]!;
+    if (r.status !== "superseded") throw new Error(`the pending draft is ${r.status} — an orphan survived the human`);
+    if (r.reason !== "human_replied") throw new Error(`reason recorded as ${r.reason}`);
+    if (r.needs_event !== "true") throw new Error("the transition left no event marker for The Record");
+  });
+
+  // --- 0030: superseded is terminal, frozen, never deletable --------------
+  await expectError("superseded is TERMINAL — status never leaves it", /terminal/, () =>
+    db.query(`update public.communications set status = 'draft' where id = $1`, [s16SupersededId])
+  );
+  await expectError("a superseded draft is FROZEN history — its words never change", /frozen history/, () =>
+    db.query(`update public.communications set body = 'rewritten history' where id = $1`, [s16SupersededId])
+  );
+  await expectError("superseded rows are NEVER deleted — History keeps its record", /never deleted/, () =>
+    db.query(`delete from public.communications where id = $1`, [s16SupersededId])
+  );
+  await expectError("a communication cannot be BORN superseded", /born superseded/, async () => {
+    const t = await s16NewThread("email");
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, channel, direction, status, body)
+       values ($1, $2, $3, 'email', 'outbound', 'superseded', 'never lived')`,
+      [f.business_id, f.agent_id, t]
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
