@@ -63,6 +63,7 @@ import {
   softCapJustCrossed,
 } from "../src/ai-budget";
 import { priceGeneration, USD_TO_GBP_RATE } from "../src/model-router";
+import { computeLightPerformance, weekWindowUtc } from "../src/light-performance";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -4050,6 +4051,55 @@ async function main() {
       throw new Error("a pre-meter cost block must read as unpriced, never retro-priced");
     }
     if (pricedAmountGbp({ amount_gbp: 0.02 }) !== 0.02) throw new Error("a priced line must read back");
+  });
+
+  // Session 22 (WS3) — the Light performance tile: the numbers agree with a
+  // constructed fixture's known truth (the ordered smoke), and empty weeks
+  // claim nothing.
+  console.log("\nSession 22 — the Light performance tile (WS3):");
+
+  await expectOk("the tile's numbers agree with a constructed fixture's known truth", async () => {
+    const perf = computeLightPerformance({
+      drafts_generated: 10,
+      stamped: 8,
+      rejected: 2,
+      edit_signals: 2,
+      compliance_refusals: 1,
+      cost_blocks: [
+        { tokens: 1000, amount_gbp: 0.01 },
+        { tokens: 2000, amount_gbp: 0.02 },
+        { tokens: 3000 }, // a pre-meter line: tokens counted, spend unpriced
+      ],
+    });
+    if (perf.approval_rate_pct !== 80) throw new Error(`approval rate: expected 80, got ${perf.approval_rate_pct}`);
+    if (perf.edit_rate_pct !== 25) throw new Error(`edit rate: expected 25, got ${perf.edit_rate_pct}`);
+    if (perf.mean_tokens !== 2000) throw new Error(`mean tokens: expected 2000, got ${perf.mean_tokens}`);
+    if (perf.spend_gbp !== 0.03) throw new Error(`spend: expected 0.03, got ${perf.spend_gbp}`);
+    if (perf.unpriced_lines !== 1) throw new Error("the pre-meter line must be counted, never priced");
+    if (perf.compliance_refusals !== 1 || perf.drafts_generated !== 10) throw new Error("counts must pass through");
+  });
+
+  await expectOk("an empty week claims no rate — honest empty states, never an invented number", async () => {
+    const perf = computeLightPerformance({
+      drafts_generated: 0,
+      stamped: 0,
+      rejected: 0,
+      edit_signals: 0,
+      compliance_refusals: 0,
+      cost_blocks: [],
+    });
+    if (perf.approval_rate_pct !== null || perf.edit_rate_pct !== null || perf.mean_tokens !== null) {
+      throw new Error("an empty week must render dashes, not rates");
+    }
+    if (perf.spend_gbp !== 0) throw new Error("an empty week's spend is zero");
+  });
+
+  await expectOk("the week window is Monday-started UTC and seven days wide", async () => {
+    const midWeek = weekWindowUtc(new Date("2026-08-01T12:00:00Z")); // a Saturday
+    if (midWeek.start !== "2026-07-27T00:00:00.000Z") throw new Error(`start: ${midWeek.start}`);
+    if (midWeek.end !== "2026-08-03T00:00:00.000Z") throw new Error(`end: ${midWeek.end}`);
+    const onMonday = weekWindowUtc(new Date("2026-07-27T00:30:00Z"));
+    if (onMonday.start !== "2026-07-27T00:00:00.000Z") throw new Error("a Monday belongs to its own week");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

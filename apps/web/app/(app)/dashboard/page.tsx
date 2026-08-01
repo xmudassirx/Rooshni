@@ -9,6 +9,7 @@ import { durationSince, formatTime } from "@/lib/format";
 import {
   getDashboard,
   getInbox,
+  getLightPerformance,
   getPipeline,
   type StuckEnquiry,
 } from "@/lib/server/queries";
@@ -110,10 +111,11 @@ function StuckItems({ stuck }: { stuck: StuckEnquiry[] }) {
 }
 
 export default async function DashboardPage() {
-  const [dash, inbox, pipeline] = await Promise.all([
+  const [dash, inbox, pipeline, perf] = await Promise.all([
     getDashboard(),
     getInbox(),
     getPipeline(),
+    getLightPerformance(),
   ]);
 
   const byType = new Map<string, number>();
@@ -290,6 +292,34 @@ export default async function DashboardPage() {
               Nothing due today — open tasks live under Tasks.
             </div>
           )}
+        </Tile>
+
+        {/* WS3 (Session 22): the shadow-exit calibration instrument — existing
+            truth only (events + draft_feedback + communication statuses),
+            honest empty states, no model calls. */}
+        <Tile href="/record" head="✦ Light performance · this week">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <div>
+              <span className="font-display text-[22px] leading-none font-black">
+                {perf.approval_rate_pct !== null ? `${perf.approval_rate_pct}%` : "—"}
+              </span>{" "}
+              <span className="text-[10.5px] text-ink-faint">approval</span>
+            </div>
+            <div>
+              <span className="font-display text-[22px] leading-none font-black">
+                {perf.edit_rate_pct !== null ? `${perf.edit_rate_pct}%` : "—"}
+              </span>{" "}
+              <span className="text-[10.5px] text-ink-faint">edit-before-stamp</span>
+            </div>
+          </div>
+          <div className="mt-1.5 text-xs leading-relaxed text-ink-soft">
+            {perf.drafts_generated
+              ? `${perf.drafts_generated} draft${perf.drafts_generated === 1 ? "" : "s"} generated · ${perf.stamped} stamped · ${perf.rejected} rejected · ${perf.compliance_refusals} compliance refusal${perf.compliance_refusals === 1 ? "" : "s"} · ${perf.mean_tokens !== null ? `${perf.mean_tokens.toLocaleString("en-GB")} mean tokens` : "no token data"} · £${perf.spend_gbp.toFixed(2)} spend`
+              : "No drafts generated this week — the tile fills itself from The Record, never invention."}
+            {perf.approval_rate_pct === null && perf.drafts_generated > 0
+              ? " No stamps or rejections yet this week, so no rate is claimed."
+              : ""}
+          </div>
         </Tile>
 
         <Tile href="/billing" head="Metered cost · this month">

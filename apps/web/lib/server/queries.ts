@@ -1,6 +1,7 @@
 import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
 import {
+  computeLightPerformance,
   evaluateAiBudget,
   MONTH_SPEND_ROW_BOUND,
   monthWindowUtc,
@@ -16,6 +17,8 @@ import {
   resolveSignOffBody,
   resolveSignOffMode,
   resolveSignOffText,
+  weekWindowUtc,
+  type LightPerformance,
 } from "@rooshni/db";
 import { scaleDurationMs } from "@rooshni/config";
 import { getAppContext } from "./context";
@@ -1582,6 +1585,73 @@ export async function getMeteredUsage(): Promise<MeteredUsage> {
     },
     isOwner: membershipRole === "owner",
   };
+}
+
+/**
+ * Session 22 (WS3) — the Light performance tile's truth: existing rows only
+ * (events + draft_feedback + communication statuses), counts from COUNT
+ * aggregates (law 5e), the week's cost blocks as one bounded read, and the
+ * arithmetic in the pure computeLightPerformance the harness proves.
+ */
+export async function getLightPerformance(): Promise<LightPerformance> {
+  const { db, business } = await getAppContext();
+  const week = weekWindowUtc(new Date());
+  const countEvents = (action: string) =>
+    db
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("action", action)
+      .gte("occurred_at", week.start)
+      .lt("occurred_at", week.end);
+
+  const [drafts, stamped, rejected, edits, breaches, costRows] = await Promise.all([
+    countEvents("light.draft_generated"),
+    countEvents("communication.approved"),
+    countEvents("communication.rejected"),
+    db
+      .from("draft_feedback")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("kind", "edit")
+      .gte("created_at", week.start)
+      .lt("created_at", week.end),
+    db
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("action", "communication.compliance_checked")
+      .eq("payload->>result", "breach")
+      .gte("occurred_at", week.start)
+      .lt("occurred_at", week.end),
+    db
+      .from("events")
+      .select("cost")
+      .eq("business_id", business.id)
+      .eq("action", "light.draft_generated")
+      .gte("occurred_at", week.start)
+      .lt("occurred_at", week.end)
+      .limit(MONTH_SPEND_ROW_BOUND),
+  ]);
+  for (const [label, result] of [
+    ["drafts generated", drafts],
+    ["stamps", stamped],
+    ["rejections", rejected],
+    ["edit signals", edits],
+    ["compliance refusals", breaches],
+    ["cost blocks", costRows],
+  ] as const) {
+    if (result.error) throw new Error(`performance ${label} query failed: ${result.error.message}`);
+  }
+
+  return computeLightPerformance({
+    drafts_generated: drafts.count ?? 0,
+    stamped: stamped.count ?? 0,
+    rejected: rejected.count ?? 0,
+    edit_signals: edits.count ?? 0,
+    compliance_refusals: breaches.count ?? 0,
+    cost_blocks: (costRows.data ?? []).map((r) => r.cost as Record<string, unknown> | null),
+  });
 }
 
 // --- Website ---------------------------------------------------------------------
