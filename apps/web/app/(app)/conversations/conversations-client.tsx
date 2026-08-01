@@ -84,6 +84,8 @@ function stateChipClass(tone: "gold" | "you" | "done"): string {
 }
 
 function Bubble({ message, thread }: { message: ThreadMessage; thread: ConversationThread }) {
+  // PR-iii (Session 19): the "as sent" HTML view for dispatched emails.
+  const [showSentHtml, setShowSentHtml] = useState(false);
   if (message.channel === "call") {
     return (
       <div className="glass w-[90%] self-center rounded-lg px-3 py-2 text-xs">
@@ -163,6 +165,28 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
         </span>
       ) : null}
       {message.body}
+      {/* PR-iii (Session 19): a dispatched email stores its exact sent HTML —
+          The Record shows what was sent, on demand, sandboxed. */}
+      {message.sentHtml ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowSentHtml((v) => !v)}
+            aria-expanded={showSentHtml}
+            className="mt-1 block cursor-pointer font-mono text-[8.5px] tracking-wide text-accent uppercase hover:underline"
+          >
+            {showSentHtml ? "− hide as sent" : "+ view as sent (HTML)"}
+          </button>
+          {showSentHtml ? (
+            <iframe
+              title="The email exactly as it was sent"
+              sandbox=""
+              srcDoc={message.sentHtml}
+              className="mt-1 h-[300px] w-full rounded-md border border-rule bg-white"
+            />
+          ) : null}
+        </>
+      ) : null}
       <span
         className={cn(
           "mt-1 block font-mono text-[8.5px] tracking-wide text-ink-faint",

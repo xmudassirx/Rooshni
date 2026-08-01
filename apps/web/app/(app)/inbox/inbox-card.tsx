@@ -73,6 +73,13 @@ export interface InboxCardProps {
   /** Session 16 (PR-F) — approver sign-off mode: the body shown is the
    * render-resolved form (WYSIWYS); this note states the fact, neutrally. */
   signOffNote: string | null;
+  /** PR-iii (Session 19) — the exact HTML the client will receive, rendered
+   * by the same deterministic function dispatch uses over the same resolved
+   * body. Email drafts only; null elsewhere. */
+  emailHtmlPreview: string | null;
+  /** PR-i (Session 19) — "⎘ Spouse-Guide.pdf · 1.2MB", pre-formatted on the
+   * server; what the ATTACHMENTS pre-flight verified will actually ride. */
+  attachmentNotes: string[];
   /** Session 12 — selection mode, for bulk REJECTION only. Approval never
    * takes a selection: the stamp is individual by constitution. */
   selection?: { selected: boolean; onToggle: () => void } | null;
@@ -235,6 +242,7 @@ const EDIT_INITIAL: EditDraftState = { error: null };
 export function InboxCard(props: InboxCardProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [showHtml, setShowHtml] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editState, editFormAction, editPending] = useActionState(editDraftAction, EDIT_INITIAL);
   const failures = props.checks.filter((c) => !c.pass && c.detail);
@@ -285,6 +293,12 @@ export function InboxCard(props: InboxCardProps) {
           <Badge variant="time">drafted by {props.draftedBy ?? "unknown"}</Badge>
         )}
         {props.editedNote ? <Badge variant="time">{props.editedNote}</Badge> : null}
+        {/* PR-i: the document riding this send — declared, verified, named. */}
+        {props.attachmentNotes.map((note) => (
+          <Badge key={note} variant="source">
+            {note}
+          </Badge>
+        ))}
         {/* Session 16 (decision 133a): what this draft replaced — a fact in
             neutral chrome; the superseded row itself lives in History. */}
         {props.supersedeNote ? <Badge variant="time">{props.supersedeNote}</Badge> : null}
@@ -330,24 +344,49 @@ export function InboxCard(props: InboxCardProps) {
           </div>
         </form>
       ) : (
-        <button
-          type="button"
-          onClick={() => canExpand && setOpen((v) => !v)}
-          aria-expanded={open}
-          className={cn(
-            "my-2 block w-full rounded-lg border border-rule bg-paper px-3 py-2.5 text-left text-[13.5px] text-ink",
-            canExpand && "cursor-pointer transition-colors hover:border-ledger"
-          )}
-        >
-          <span className={cn(!open && "line-clamp-2", open && "whitespace-pre-wrap")}>
-            {open ? (props.fullBody ?? props.preview) : props.preview}
-          </span>
-          {canExpand ? (
-            <span className="mt-1.5 block font-mono text-[10px] tracking-wide text-ink-faint uppercase">
-              {open ? "— tap to collapse" : "— tap to open the full message"}
+        <>
+          <button
+            type="button"
+            onClick={() => canExpand && setOpen((v) => !v)}
+            aria-expanded={open}
+            className={cn(
+              "my-2 block w-full rounded-lg border border-rule bg-paper px-3 py-2.5 text-left text-[13.5px] text-ink",
+              canExpand && "cursor-pointer transition-colors hover:border-ledger"
+            )}
+          >
+            <span className={cn(!open && "line-clamp-2", (open || showHtml) && "whitespace-pre-wrap")}>
+              {open || showHtml ? (props.fullBody ?? props.preview) : props.preview}
             </span>
+            {canExpand ? (
+              <span className="mt-1.5 block font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+                {open ? "— tap to collapse" : "— tap to open the full message"}
+              </span>
+            ) : null}
+          </button>
+          {/* PR-iii (Session 19): WYSIWYS for the HTML dress — the stamp view
+              shows the rendered mail the client will receive, produced by the
+              same deterministic renderer dispatch uses on these exact words. */}
+          {props.emailHtmlPreview ? (
+            <div className="my-2">
+              <button
+                type="button"
+                onClick={() => setShowHtml((v) => !v)}
+                aria-expanded={showHtml}
+                className="cursor-pointer font-mono text-[10px] tracking-wide text-accent uppercase hover:underline"
+              >
+                {showHtml ? "− hide the rendered email" : "+ view as the client will receive it (HTML)"}
+              </button>
+              {showHtml ? (
+                <iframe
+                  title="Rendered email — exactly what sends"
+                  sandbox=""
+                  srcDoc={props.emailHtmlPreview}
+                  className="mt-1.5 h-[340px] w-full rounded-lg border border-rule bg-white"
+                />
+              ) : null}
+            </div>
           ) : null}
-        </button>
+        </>
       )}
 
       <div className="mb-2 flex flex-col gap-1">

@@ -1,6 +1,13 @@
 import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
-import { resolveSignOffBody, resolveSignOffMode, resolveSignOffText } from "@rooshni/db";
+import {
+  plainTextOfBody,
+  renderEmailHtml,
+  resolveEmailIdentity,
+  resolveSignOffBody,
+  resolveSignOffMode,
+  resolveSignOffText,
+} from "@rooshni/db";
 import { scaleDurationMs } from "@rooshni/config";
 import { getAppContext } from "./context";
 
@@ -228,6 +235,13 @@ export interface CommunicationDetail {
    * names them; a viewer without stamp authority sees the firm form with
    * resolvedTo null. */
   signOff: { mode: "approver"; resolvedTo: string | null } | null;
+  /** PR-iii (Session 19) — the HTML the client will receive, rendered by the
+   * SAME deterministic function dispatch uses, over the same resolved body
+   * (WYSIWYS: the stamp view shows what sends). Email drafts only. */
+  emailHtmlPreview: string | null;
+  /** PR-i (Session 19) — the declared attachments the pre-flight verifies
+   * and the dispatch will carry. */
+  attachments: { filename: string; sizeBytes: number }[];
 }
 
 /** Full draft for the inbox detail panel — the view carries only a preview. */
@@ -470,6 +484,19 @@ export async function getCommunicationDetail(
     editedBy,
     supersedes,
     signOff,
+    // PR-iii: rendered over the RESOLVED body — the exact transformation the
+    // dispatcher will apply to the exact words the stamp approves.
+    emailHtmlPreview:
+      data.channel === "email"
+        ? renderEmailHtml(body, resolveEmailIdentity(ctxBusiness.name, bizSettings))
+        : null,
+    // PR-i: what will ride the send, named on the card.
+    attachments: Array.isArray(commAttrs.attachments)
+      ? (commAttrs.attachments as Array<{ filename?: unknown; size_bytes?: unknown }>).map((a) => ({
+          filename: String(a.filename ?? "document"),
+          sizeBytes: Number(a.size_bytes ?? 0),
+        }))
+      : [],
   };
 }
 
@@ -511,7 +538,9 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
   const { data: comms, error: commError } = commIds.length
     ? await db
         .from("communications")
-        .select("id, channel, body, thread_id, engagement_id, contact_id, comm_threads(contact_id), contacts(display_name)")
+        .select(
+          "id, channel, body, body_format, plain_body:attributes->>plain_body, thread_id, engagement_id, contact_id, comm_threads(contact_id), contacts(display_name)"
+        )
         .in("id", commIds)
     : { data: [], error: null };
   if (commError) throw new Error(`history communications query failed: ${commError.message}`);
@@ -524,6 +553,8 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
           id: string;
           channel: string;
           body: string;
+          body_format: string;
+          plain_body: string | null;
           thread_id: string | null;
           engagement_id: string | null;
           contacts: { display_name: string } | { display_name: string }[] | null;
@@ -551,7 +582,10 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
         reason: typeof payload.reason === "string" ? payload.reason : null,
         communicationId: e.entity_id,
         channel: comm?.channel ?? null,
-        preview: comm?.body ? comm.body.slice(0, 140) : null,
+        // PR-iii: previews are always the WORDS, never markup.
+        preview: comm?.body
+          ? (comm.body_format === "html" ? (comm.plain_body ?? plainTextOfBody(comm.body, "html")) : comm.body).slice(0, 140)
+          : null,
         contactName: Array.isArray(contactRel)
           ? (contactRel[0]?.display_name ?? null)
           : (contactRel?.display_name ?? null),
@@ -826,6 +860,10 @@ export interface ThreadMessage {
   stampedByName: string | null;
   /** An outbound draft still waiting for its stamp — gold, dashed, unsent. */
   isPendingDraft: boolean;
+  /** PR-iii (Session 19): a dispatched email's exact sent HTML document, when
+   * the row stores one (body_format html) — the "as sent" view. `body` is
+   * always the plain words. */
+  sentHtml: string | null;
 }
 
 export interface ThreadConsent {
@@ -888,7 +926,7 @@ export async function getConversations(): Promise<ConversationThread[]> {
     db
       .from("communications")
       .select(
-        "id, thread_id, channel, direction, status, body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id"
+        "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id"
       )
       .eq("business_id", business.id)
       .is("archived_at", null)
@@ -983,12 +1021,18 @@ export async function getConversations(): Promise<ConversationThread[]> {
     const messages: ThreadMessage[] = list.map((c) => {
       const draftedBy = c.drafted_by_actor_id ? actorById.get(c.drafted_by_actor_id) : null;
       const approvedBy = c.approved_by_actor_id ? actorById.get(c.approved_by_actor_id) : null;
+      // PR-iii (Session 19): a dispatched email row stores its sent HTML —
+      // the bubble reads the WORDS (the preserved plain source, else the
+      // deterministic extraction), and the exact document rides along for
+      // the "as sent" view.
+      const isHtml = (c as { body_format?: string }).body_format === "html";
+      const plainBody = (c as { plain_body?: string | null }).plain_body;
       return {
         id: c.id,
         channel: c.channel,
         direction: c.direction as ThreadMessage["direction"],
         status: c.status,
-        body: c.body,
+        body: isHtml ? (plainBody ?? plainTextOfBody(c.body, "html")) : c.body,
         subject: null,
         occurredAt: c.occurred_at,
         scheduledFor: c.scheduled_for,
@@ -996,6 +1040,7 @@ export async function getConversations(): Promise<ConversationThread[]> {
         draftedByLight: draftedBy?.type === "agent",
         stampedByName: approvedBy?.name ?? null,
         isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
+        sentHtml: isHtml ? c.body : null,
       };
     });
 
@@ -1998,7 +2043,7 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
     db
       .from("communications")
       .select(
-        "id, channel, direction, status, body, occurred_at, scheduled_for, drafted_by_actor_id, approved_by_actor_id, created_by, comm_threads(subject)"
+        "id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, occurred_at, scheduled_for, drafted_by_actor_id, approved_by_actor_id, created_by, comm_threads(subject)"
       )
       .eq("engagement_id", id)
       .is("archived_at", null)
@@ -2150,12 +2195,17 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
       const draftedBy = c.drafted_by_actor_id ? actors.get(c.drafted_by_actor_id) : undefined;
       const approvedBy = c.approved_by_actor_id ? actors.get(c.approved_by_actor_id) : undefined;
       const approval = approvals.get(c.id);
+      // PR-iii: a dispatched email row stores its sent HTML — the timeline
+      // reads the words (preserved plain source, else the deterministic
+      // extraction).
+      const isHtml = (c as { body_format?: string }).body_format === "html";
+      const plainBody = (c as { plain_body?: string | null }).plain_body;
       return {
         id: c.id,
         channel: c.channel,
         direction: c.direction,
         status: c.status,
-        body: c.body,
+        body: isHtml ? (plainBody ?? plainTextOfBody(c.body, "html")) : c.body,
         subject: thread?.subject ?? null,
         occurredAt: c.occurred_at,
         scheduledFor: c.scheduled_for,
@@ -2684,6 +2734,10 @@ export interface KnowledgeEntryRow {
   version: number;
   updatedAt: string;
   bodyText: string;
+  /** PR-i (Session 19): a route_guide entry's live linked document —
+   * "documents are entries with a file". Null on text entries and on a
+   * guide whose file was never uploaded (a visibly incomplete guide). */
+  file: { filename: string; sizeBytes: number } | null;
 }
 
 /** Every live pack entry, for the Settings → Knowledge editor (the one door). */
@@ -2697,6 +2751,39 @@ export async function getKnowledgeEntries(): Promise<KnowledgeEntryRow[]> {
     .is("archived_at", null)
     .order("updated_at", { ascending: false });
   if (error) throw new Error(`knowledge entries query failed: ${error.message}`);
+
+  // PR-i: resolve each entry's newest live linked file in one pass.
+  const entryIds = (data ?? []).map((r) => r.id as string);
+  const fileByEntry = new Map<string, { filename: string; sizeBytes: number }>();
+  if (entryIds.length) {
+    const { data: links } = await db
+      .from("file_links")
+      .select("entity_id, file_id, created_at")
+      .eq("entity_type", "content_item")
+      .eq("role", "attachment")
+      .in("entity_id", entryIds)
+      .order("created_at", { ascending: false });
+    const fileIds = [...new Set((links ?? []).map((l) => l.file_id as string))];
+    if (fileIds.length) {
+      const { data: files } = await db
+        .from("files")
+        .select("id, filename, size_bytes")
+        .in("id", fileIds)
+        .is("archived_at", null);
+      const liveFiles = new Map((files ?? []).map((f) => [f.id as string, f]));
+      for (const link of links ?? []) {
+        if (fileByEntry.has(link.entity_id as string)) continue; // newest live wins
+        const file = liveFiles.get(link.file_id as string);
+        if (file) {
+          fileByEntry.set(link.entity_id as string, {
+            filename: file.filename as string,
+            sizeBytes: Number(file.size_bytes),
+          });
+        }
+      }
+    }
+  }
+
   return (data ?? []).map((row) => {
     const attrs = (row.attributes ?? {}) as Record<string, unknown>;
     const body = row.body;
@@ -2715,6 +2802,7 @@ export async function getKnowledgeEntries(): Promise<KnowledgeEntryRow[]> {
       version: row.version ?? 1,
       updatedAt: row.updated_at,
       bodyText,
+      file: fileByEntry.get(row.id as string) ?? null,
     };
   });
 }

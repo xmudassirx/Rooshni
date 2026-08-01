@@ -78,7 +78,7 @@ function EntryDialog({
                 </option>
               ))}
             </select>
-            {category === "service_description" ? (
+            {category === "service_description" || category === "route_guide" ? (
               <>
                 <span className="font-mono text-[9.5px] font-semibold tracking-[.14em] text-ink-faint uppercase">
                   Route
@@ -98,11 +98,36 @@ function EntryDialog({
               </>
             ) : null}
           </div>
+          {/* PR-i (Session 19): a route guide is a DOCUMENT — an entry with a
+              file. PDF only, 8MB ceiling (refused loudly at upload, at the
+              stamp, and at dispatch alike). */}
+          {category === "route_guide" ? (
+            <label className="mt-2.5 block">
+              <span className="mb-1 block font-mono text-[9.5px] font-semibold tracking-[.14em] text-ink-faint uppercase">
+                Document (PDF, up to 8MB)
+              </span>
+              <input
+                type="file"
+                name="file"
+                accept="application/pdf,.pdf"
+                className="w-full rounded-xl border-[1.5px] border-rule bg-paper px-3 py-2 text-[12.5px] text-ink file:mr-3 file:rounded-lg file:border-0 file:bg-paper-deep file:px-2.5 file:py-1 file:font-mono file:text-[10px] file:tracking-wide file:uppercase"
+              />
+              <span className="mt-1 block text-[11px] text-ink-faint">
+                {entry?.file
+                  ? `Current document: ${entry.file.filename} (${(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB) — uploading a new one replaces it (the old file is archived, never deleted).`
+                  : "Once published, Light attaches this guide to intro emails for its route. No file, no attachment — never a placeholder."}
+              </span>
+            </label>
+          ) : null}
           <Textarea
             name="body"
             defaultValue={entry?.bodyText ?? ""}
-            rows={9}
-            placeholder="Plain text — this is what Light reads. Published fees belong here word for word; Light may never quote an amount you have not published."
+            rows={category === "route_guide" ? 3 : 9}
+            placeholder={
+              category === "route_guide"
+                ? "Optional note about this guide (for your team — Light does not read it into drafts)."
+                : "Plain text — this is what Light reads. Published fees belong here word for word; Light may never quote an amount you have not published."
+            }
             className="mt-2.5 text-[13px]"
           />
           {state.error ? <p className="mt-2 text-[12px] text-stamp">{state.error}</p> : null}
