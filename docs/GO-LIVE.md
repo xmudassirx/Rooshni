@@ -242,6 +242,48 @@ Add to this list during build; check items off only at go-live.
       each transition on The Record (communication.superseded, reason
       migration_normalisation). The cron sweep self-heals leftovers, but the
       explicit run closes the books the same day. Idempotent.
+- [ ] **Create the marketing site's own Vercel project** (introduced
+      Session 17 — founder console act): Vercel dashboard → Add New →
+      Project → import `xmudassirx/Rooshni` → Root Directory =
+      `apps/marketing` → Framework Preset = Next.js (build/install defaults
+      stand) → Deploy. Then set env vars (Project → Settings → Environment
+      Variables): `SUPABASE_URL` + `SUPABASE_SECRET_KEY` (production ONLY —
+      the demo route's write key; previews stay keyless and the route fails
+      closed there), `MARKETING_DEMO_BUSINESS_ID` (see the tenant item
+      below), `NEXT_PUBLIC_APP_URL` (the product app's canonical URL, the
+      Session 18 seam — the site's sign-up links compose from it),
+      `NEXT_PUBLIC_SITE_URL` (the marketing site's own canonical URL, for
+      metadata/OG). The DoD circuit (founder submits /demo, enquiry appears
+      in the pipeline) runs only after this project exists.
+- [ ] **Wire the marketing domain** (introduced Session 17 — founder console
+      act): add the public domain (barakahx.com, or the chosen host) to the
+      MARKETING Vercel project (Project → Settings → Domains) and keep the
+      product app on its own host (e.g. app.barakahx.com), which is what
+      `NEXT_PUBLIC_APP_URL` should then carry in BOTH projects. Update
+      `NEXT_PUBLIC_SITE_URL` when the domain lands so OG metadata carries
+      the real host.
+- [ ] **The BarakahX demo tenant does not exist yet — create it, then set
+      `MARKETING_DEMO_BUSINESS_ID`** (introduced Session 17, staged per the
+      fence rather than invented): verified read-only on live, 1 Aug 2026 —
+      the businesses table holds X Law, Jurists, Jurists Pilot and Bikayga
+      only; no BarakahX business anywhere (one pre_active account "Mudassir
+      Mukhtar", `019f6f1f-b1d7-779d-a2b4-3784994ac4c4`, holds no business).
+      The demo route needs a live business with an installed template and
+      exactly one workflow actor on its account — everything the activation
+      door creates. Founder: complete a BarakahX signup through the
+      product's own door (or name an existing business as the demo
+      pipeline), then set `MARKETING_DEMO_BUSINESS_ID` to that business id
+      in the marketing Vercel project. The route fails closed (503, honest
+      copy) until then.
+- [ ] **Founder passes on the marketing copy before the site meets
+      strangers** (introduced Session 17): the founder note page is
+      builder-drafted in the founder's voice (the decision-111 precedent —
+      his own rewrite lands before it carries his signature publicly), and
+      the four screenshot placeholders await his supplied captures (all
+      1600 x 1000: the Approval Inbox queue on home; an Approval Inbox card,
+      a day of The Record, and a draft-with-context card on /product).
+      Rendered copy carries no em or en dashes — keep it that way when
+      editing.
 - [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
       Session 3/6 demo drafts that were approved in the stub era carry
       `communication.send_stubbed` events; the dispatcher permanently walks
