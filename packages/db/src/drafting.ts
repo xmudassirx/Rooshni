@@ -6,6 +6,7 @@ import {
   type EscalationDecision,
 } from "./model-router";
 import type { FormAnswer } from "./meta";
+import { substituteBookingLink } from "./booking-link";
 
 /**
  * The query-aware drafting engine (Session 15). Light composes against:
@@ -212,6 +213,15 @@ export interface ComposeDraftInput {
   form_answers: FormAnswer[];
   no_go_rules: string[];
   retrieval: RetrievalResult;
+  /** PR-iv (Session 19): the firm's configured booking URL. When set, the
+   * prompt invites the literal [link] token and composition substitutes the
+   * real URL into the stored body — WYSIWYS holds. When null, no [link] may
+   * survive composition. */
+  booking_url?: string | null;
+  /** PR-i (Session 19): the route-matched PUBLISHED guide that will ride the
+   * email — the prompt may reference it naturally. Null = no guide published
+   * for this route: the draft never mentions one (no placeholders, ever). */
+  attachment?: { title: string; filename: string } | null;
 }
 
 export interface ComposeDraftResult {
@@ -271,6 +281,16 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — a few short sentences; say less.`,
     REGISTER_PUNCTUATION_LINE,
+    ...(input.booking_url
+      ? [
+          `- The firm has a booking page. Where you invite a consultation, offer it by writing the token [link] exactly (it becomes the booking URL); never write any other URL and never invent one.`,
+        ]
+      : []),
+    ...(input.attachment
+      ? [
+          `- The firm's guide "${input.attachment.title}" (${input.attachment.filename}) is attached to this email. Mention the attached guide in one natural phrase; never describe its contents beyond its title.`,
+        ]
+      : []),
     `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
     ``,
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
@@ -358,9 +378,20 @@ export async function composeDraft(
     );
   }
 
+  // PR-iv (Session 19): the [link] token becomes the real booking URL in the
+  // STORED body — the stamp approves the exact words, URL included. A token
+  // with no configured URL is a visible composition failure, never a literal
+  // "[link]" in a client's inbox.
+  let finalBody: string;
+  try {
+    finalBody = substituteBookingLink(body, input.booking_url ?? null);
+  } catch (err) {
+    throw new PermanentGenerationError(err instanceof Error ? err.message : String(err));
+  }
+
   return {
     subject: result.subject?.trim() || null,
-    body,
+    body: finalBody,
     attestation: {
       attested: result.attestation.attested === true,
       mode: "generated",
@@ -403,6 +434,9 @@ export interface ComposeReplyInput {
   form_answers: FormAnswer[];
   no_go_rules: string[];
   retrieval: RetrievalResult;
+  /** PR-iv (Session 19): the firm's configured booking URL — same law as
+   * ComposeDraftInput. */
+  booking_url?: string | null;
   /** Full thread context (decision 133a: the newest complete picture) —
    * chronological, sent-and-received only. */
   thread_messages: ThreadMessage[];
@@ -438,6 +472,11 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
     `- Never state or quote any fee amount that does not appear verbatim in the provided published knowledge.`,
     `- If the client asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome.`,
     `- Invite a consultation ONLY where the answer genuinely needs one — never as a reflex; follow the published booking policy where one is provided.`,
+    ...(input.booking_url
+      ? [
+          `- The firm has a booking page. Where a consultation is genuinely invited, offer it by writing the token [link] exactly (it becomes the booking URL); never write any other URL and never invent one.`,
+        ]
+      : []),
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — answer, then stop.`,
     REGISTER_PUNCTUATION_LINE,
@@ -542,9 +581,17 @@ export async function composeReplyDraft(
     );
   }
 
+  // PR-iv (Session 19): same booking-link law as composeDraft.
+  let finalBody: string;
+  try {
+    finalBody = substituteBookingLink(body, input.booking_url ?? null);
+  } catch (err) {
+    throw new PermanentGenerationError(err instanceof Error ? err.message : String(err));
+  }
+
   return {
     subject: result.subject?.trim() || null,
-    body,
+    body: finalBody,
     attestation: {
       attested: result.attestation.attested === true,
       mode: "generated",

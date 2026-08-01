@@ -16,6 +16,8 @@ import {
 } from "./drafting";
 import type { FormAnswer } from "./meta";
 import { resolveSignOffText } from "./sign-off";
+import { resolveBookingUrl, substituteBookingLink } from "./booking-link";
+import { declareAttachment, findPublishedRouteGuide, type RouteGuide } from "./route-guides";
 import type {
   EventRow,
   RealDuration,
@@ -488,7 +490,10 @@ async function recordComplianceCheck(
   return out;
 }
 
-async function templateVars(db: SupabaseClient, facts: EngagementFacts): Promise<Record<string, string>> {
+async function templateVars(
+  db: SupabaseClient,
+  facts: EngagementFacts
+): Promise<{ vars: Record<string, string>; settings: Record<string, unknown> }> {
   const owners = await q<{ display_name: string }[]>(
     db.from("actors").select("display_name").eq("id", facts.owner_actor_id).limit(1),
     "owner lookup"
@@ -499,6 +504,7 @@ async function templateVars(db: SupabaseClient, facts: EngagementFacts): Promise
   );
   const fullName = facts.contact?.display_name ?? "";
   const businessName = businesses[0]?.name ?? "";
+  const settings = businesses[0]?.settings ?? {};
   // Founder-ruled (Session 15 close review): the email sign-off renders from
   // a business-identity field — never the owner's personal name, never
   // hardcoded. Only the firm-name default ships this session.
@@ -507,13 +513,19 @@ async function templateVars(db: SupabaseClient, facts: EngagementFacts): Promise
   // session — until then the firm display name is the value.
   // Session 16 (PR-F): one resolver module (sign-off.ts) is the truth for
   // the text; approver mode resolves at render+stamp, never at generation.
-  const signOff = resolveSignOffText(businesses[0]?.settings ?? {}, businessName);
+  const signOff = resolveSignOffText(settings, businessName);
   return {
-    first_name: facts.contact?.given_name ?? fullName.split(/\s+/)[0] ?? "",
-    full_name: fullName,
-    owner_name: owners[0]?.display_name ?? "",
-    business_name: businessName,
-    sign_off: signOff,
+    vars: {
+      first_name: facts.contact?.given_name ?? fullName.split(/\s+/)[0] ?? "",
+      full_name: fullName,
+      owner_name: owners[0]?.display_name ?? "",
+      business_name: businessName,
+      sign_off: signOff,
+    },
+    // Session 19 (PR-iv/PR-iii): the executors also need the business's
+    // settings (booking URL now; carried alongside the vars so one lookup
+    // serves both).
+    settings,
   };
 }
 
@@ -543,6 +555,197 @@ async function pickChannel(
   return { channel: fallback, fell_back: true };
 }
 
+/**
+ * PR-ii (Session 19) — the companion WhatsApp touch of a multi-channel
+ * intro step. Fires ONLY where the contact holds a live CONSENTED whatsapp
+ * channel AND the template carries a Meta-approved wa_template mapping
+ * (decisions 118/119: the draft body is the approved template's exact
+ * wording, per channel — WYSIWYS). Its own draft, its own individual stamp
+ * (decision 113); it NEVER blocks the run — the primary's stamp does. The
+ * one-pending-per-engagement-per-channel guard (0029) is pre-checked so an
+ * existing pending WhatsApp draft means a silent, correct skip.
+ * Returns a short outcome string for the step-run outcome payload.
+ *
+ * JUDGMENT: with two intro drafts, decision 48's "nurture waits anchor
+ * after the intro stamp" reads as the EMAIL (primary) stamp — the run
+ * blocks on it alone, and the companion's stamp or refusal never gates the
+ * sequence. Awaiting sign-off at close.
+ */
+async function draftWhatsAppCompanion(
+  db: SupabaseClient,
+  bundle: RunBundle,
+  step: BundleStep,
+  stepRun: StepRunRow
+): Promise<string> {
+  const { run } = bundle;
+  const drafter = (run.context.drafter_actor_id as string) ?? run.created_by;
+
+  const facts = await loadEngagementFacts(db, run.engagement_id);
+  if (!facts.contact) return "skipped: no client contact";
+
+  // WhatsApp consent — the strict per-channel law (Spec 1 §4.1; the same
+  // fact the readiness pre-flight will check at the stamp).
+  const channels = await q<{ id: string; consent: Record<string, unknown> | null }[]>(
+    db
+      .from("contact_channels")
+      .select("id, consent")
+      .eq("contact_id", facts.contact.id)
+      .eq("channel", "whatsapp")
+      .is("archived_at", null),
+    "companion consent lookup"
+  );
+  const consented = channels.some(
+    (c) => c.consent?.transactional === true || c.consent?.marketing === true
+  );
+  if (!consented) return "skipped: no consented WhatsApp channel — email-only, silently correct";
+
+  const templateKey = step.config.template;
+  if (!templateKey) return "skipped: no template configured";
+  const templates = await q<
+    { id: string; key: string; version: number; subject: string | null; body: string; attributes: Record<string, unknown> }[]
+  >(
+    db
+      .from("message_templates")
+      .select("id, key, version, subject, body, attributes")
+      .eq("business_id", run.business_id)
+      .eq("key", templateKey)
+      .is("archived_at", null)
+      .order("version", { ascending: false })
+      .limit(1),
+    "companion template lookup"
+  );
+  if (!templates[0]) return "skipped: template not found";
+  const raw = templates[0].attributes?.wa_template as
+    | { name?: string; language?: string; params?: string[] }
+    | undefined;
+  if (!raw?.name) return "skipped: no approved WhatsApp template mapping — email-only, silently correct";
+
+  // The 0029 guard: at most ONE pending outbound draft per engagement per
+  // channel — an existing pending WhatsApp draft means this touch stands
+  // down rather than colliding with the supersede machinery.
+  const pending = await q<{ id: string }[]>(
+    db
+      .from("communications")
+      .select("id")
+      .eq("engagement_id", run.engagement_id)
+      .eq("channel", "whatsapp")
+      .eq("direction", "outbound")
+      .eq("status", "pending_approval")
+      .is("archived_at", null)
+      .limit(1),
+    "companion pending guard check"
+  );
+  if (pending.length) return "skipped: a pending WhatsApp draft already exists on this enquiry";
+
+  const { vars } = await templateVars(db, facts);
+  // Decision 119: the WhatsApp body is the Meta-approved template text
+  // VERBATIM, from attributes.bodies.whatsapp — the stamp shows exactly the
+  // words Meta will carry.
+  const body = renderTemplate(resolveTemplateBody(templates[0], "whatsapp"), vars);
+  const waTemplate = {
+    name: raw.name,
+    language: raw.language ?? "en_GB",
+    ...(raw.params?.length
+      ? {
+          components: [
+            { type: "body", parameters: raw.params.map((p) => ({ type: "text", text: vars[p] ?? "" })) },
+          ],
+        }
+      : {}),
+  };
+
+  const threads = await q<{ id: string }[]>(
+    db
+      .from("comm_threads")
+      .select("id")
+      .eq("engagement_id", run.engagement_id)
+      .eq("channel", "whatsapp")
+      .is("archived_at", null)
+      .limit(1),
+    "companion thread lookup"
+  );
+  let threadId = threads[0]?.id;
+  if (!threadId) {
+    const created = await q<{ id: string }[]>(
+      db
+        .from("comm_threads")
+        .insert({
+          business_id: run.business_id,
+          created_by: drafter,
+          contact_id: facts.contact.id,
+          engagement_id: run.engagement_id,
+          channel: "whatsapp",
+          subject: null,
+        })
+        .select("id"),
+      "companion thread insert"
+    );
+    threadId = created[0]!.id;
+  }
+
+  const inserted = await q<{ id: string }[]>(
+    db
+      .from("communications")
+      .insert({
+        business_id: run.business_id,
+        created_by: drafter,
+        thread_id: threadId,
+        contact_id: facts.contact.id,
+        engagement_id: run.engagement_id,
+        channel: "whatsapp",
+        direction: "outbound",
+        status: "draft",
+        body,
+        body_format: "plain",
+        drafted_by_actor_id: drafter,
+        attributes: {
+          workflow_run_id: run.id,
+          step_run_id: stepRun.id,
+          template_key: templates[0].key,
+          template_version: templates[0].version,
+          wa_template: waTemplate,
+          companion: "whatsapp",
+        },
+      })
+      .select("id"),
+    "companion communication insert"
+  );
+  const commId = inserted[0]!.id;
+
+  // C-2: an agent-drafted row needs its recorded check — the approved
+  // template path attests as such (decision 132 rider 6).
+  await recordComplianceCheck(db, run.business_id, commId, drafter, {
+    attested: true,
+    mode: "approved_template",
+    statement: "Body is the Meta-approved template wording with variables filled; no generative content.",
+  });
+
+  await emitEvent(db, {
+    business_id: run.business_id,
+    actor_id: drafter,
+    action: "communication.drafted",
+    entity_type: "communication",
+    entity_id: commId,
+    payload: {
+      channel: "whatsapp",
+      engagement_id: run.engagement_id,
+      workflow_run_id: run.id,
+      step_key: step.key,
+      template_key: templates[0].key,
+      companion: true,
+      note: "multi-touch intro — the WhatsApp companion of the email intro; its own individual stamp",
+    },
+  });
+
+  await submitCommunication(db, {
+    business_id: run.business_id,
+    communication_id: commId,
+    actor_id: drafter,
+  });
+
+  return `drafted: communication ${commId}`;
+}
+
 async function executeDraftComm(
   db: SupabaseClient,
   bundle: RunBundle,
@@ -556,16 +759,24 @@ async function executeDraftComm(
   const engineActor = (run.context.engine_actor_id as string) ?? run.created_by;
 
   // Idempotency: a crash between insert and completion must not draft twice.
-  const existing = await q<{ id: string; channel: string; contact_id: string | null; status: string }[]>(
+  // PR-ii (Session 19): a step run may now own SEVERAL drafts — the primary
+  // plus companion touches (attributes.companion = channel) — so the lookup
+  // reads them all and the primary is the row without the companion mark.
+  const existing = await q<
+    { id: string; channel: string; contact_id: string | null; status: string; attributes: Record<string, unknown> | null }[]
+  >(
     db
       .from("communications")
-      .select("id, channel, contact_id, status")
-      .eq("attributes->>step_run_id", stepRun.id)
-      .limit(1),
+      .select("id, channel, contact_id, status, attributes")
+      .eq("attributes->>step_run_id", stepRun.id),
     "draft idempotency lookup"
   );
+  const existingCompanionChannels = new Set(
+    existing.filter((c) => c.attributes?.companion).map((c) => c.channel)
+  );
 
-  let comm = existing[0] ?? null;
+  let comm: { id: string; channel: string; contact_id: string | null; status: string } | null =
+    existing.find((c) => !c.attributes?.companion) ?? null;
   if (!comm) {
     const facts = await loadEngagementFacts(db, run.engagement_id);
     if (!facts.contact) throw new Error(`Engagement ${run.engagement_id} has no client contact to write to`);
@@ -586,7 +797,10 @@ async function executeDraftComm(
     );
     if (!templates[0]) throw new Error(`Message template "${templateKey}" not found for this business`);
 
-    const vars = await templateVars(db, facts);
+    const { vars, settings: businessSettings } = await templateVars(db, facts);
+    // PR-iv (Session 19): the firm's booking URL, resolved once — [link] in
+    // any client-facing body becomes it; unset means no token may survive.
+    const bookingUrl = resolveBookingUrl(businessSettings);
     const intended = (step.config.channel as string) ?? templates[0].channel;
     const picked = await pickChannel(db, facts.contact.id, intended, step.config.fallback_channel);
 
@@ -604,6 +818,7 @@ async function executeDraftComm(
     let composed: ComposeDraftResult | null = null;
     let composeInput: Parameters<typeof composeDraft>[1] | null = null;
     let attestation: DraftAttestation;
+    let guide: RouteGuide | null = null;
 
     if (generative) {
       const generator = createAnthropicGenerator();
@@ -631,6 +846,18 @@ async function executeDraftComm(
       try {
         const retrieval = await retrieveKnowledgeEntries(db, run.business_id, leadText);
         const noGoRules = await loadNoGoRules(db, run.business_id);
+        // PR-i (Session 19): the intro email carries the route-matched
+        // PUBLISHED guide when one exists — the enquiry's declared route
+        // first, then the lead's own words. No guide = no attachment, never
+        // a placeholder; the pre-flight verifies the file before the stamp.
+        if (templateKey.startsWith("intro") && picked.channel === "email") {
+          const declaredRoute =
+            typeof facts.attributes?.visa_route === "string" ? [facts.attributes.visa_route as string] : [];
+          guide = await findPublishedRouteGuide(db, run.business_id, [
+            ...declaredRoute,
+            ...retrieval.route_matches,
+          ]);
+        }
         composeInput = {
           business_name: vars.business_name ?? "",
           sign_off: vars.sign_off ?? vars.business_name ?? "",
@@ -644,6 +871,8 @@ async function executeDraftComm(
           form_answers: formAnswers,
           no_go_rules: noGoRules,
           retrieval,
+          booking_url: bookingUrl,
+          attachment: guide ? { title: guide.title, filename: guide.file.filename } : null,
         };
         composed = await composeDraft(generator, composeInput);
         body = composed.body;
@@ -671,7 +900,9 @@ async function executeDraftComm(
         throw new Error(`draft generation failed: ${reason}`);
       }
     } else {
-      body = renderTemplate(resolveTemplateBody(templates[0], picked.channel), vars);
+      // PR-iv: [link] resolves in template bodies too — same fail-fast lane
+      // as unresolved braces (a token with no configured URL never sends).
+      body = substituteBookingLink(renderTemplate(resolveTemplateBody(templates[0], picked.channel), vars), bookingUrl);
       // No generation happened: the body is founder-approved template
       // wording with variables filled — attested as such (C-2 requires an
       // attestation for every agent-drafted row born after 0026).
@@ -765,6 +996,9 @@ async function executeDraftComm(
             ...(subject ? { subject } : {}),
             ...(picked.fell_back ? { channel_fallback_from: intended } : {}),
             ...(waTemplate ? { wa_template: waTemplate } : {}),
+            // PR-i (Session 19): the declared attachment the 0032 pre-flight
+            // verifies and the dispatcher carries.
+            ...(guide ? { attachments: [declareAttachment(guide)] } : {}),
             // Session 15: the credit line — the founder's visibility into
             // Light's spend and sources at the moment of stamping (PR-3).
             ...(composed ? { credit_line: { ...composed.credit_line, attempts: 1 } } : {}),
@@ -774,6 +1008,33 @@ async function executeDraftComm(
       "communication insert"
     );
     comm = inserted[0]!;
+
+    // PR-i: the guide's file is LINKED to the draft — existence + linkage is
+    // exactly what the ATTACHMENTS pre-flight verifies before the stamp.
+    if (guide) {
+      const { error: linkError } = await db.from("file_links").insert({
+        business_id: run.business_id,
+        file_id: guide.file.id,
+        entity_type: "communication",
+        entity_id: comm.id,
+        role: "attachment",
+      });
+      if (linkError) throw new Error(`attachment link insert failed: ${linkError.message}`);
+      await emitEvent(db, {
+        business_id: run.business_id,
+        actor_id: drafter,
+        action: "communication.attachment_declared",
+        entity_type: "communication",
+        entity_id: comm.id,
+        payload: {
+          file_id: guide.file.id,
+          filename: guide.file.filename,
+          size_bytes: guide.file.size_bytes,
+          content_item_id: guide.content_item_id,
+          visa_route: guide.visa_route,
+        },
+      });
+    }
 
     // The compliance check is recorded at generation (0026): heuristics run
     // server-side against the exact wording, the model's attestation rides
@@ -813,6 +1074,8 @@ async function executeDraftComm(
                 template_version: templates[0].version,
                 ...(subject ? { subject } : {}),
                 ...(picked.fell_back ? { channel_fallback_from: intended } : {}),
+                // PR-i: the declared attachment survives the compliance retry.
+                ...(guide ? { attachments: [declareAttachment(guide)] } : {}),
                 credit_line: mergedCredit,
               },
             })
@@ -887,10 +1150,41 @@ async function executeDraftComm(
     });
   }
 
+  // PR-ii (Session 19): companion touches — config-driven multi-channel.
+  // Each companion is its own draft with its own individual stamp; a
+  // companion that cannot fire is a silent, correct skip recorded in the
+  // step outcome; a companion FAILURE never blocks the primary or the run.
+  const companionChannels = Array.isArray(step.config.companion_channels)
+    ? step.config.companion_channels
+    : [];
+  const companions: Record<string, string> = {};
+  for (const channel of companionChannels) {
+    if (channel === comm.channel) {
+      companions[channel] = "skipped: the primary draft already covers this channel";
+      continue;
+    }
+    if (existingCompanionChannels.has(channel)) {
+      companions[channel] = "already drafted (idempotent)";
+      continue;
+    }
+    if (channel !== "whatsapp") {
+      companions[channel] = "skipped: unsupported companion channel in Phase 2";
+      continue;
+    }
+    try {
+      companions[channel] = await draftWhatsAppCompanion(db, bundle, step, stepRun);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      companions[channel] = `error: ${reason}`;
+      report.errors.push(`step ${stepRun.id}: whatsapp companion failed (primary unaffected) — ${reason}`);
+    }
+  }
+  const companionOutcome = Object.keys(companions).length ? { companions } : {};
+
   if (step.config.await_approval) {
     const { error } = await db.rpc("mark_step_awaiting_approval", {
       p_step_run: stepRun.id,
-      p_outcome: { communication_id: comm.id },
+      p_outcome: { communication_id: comm.id, ...companionOutcome },
     });
     if (error) throw new Error(`mark_step_awaiting_approval failed: ${error.message}`);
     report.steps_awaiting_approval += 1;
@@ -916,7 +1210,7 @@ async function executeDraftComm(
     bundle,
     stepRun,
     "completed",
-    { communication_id: comm.id },
+    { communication_id: comm.id, ...companionOutcome },
     advanceArgs(bundle.steps, step.id, now),
     report
   );
@@ -940,7 +1234,7 @@ async function executeCreateTask(
   let taskId = existing[0]?.id;
   if (!taskId) {
     const facts = await loadEngagementFacts(db, run.engagement_id);
-    const vars = await templateVars(db, facts);
+    const { vars } = await templateVars(db, facts);
     const assignee = step.config.assignee === "owner" || !step.config.assignee ? facts.owner_actor_id : step.config.assignee;
     const dueAt = step.config.due ? scheduledInstant(now, step.config.due) : null;
     const inserted = await q<{ id: string }[]>(

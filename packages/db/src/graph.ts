@@ -204,47 +204,165 @@ export function createGraphInboundReader(
   return { mailbox, listNewMessages, getMessage };
 }
 
+/** Graph's one-shot /sendMail carries inline attachments up to ~3MB of
+ * request body; anything larger needs the draft-message + upload-session
+ * flow (which requires the Mail.ReadWrite application permission — a
+ * GO-LIVE console step; until consent is granted a 3–8MB attachment fails
+ * VISIBLY with Graph's ErrorAccessDenied, never silently).
+ * JUDGMENT: the ruled 8MB ceiling is honoured by splitting carriage —
+ * ≤3MB rides the least-privilege one-shot path unchanged; 3–8MB takes the
+ * large path behind the GO-LIVE consent. Provider mechanics, flagged at
+ * pre-flight; awaiting sign-off at close. */
+const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
+const UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024;
+const UPLOAD_TIMEOUT_MS = 60_000;
+
+interface GraphAttachment {
+  filename: string;
+  mimeType: string;
+  contentBase64: string;
+}
+
+function attachmentBytes(att: GraphAttachment): number {
+  // Decoded size from base64 length — close enough for the path choice.
+  return Math.floor((att.contentBase64.length * 3) / 4);
+}
+
 /** Builds the email carrier, or null when Graph is not configured (the
  * dispatcher then leaves email rows approved and says so in its report). */
 export function createGraphEmailSender(
   env: NodeJS.ProcessEnv = process.env
-): ((input: { to: string; subject: string | null; body: string; bodyFormat: string }) => Promise<SendResult>) | null {
+): ((input: {
+  to: string;
+  subject: string | null;
+  body: string;
+  bodyFormat: string;
+  attachments?: GraphAttachment[];
+}) => Promise<SendResult>) | null {
   const graphEnv = readGraphEnv(env);
   if (!graphEnv) return null;
+
+  const refuseOn4xx = (status: number, detail: string, what: string): never => {
+    if (status < 500) throw new ProviderRejectedError(`Graph refused the ${what}: ${detail}`, "graph");
+    throw new Error(`Graph ${what} failed: ${detail}`);
+  };
 
   return async (input) => {
     const token = await getGraphToken(graphEnv);
     const senderDomain = graphEnv.senderAddress.split("@")[1] ?? "barakah.invalid";
     const internetMessageId = `<${randomUUID()}@${senderDomain}>`;
+    const userPath = `/users/${encodeURIComponent(graphEnv.senderAddress)}`;
+
+    const attachments = input.attachments ?? [];
+    const totalAttachmentBytes = attachments.reduce((sum, a) => sum + attachmentBytes(a), 0);
+    const message = {
+      subject: input.subject ?? "",
+      body: {
+        contentType: input.bodyFormat === "html" ? "HTML" : "Text",
+        content: input.body,
+      },
+      toRecipients: [{ emailAddress: { address: input.to } }],
+      internetMessageId,
+    };
+
+    // The one-shot least-privilege path (Mail.Send only): no attachments, or
+    // attachments small enough to ride inline.
+    if (totalAttachmentBytes <= INLINE_ATTACHMENT_LIMIT) {
+      const sent = await graphJson<{ error?: { message?: string } }>(token, "POST", `${userPath}/sendMail`, {
+        message: {
+          ...message,
+          ...(attachments.length
+            ? {
+                attachments: attachments.map((a) => ({
+                  "@odata.type": "#microsoft.graph.fileAttachment",
+                  name: a.filename,
+                  contentType: a.mimeType,
+                  contentBytes: a.contentBase64,
+                })),
+              }
+            : {}),
+        },
+        saveToSentItems: true,
+      });
+      if (sent.status >= 400) {
+        refuseOn4xx(sent.status, sent.body.error?.message ?? `HTTP ${sent.status}`, "send");
+      }
+      return { provider: "graph", providerMessageId: internetMessageId };
+    }
+
+    // PR-i (Session 19), the large-attachment path (3–8MB — the 8MB ceiling
+    // was enforced upstream): draft message → upload session per large file
+    // → send. Needs Mail.ReadWrite (GO-LIVE console step); a refusal
+    // surfaces as a visible failed state, never a silent drop.
+    const draft = await graphJson<{ id?: string; error?: { message?: string } }>(
+      token,
+      "POST",
+      `${userPath}/messages`,
+      message
+    );
+    if (draft.status >= 400 || !draft.body.id) {
+      refuseOn4xx(draft.status, draft.body.error?.message ?? `HTTP ${draft.status}`, "draft creation (large attachment path — Mail.ReadWrite consent required)");
+    }
+    const messageId = draft.body.id as string;
+
+    for (const att of attachments) {
+      const bytes = Buffer.from(att.contentBase64, "base64");
+      if (bytes.length <= INLINE_ATTACHMENT_LIMIT) {
+        const added = await graphJson<{ error?: { message?: string } }>(
+          token,
+          "POST",
+          `${userPath}/messages/${encodeURIComponent(messageId)}/attachments`,
+          {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            name: att.filename,
+            contentType: att.mimeType,
+            contentBytes: att.contentBase64,
+          }
+        );
+        if (added.status >= 400) {
+          refuseOn4xx(added.status, added.body.error?.message ?? `HTTP ${added.status}`, "attachment add");
+        }
+        continue;
+      }
+
+      const session = await graphJson<{ uploadUrl?: string; error?: { message?: string } }>(
+        token,
+        "POST",
+        `${userPath}/messages/${encodeURIComponent(messageId)}/attachments/createUploadSession`,
+        {
+          AttachmentItem: { attachmentType: "file", name: att.filename, size: bytes.length },
+        }
+      );
+      if (session.status >= 400 || !session.body.uploadUrl) {
+        refuseOn4xx(session.status, session.body.error?.message ?? `HTTP ${session.status}`, "upload session");
+      }
+      const uploadUrl = session.body.uploadUrl as string;
+      for (let offset = 0; offset < bytes.length; offset += UPLOAD_CHUNK_BYTES) {
+        const chunk = bytes.subarray(offset, Math.min(offset + UPLOAD_CHUNK_BYTES, bytes.length));
+        const put = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Length": String(chunk.length),
+            "Content-Range": `bytes ${offset}-${offset + chunk.length - 1}/${bytes.length}`,
+          },
+          body: new Uint8Array(chunk),
+          signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+        });
+        if (put.status >= 400) {
+          const detail = await put.text().catch(() => `HTTP ${put.status}`);
+          refuseOn4xx(put.status, detail, "attachment upload");
+        }
+      }
+    }
 
     const sent = await graphJson<{ error?: { message?: string } }>(
       token,
       "POST",
-      `/users/${encodeURIComponent(graphEnv.senderAddress)}/sendMail`,
-      {
-        message: {
-          subject: input.subject ?? "",
-          body: {
-            contentType: input.bodyFormat === "html" ? "HTML" : "Text",
-            content: input.body,
-          },
-          toRecipients: [{ emailAddress: { address: input.to } }],
-          internetMessageId,
-        },
-        saveToSentItems: true,
-      }
+      `${userPath}/messages/${encodeURIComponent(messageId)}/send`
     );
     if (sent.status >= 400) {
-      const detail = sent.body.error?.message ?? `HTTP ${sent.status}`;
-      if (sent.status < 500) {
-        throw new ProviderRejectedError(`Graph refused the send: ${detail}`, "graph");
-      }
-      throw new Error(`Graph send failed: ${detail}`);
+      refuseOn4xx(sent.status, sent.body.error?.message ?? `HTTP ${sent.status}`, "send");
     }
-
-    return {
-      provider: "graph",
-      providerMessageId: internetMessageId,
-    };
+    return { provider: "graph", providerMessageId: internetMessageId };
   };
 }

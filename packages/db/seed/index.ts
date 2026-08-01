@@ -912,8 +912,14 @@ function workflowStepId(index: number): string {
 // exists.
 const MVP_STEPS = [
   // 1 — instant acknowledgement: Light drafts, the run BLOCKS for the stamp.
+  // Session 19 (PR-ii): config-driven multi-touch — where the lead holds
+  // WhatsApp consent AND the template carries its approved wa_template
+  // mapping, a companion WhatsApp template draft rides alongside the email
+  // intro: two drafts, two individual stamps (113); the run blocks on the
+  // EMAIL stamp only, and a companion that cannot fire is silently correct.
   { key: "intro_ack", kind: "draft_comm", gate: 3,
-    config: { template: "intro_v1", channel: "email", await_approval: true, sla: { seconds: 60 } } },
+    config: { template: "intro_v1", channel: "email", await_approval: true, sla: { seconds: 60 },
+              companion_channels: ["whatsapp"] } },
   // 2 — call task for the owner. JUDGMENT: "2 business hours" runs as plain
   // hours in Phase 1 (no business-hours calendar exists; §4 timers are
   // provisional against the lead log anyway).

@@ -13,6 +13,8 @@ import {
 } from "./drafting";
 import type { FormAnswer } from "./meta";
 import { resolveSignOffText } from "./sign-off";
+import { resolveBookingUrl } from "./booking-link";
+import { plainTextOfBody } from "./email-html";
 
 /**
  * The settle window and the supersede engine, app side (Session 16, PR-B/C/D;
@@ -219,11 +221,11 @@ export async function sweepUneventedSupersedes(
  * complete picture is what was said, both directions. */
 async function loadThreadMessages(db: SupabaseClient, threadId: string): Promise<ThreadMessage[]> {
   const rows = await q<
-    { direction: string; status: string; body: string; occurred_at: string; channel: string }[]
+    { direction: string; status: string; body: string; body_format: string; occurred_at: string; channel: string }[]
   >(
     db
       .from("communications")
-      .select("direction, status, body, occurred_at, channel")
+      .select("direction, status, body, body_format, occurred_at, channel")
       .eq("thread_id", threadId)
       .is("archived_at", null)
       .order("occurred_at", { ascending: true }),
@@ -237,7 +239,9 @@ async function loadThreadMessages(db: SupabaseClient, threadId: string): Promise
     )
     .map((r) => ({
       role: r.direction === "inbound" ? ("client" as const) : ("firm" as const),
-      body: r.body,
+      // PR-iii: dispatched emails store the sent HTML — the model reads the
+      // WORDS, never markup.
+      body: plainTextOfBody(r.body, r.body_format),
       at: r.occurred_at,
       channel: r.channel,
     }));
@@ -410,6 +414,8 @@ async function processSettledThread(
     form_answers: formAnswers,
     no_go_rules: noGoRules,
     retrieval,
+    // PR-iv (Session 19): reply drafts carry the same booking-link law.
+    booking_url: resolveBookingUrl(settings),
     thread_messages: messages,
     new_inbound_count: unanswered.length,
   };
