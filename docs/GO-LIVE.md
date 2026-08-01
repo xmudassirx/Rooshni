@@ -346,3 +346,11 @@ Add to this list during build; check items off only at go-live.
       8. Prove: send one stamped email out and reply to it inbound; the
          reply threads by its References ids and appears in Conversations
          within a tick (5 min).
+- [ ] **Apply 0034 + deploy, then witness the Session 21 DoD** (introduced
+      Session 21): `npm run db:migrate` (0034: the workflow-definition
+      withdrawal door — rides the same apply as 0032/0033 if all are
+      pending), then merge + deploy the s21 branch. The witnessed DoD, the
+      founder's own act (the builder withdrew nothing): open the Approval
+      Inbox, find the meta_lead_to_consultation v2 definition card, withdraw
+      it with reason "superseded by v3", see it land in History and on The
+      Record, and see the inbox count drop by one.
