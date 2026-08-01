@@ -1422,3 +1422,40 @@ B calls await sign-off in the close report and are NOT recorded here.
      values pass through untouched) applied by ingest scoped to the matched
      contact, the evented `backfill:wa-consent` chore for existing
      inbound-bearing contacts, and the defect-then-law smoke.
+
+## Hotfix (1 Aug 2026) — upload transport + guide-on-any-route-entry, ordered mid-Session-20 on founder authority
+
+Entry 150 quotes the founder's ruling verbatim; entry 151 records the
+delegated call under the same order's "Fix with judgment … your call,
+stated" authority. Both landed on the s20-doors branch as the standalone
+hotfix commit `ec1d8e9` (cherry-pickable onto main ahead of the session
+merge); proofs ride the s20 smokes commit. Session 20's own Lane B calls
+await sign-off in its close report and are NOT recorded here.
+
+150. **A guide document rides ANY route-scoped knowledge entry — the
+     matching reads route + published + file, never the category.** Quoted
+     from the founder's order (1 Aug 2026): "the founder attaches guide
+     PDFs to EXISTING route entries (one Spouse entry carrying text AND
+     document) rather than separate route_guide rows. Ruling: the intro's
+     attachment matching accepts a published, route-matched knowledge entry
+     bearing a file — any category — not only category route_guide. One
+     entry per route is the preferred curation shape; route_guide remains
+     valid but optional. Add/adjust the smoke accordingly." Landed as the
+     pure `rankGuideCandidates` (category filter removed; route priority
+     then newest-first within a route, so the founder's latest curation
+     carries the send — JUDGMENT at site on the tie-break, awaiting
+     sign-off), the Settings → Knowledge door offering the optional PDF on
+     service descriptions (route_guide still REQUIRES its document), and
+     the harness proofs.
+
+151. **The server-action transport is raised to 10mb — the 8MB attachment
+     law was unreachable behind Next's 1MB default.** The founder's order
+     (1 Aug 2026) reported the defect ("Body exceeded 1 MB limit", 413 on a
+     1.3MB PDF) and delegated the shape: "Fix with judgment — either (a)
+     raise serverActions.bodySizeLimit … or (b) … uploading from the client
+     directly to Supabase Storage … Pick one, state why in one line." The
+     call: (a) — the enforced law is the app's 8MB ceiling (0032 pre-flight,
+     upload door, dispatch); one transport line makes it reachable tonight,
+     while (b)'s signed-URL rewiring is the right shape at scale and is
+     recorded as the future tightening. A harness tripwire now fails
+     check-local if the transport ever again caps below the ceiling.
