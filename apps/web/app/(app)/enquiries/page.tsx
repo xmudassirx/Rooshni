@@ -57,7 +57,7 @@ export default async function EnquiriesPage() {
   // Day one, before the first enquiry: the true empty state (Session 11
   // mockup). The stage line renders FROM the installed template's own
   // stage set — never a hardcoded vocabulary.
-  if (stages.every((s) => s.cards.length === 0)) {
+  if (stages.every((s) => s.total === 0)) {
     const stageLine = [
       ...stages.filter((s) => !s.isTerminal).map((s) => s.label),
       "Closed",
@@ -117,14 +117,21 @@ export default async function EnquiriesPage() {
               {stage.label}
               {stage.key === "won" ? " ✓" : ""}
               <span className="ml-auto rounded-lg bg-paper/20 px-1.5 text-[10.5px]">
-                {stage.cards.length}
+                {stage.total}
               </span>
             </div>
             <div className="flex min-h-30 flex-col gap-2 rounded-b-xl border border-t-0 border-rule bg-paper-deep p-2">
               {stage.cards.map((card) => (
                 <Card key={card.engagementId} card={card} />
               ))}
-              {stage.cards.length === 0 ? (
+              {/* WS5d: the column is a WINDOW (oldest wait first); the header
+                  count is the aggregate truth and the remainder says so. */}
+              {stage.total > stage.cards.length ? (
+                <div className="py-2 text-center font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+                  showing {stage.cards.length} of {stage.total} — oldest waits first
+                </div>
+              ) : null}
+              {stage.total === 0 ? (
                 <div className="py-6 text-center font-mono text-[10px] tracking-wide text-ink-faint uppercase">
                   Empty
                 </div>

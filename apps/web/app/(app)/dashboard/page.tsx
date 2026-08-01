@@ -122,9 +122,11 @@ export default async function DashboardPage() {
 
   const oldest = inbox.oldestAwaitingSince;
 
+  // WS5e: stage sizes are the COUNT aggregates the query carries — the cards
+  // themselves are a window and never the census.
   const stageCounts = pipeline.map((s) => ({
     label: s.label,
-    count: s.cards.length,
+    count: s.total,
     hot: s.cards.some((c) => c.pendingApprovals > 0),
   }));
   const maxCount = Math.max(1, ...stageCounts.map((s) => s.count));

@@ -51,6 +51,8 @@ export interface PipelineStage {
   key: string;
   label: string;
   isTerminal: boolean;
+  /** WS5d/5e: the stage's TRUE size (count aggregate); cards is a window. */
+  total: number;
   cards: PipelineCard[];
 }
 
@@ -72,14 +74,45 @@ export async function getPipeline(): Promise<PipelineStage[]> {
     .order("sort_order", { ascending: true });
   if (stagesError) throw new Error(`stage_definitions query failed: ${stagesError.message}`);
 
-  const { data: engagements, error: engError } = await db
-    .from("engagements")
-    .select("id, title, stage_id, stage_entered_at, attributes, attribution")
-    .eq("business_id", business.id)
-    .is("archived_at", null);
-  if (engError) throw new Error(`engagements query failed: ${engError.message}`);
+  // WS5d (Session 22): each stage column reads a WINDOW (oldest wait first)
+  // and its TOTAL comes from a COUNT aggregate (5e) — the demo-era read
+  // fetched every engagement plus the entire approval_inbox on every render.
+  const stageList = stages ?? [];
+  const perStage = await Promise.all(
+    stageList.map((stage) =>
+      Promise.all([
+        db
+          .from("engagements")
+          .select("id, title, stage_id, stage_entered_at, attributes, attribution")
+          .eq("business_id", business.id)
+          .eq("stage_id", stage.id)
+          .is("archived_at", null)
+          .order("stage_entered_at", { ascending: true })
+          .limit(DEFAULT_LIST_WINDOW),
+        db
+          .from("engagements")
+          .select("id", { count: "exact", head: true })
+          .eq("business_id", business.id)
+          .eq("stage_id", stage.id)
+          .is("archived_at", null),
+      ])
+    )
+  );
+  const engagements = perStage.flatMap(([rows], i) => {
+    if (rows.error) throw new Error(`engagements query (${stageList[i]!.key}) failed: ${rows.error.message}`);
+    return rows.data ?? [];
+  });
+  const totalByStage = new Map(
+    stageList.map((stage, i) => {
+      const [, countResult] = perStage[i]!;
+      if (countResult.error) {
+        throw new Error(`engagement count (${stage.key}) failed: ${countResult.error.message}`);
+      }
+      return [stage.id, countResult.count ?? 0];
+    })
+  );
 
-  const engagementIds = (engagements ?? []).map((e) => e.id);
+  const engagementIds = engagements.map((e) => e.id);
 
   const [participants, tasks, inboxRows] = await Promise.all([
     engagementIds.length
@@ -98,7 +131,14 @@ export async function getPipeline(): Promise<PipelineStage[]> {
           .is("archived_at", null)
           .order("due_at", { ascending: true })
       : Promise.resolve({ data: [], error: null }),
-    db.from("approval_inbox").select("*").eq("business_id", business.id),
+    // Slim and scoped: only the VISIBLE cards' pending items, id columns only.
+    engagementIds.length
+      ? db
+          .from("approval_inbox")
+          .select("engagement_id, item_type, channel")
+          .eq("business_id", business.id)
+          .in("engagement_id", engagementIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (participants.error) throw new Error(`participants query failed: ${participants.error.message}`);
   if (tasks.error) throw new Error(`tasks query failed: ${tasks.error.message}`);
@@ -119,20 +159,22 @@ export async function getPipeline(): Promise<PipelineStage[]> {
     }
   }
 
-  const inboxByEngagement = new Map<string, ApprovalInboxRow[]>();
-  for (const row of (inboxRows.data ?? []) as ApprovalInboxRow[]) {
+  type SlimInboxRow = { engagement_id: string | null; item_type: string; channel: string | null };
+  const inboxByEngagement = new Map<string, SlimInboxRow[]>();
+  for (const row of (inboxRows.data ?? []) as SlimInboxRow[]) {
     if (!row.engagement_id) continue;
     const list = inboxByEngagement.get(row.engagement_id) ?? [];
     list.push(row);
     inboxByEngagement.set(row.engagement_id, list);
   }
 
-  return (stages ?? []).map((stage) => ({
+  return stageList.map((stage) => ({
     id: stage.id,
     key: stage.key,
     label: stage.label,
     isTerminal: stage.is_terminal,
-    cards: (engagements ?? [])
+    total: totalByStage.get(stage.id) ?? 0,
+    cards: engagements
       .filter((e) => e.stage_id === stage.id)
       .sort((a, b) => a.stage_entered_at.localeCompare(b.stage_entered_at))
       .map((e) => {
@@ -2608,25 +2650,59 @@ interface EngagementEmbed {
   } | null;
 }
 
-export async function getContacts(): Promise<ContactListRow[]> {
-  const { db, business } = await getAppContext();
+export interface ContactsPage {
+  rows: ContactListRow[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
 
-  const [contacts, channels, relationships, participants, lastComms] = await Promise.all([
+/**
+ * Session 22 (WS5d): the contacts list reads a WINDOW — server-side
+ * pagination (default 20), hydration scoped to the PAGE's contact ids, the
+ * total a COUNT aggregate. The demo-era read fetched every contact, every
+ * channel, every relationship and EVERY communication row on each render.
+ */
+export async function getContacts(page = 1): Promise<ContactsPage> {
+  const { db, business } = await getAppContext();
+  const range = pageRange(page, DEFAULT_LIST_WINDOW);
+
+  const [contacts, totalResult] = await Promise.all([
     db
       .from("contacts")
       .select("id, display_name, type, status, locale, first_touch")
       .eq("business_id", business.id)
       .is("archived_at", null)
-      .order("display_name", { ascending: true }),
+      .order("display_name", { ascending: true })
+      .range(range.from, range.to),
+    db
+      .from("contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .is("archived_at", null),
+  ]);
+  if (contacts.error) throw new Error(`contacts query failed: ${contacts.error.message}`);
+  if (totalResult.error) throw new Error(`contacts count failed: ${totalResult.error.message}`);
+  const total = totalResult.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / DEFAULT_LIST_WINDOW));
+  const pageIds = (contacts.data ?? []).map((c) => c.id as string);
+  if (pageIds.length === 0) {
+    return { rows: [], total, page: clampPage(page), pageCount };
+  }
+  const idList = pageIds.join(",");
+
+  const [channels, relationships, participants, lastCommRows] = await Promise.all([
     db
       .from("contact_channels")
       .select("contact_id, channel, value, is_primary, consent")
       .eq("business_id", business.id)
+      .in("contact_id", pageIds)
       .is("archived_at", null),
     db
       .from("contact_relationships")
       .select("from_contact_id, to_contact_id, relationship")
       .eq("business_id", business.id)
+      .or(`from_contact_id.in.(${idList}),to_contact_id.in.(${idList})`)
       .is("archived_at", null),
     db
       .from("engagement_participants")
@@ -2634,26 +2710,56 @@ export async function getContacts(): Promise<ContactListRow[]> {
         "contact_id, engagements(id, archived_at, outcome, title, stage_entered_at, attributes, stage_definitions(key, label, is_terminal, terminal_outcome))"
       )
       .eq("business_id", business.id)
+      .in("contact_id", pageIds)
       .is("archived_at", null),
-    db
-      .from("communications")
-      .select("contact_id, occurred_at")
-      .eq("business_id", business.id)
-      .is("archived_at", null)
-      .not("contact_id", "is", null)
-      .order("occurred_at", { ascending: false }),
+    // Last activity per PAGE contact: one single-row read each — exact and
+    // bounded, never the whole communications table.
+    Promise.all(
+      pageIds.map((id) =>
+        db
+          .from("communications")
+          .select("contact_id, occurred_at")
+          .eq("business_id", business.id)
+          .eq("contact_id", id)
+          .is("archived_at", null)
+          .order("occurred_at", { ascending: false })
+          .limit(1)
+      )
+    ),
   ]);
   for (const [label, result] of [
-    ["contacts", contacts],
     ["contact_channels", channels],
     ["contact_relationships", relationships],
     ["engagement_participants", participants],
-    ["communications", lastComms],
   ] as const) {
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
+  const lastComms = {
+    data: lastCommRows.flatMap((r) => {
+      if (r.error) throw new Error(`last activity query failed: ${r.error.message}`);
+      return r.data ?? [];
+    }),
+  };
 
+  // Names for relationship rendering: the page's own names plus any related
+  // contacts that sit off-page — one bounded lookup.
   const nameById = new Map((contacts.data ?? []).map((c) => [c.id, c.display_name as string]));
+  const offPageIds = [
+    ...new Set(
+      (relationships.data ?? [])
+        .flatMap((r) => [r.from_contact_id, r.to_contact_id])
+        .filter((id) => !nameById.has(id))
+    ),
+  ];
+  if (offPageIds.length > 0) {
+    const { data: extraNames, error: extraError } = await db
+      .from("contacts")
+      .select("id, display_name")
+      .eq("business_id", business.id)
+      .in("id", offPageIds);
+    if (extraError) throw new Error(`related contact names query failed: ${extraError.message}`);
+    for (const c of extraNames ?? []) nameById.set(c.id, c.display_name as string);
+  }
 
   const channelsByContact = new Map<string, ChannelConsent[]>();
   for (const c of channels.data ?? []) {
@@ -2702,7 +2808,7 @@ export async function getContacts(): Promise<ContactListRow[]> {
     }
   }
 
-  return (contacts.data ?? []).map((c) => {
+  const rows = (contacts.data ?? []).map((c) => {
     const firstTouch = (c.first_touch ?? {}) as Record<string, unknown>;
     const myChannels = channelsByContact.get(c.id) ?? [];
     const primary = (kind: string) =>
@@ -2724,6 +2830,7 @@ export async function getContacts(): Promise<ContactListRow[]> {
       lastActivityAt: lastByContact.get(c.id) ?? null,
     };
   });
+  return { rows, total, page: clampPage(page), pageCount };
 }
 
 export interface ContactEnquiry {
