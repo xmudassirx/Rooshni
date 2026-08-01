@@ -1,9 +1,11 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import {
+  createAnthropicGenerator,
   createServiceClient,
   recordInboundWhatsApp,
   resolveInboundBusiness,
+  sweepSettleAndSupersede,
   verifyMetaSignature,
 } from "@rooshni/db";
 
@@ -188,10 +190,26 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Best-effort settle sweep: an INSTANT settle window is due the moment the
+  // inbound lands — draft it now rather than waiting for the next cron tick.
+  // Non-instant windows are the cron's business. A sweep failure never turns
+  // into a Meta retry — the ingest above is already safe.
+  let settleNote: string | null = null;
+  if (ingested > 0) {
+    try {
+      const settle = await sweepSettleAndSupersede(db, { generator: createAnthropicGenerator() });
+      if (settle.errors.length > 0) settleNote = settle.errors.join("; ");
+    } catch (err) {
+      // The cron re-evaluates settle timers next tick; a Meta retry would
+      // re-run nothing useful here.
+      settleNote = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   if (errors.length > 0) {
     // 500 → Meta retries; claims and the ingest are idempotent, so a retry
     // after a transient failure (or once the binding is wired) is safe.
     return NextResponse.json({ ok: false, detail: errors }, { status: 500 });
   }
-  return NextResponse.json({ ok: true, ingested });
+  return NextResponse.json({ ok: true, ingested, ...(settleNote ? { settle_note: settleNote } : {}) });
 }

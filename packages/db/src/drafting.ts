@@ -168,6 +168,11 @@ export interface GenerateRequest {
   system: string;
   prompt: string;
   maxTokens: number;
+  /** PR-E (decision 133f): when present these replace `system` — ordered
+   * blocks whose cache-marked prefix bills cached-input rates on
+   * regenerations. The thread tail and fresh inbound stay in `prompt`,
+   * uncached. */
+  systemBlocks?: Array<{ text: string; cache?: boolean }>;
 }
 
 export interface GenerateResult {
@@ -175,6 +180,10 @@ export interface GenerateResult {
   body: string;
   attestation: { attested: boolean; statement: string };
   usage: { input_tokens: number; output_tokens: number };
+  /** PR-E: cache read/written tokens from the SDK's usage fields, plus the
+   * recorded reason when the provider rejected cache_control and the call
+   * fell back uncached — a draft never fails over caching. */
+  cache?: { read_tokens: number; written_tokens: number; fallback_reason?: string };
 }
 
 export type GenerateFn = (request: GenerateRequest) => Promise<GenerateResult>;
@@ -216,6 +225,9 @@ export interface ComposeDraftResult {
     context_tokens: number;
     budget_tokens: number;
     knowledge_entry_ids: string[];
+    /** PR-E: "cache: X read / Y written" on the credit line; the fallback
+     * reason is recorded when the API rejected cache_control. */
+    cache?: { read_tokens: number; written_tokens: number; fallback_reason?: string };
   };
   usage: { input_tokens: number; output_tokens: number };
 }
@@ -335,6 +347,183 @@ export async function composeDraft(
           ? DRAFT_CONTEXT_BUDGETS.floor_tokens
           : DRAFT_CONTEXT_BUDGETS.escalation_tokens,
       knowledge_entry_ids: input.retrieval.entries.map((e) => e.id),
+      ...(result.cache ? { cache: result.cache } : {}),
+    },
+    usage: result.usage,
+  };
+}
+
+/** One message of the thread as the reply engine reads it — only what the
+ * client actually saw or said. */
+export interface ThreadMessage {
+  role: "client" | "firm";
+  body: string;
+  at: string;
+  channel: string;
+}
+
+export interface ComposeReplyInput {
+  business_name: string;
+  sign_off: string;
+  first_name: string;
+  full_name: string;
+  channel: string;
+  enquiry_title: string;
+  stage_label: string;
+  form_answers: FormAnswer[];
+  no_go_rules: string[];
+  retrieval: RetrievalResult;
+  /** Full thread context (decision 133a: the newest complete picture) —
+   * chronological, sent-and-received only. */
+  thread_messages: ThreadMessage[];
+  /** How many client messages arrived since the last firm reply (the burst). */
+  new_inbound_count: number;
+}
+
+/**
+ * The reply register (PR-D, decision 133d): answer what the inbound actually
+ * asked — generalities are lawful, case-specific advice never (no-go rule
+ * 2); a consultation is invited only where the answer genuinely needs one,
+ * per the published booking policy when one exists in the pack.
+ *
+ * PR-E: the prompt is assembled as a STABLE PREFIX (identity, laws,
+ * register, tone exemplars, selected pack entries — cache-marked system
+ * blocks) plus an UNCACHED tail (the thread transcript and fresh inbound),
+ * so a burst's regenerations bill cached-input rates.
+ */
+export function assembleReplyPrompt(input: ComposeReplyInput): {
+  systemBlocks: Array<{ text: string; cache?: boolean }>;
+  prompt: string;
+} {
+  const rules = input.no_go_rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
+  const lawsBlock = [
+    `You are Light, the assistant at ${input.business_name}, a UK immigration advisory firm. You are drafting a reply to a client's message(s) on an existing ${input.channel} conversation, for the firm to review, stamp and send.`,
+    ``,
+    `Laws that bind this draft — breaching any is a failure:`,
+    rules,
+    ``,
+    `The reply register:`,
+    `- Answer what the client's message actually asked. Generalities about process and the firm's published services are lawful; case-specific legal advice is never given in a draft — that happens in consultations with the humans.`,
+    `- Use ONLY the firm's published knowledge provided. Never invent services, availability, fees or claims.`,
+    `- Never state or quote any fee amount that does not appear verbatim in the provided published knowledge.`,
+    `- If the client asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome.`,
+    `- Invite a consultation ONLY where the answer genuinely needs one — never as a reflex; follow the published booking policy where one is provided.`,
+    `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
+    `- British English. Plain text only. Brief — answer, then stop.`,
+    `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
+    ``,
+    `Attest honestly: attested is true only if the draft fully complies with every law above.`,
+  ].join("\n");
+
+  const knowledge = input.retrieval.entries.length
+    ? input.retrieval.entries
+        .map((e) => `### ${e.title} [${e.category}${e.visa_route ? ` · ${e.visa_route}` : ""}]\n${e.text}`)
+        .join("\n\n")
+    : "(the firm has published no knowledge entries yet — keep to generalities and invite a consultation only if genuinely needed)";
+  const knowledgeBlock = `The firm's published knowledge (your only source of facts):\n\n${knowledge}`;
+
+  const answers = input.form_answers.length
+    ? input.form_answers.map((a) => `- ${a.label}: ${a.value}`).join("\n")
+    : "- (no form answers on file)";
+  const transcript = input.thread_messages.length
+    ? input.thread_messages
+        .map((m) => `[${m.at} · ${m.role === "client" ? "CLIENT" : "FIRM"}] ${m.body}`)
+        .join("\n---\n")
+    : "(no prior messages)";
+
+  const prompt = [
+    `The enquiry: ${input.enquiry_title} (client: ${input.full_name}; stage: ${input.stage_label})`,
+    `Their original enquiry form answers, verbatim:`,
+    answers,
+    ``,
+    `The conversation so far (oldest first; only messages actually sent or received):`,
+    transcript,
+    ``,
+    `The client's last ${input.new_inbound_count > 1 ? `${input.new_inbound_count} messages have` : "message has"} not been answered. Compose the firm's reply now — answer what was actually asked.`,
+  ].join("\n");
+
+  return {
+    systemBlocks: [
+      { text: lawsBlock, cache: true },
+      { text: knowledgeBlock, cache: true },
+    ],
+    prompt,
+  };
+}
+
+/**
+ * Compose one reply draft against the full thread (decision 133a/d).
+ * Routing, budgets, output screening and the caller-side retry-once rule
+ * all match composeDraft; the burst text (the unanswered client messages)
+ * drives escalation triggers and retrieval.
+ */
+export async function composeReplyDraft(
+  generate: GenerateFn,
+  input: ComposeReplyInput,
+  options: { escalationOverride?: EscalationDecision; feedback?: string } = {}
+): Promise<ComposeDraftResult> {
+  const { systemBlocks, prompt } = assembleReplyPrompt(input);
+  const feedbackSuffix = options.feedback
+    ? `\n\nYour previous attempt failed the firm's compliance screen: ${options.feedback}. Redraft so the failure cannot recur.`
+    : "";
+  const allText = systemBlocks.map((b) => b.text).join("\n") + prompt + feedbackSuffix;
+  const contextTokens = estimateTokens(allText);
+
+  if (contextTokens > DRAFT_CONTEXT_BUDGETS.escalation_tokens) {
+    throw new PermanentGenerationError(
+      `assembled context (${contextTokens} tokens) exceeds the hard budget (${DRAFT_CONTEXT_BUDGETS.escalation_tokens}) — over-budget assembly is a visible failure, never a trim-and-hope`
+    );
+  }
+
+  const burstText = input.thread_messages
+    .filter((m) => m.role === "client")
+    .slice(-Math.max(1, input.new_inbound_count))
+    .map((m) => m.body)
+    .join("\n");
+  const decision =
+    options.escalationOverride ??
+    resolveEscalation({
+      leadText: burstText,
+      routeMatches: input.retrieval.route_matches.length,
+      contextTokens,
+    });
+
+  const result = await generate({
+    model: decision.model,
+    system: systemBlocks.map((b) => b.text).join("\n\n"),
+    systemBlocks,
+    prompt: prompt + feedbackSuffix,
+    maxTokens: DRAFT_CONTEXT_BUDGETS.max_output_tokens,
+  });
+
+  const body = result.body?.trim();
+  if (!body) {
+    throw new PermanentGenerationError("the provider returned an empty draft body");
+  }
+  if (/\{\{|\}\}/.test(body)) {
+    throw new PermanentGenerationError("the generated body carries unresolved template braces");
+  }
+
+  return {
+    subject: result.subject?.trim() || null,
+    body,
+    attestation: {
+      attested: result.attestation.attested === true,
+      mode: "generated",
+      model: decision.model,
+      statement: String(result.attestation.statement ?? ""),
+    },
+    credit_line: {
+      tier: decision.tier,
+      model: decision.model,
+      reason: decision.reason,
+      context_tokens: contextTokens,
+      budget_tokens:
+        decision.tier === "standard"
+          ? DRAFT_CONTEXT_BUDGETS.floor_tokens
+          : DRAFT_CONTEXT_BUDGETS.escalation_tokens,
+      knowledge_entry_ids: input.retrieval.entries.map((e) => e.id),
+      ...(result.cache ? { cache: result.cache } : {}),
     },
     usage: result.usage,
   };
@@ -380,13 +569,40 @@ export function createAnthropicGenerator(): GenerateFn | null {
     // Imported lazily so environments without the key never load the SDK.
     const { default: Anthropic } = await import("@anthropic-ai/sdk");
     const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      model: request.model,
-      max_tokens: request.maxTokens,
-      system: request.system,
-      messages: [{ role: "user", content: request.prompt }],
-      output_config: { format: { type: "json_schema", schema: DRAFT_OUTPUT_SCHEMA } },
-    });
+
+    // PR-E (decision 133f): cache-mark the stable prefix via system blocks;
+    // the thread tail stays uncached in the user message. If the API rejects
+    // cache_control for any reason, fall back to an uncached call with the
+    // reason recorded — never fail a draft over caching.
+    const cachedSystem = request.systemBlocks?.map((b) => ({
+      type: "text" as const,
+      text: b.text,
+      ...(b.cache ? { cache_control: { type: "ephemeral" as const } } : {}),
+    }));
+
+    let cacheFallbackReason: string | undefined;
+    const call = (system: string | typeof cachedSystem) =>
+      client.messages.create({
+        model: request.model,
+        max_tokens: request.maxTokens,
+        system: system as never,
+        messages: [{ role: "user", content: request.prompt }],
+        output_config: { format: { type: "json_schema", schema: DRAFT_OUTPUT_SCHEMA } },
+      });
+
+    let response: Awaited<ReturnType<typeof call>>;
+    if (cachedSystem) {
+      try {
+        response = await call(cachedSystem);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/cache_control|cache/i.test(message) || isTransientProviderError(err)) throw err;
+        cacheFallbackReason = `provider rejected cache_control — retried uncached: ${message}`;
+        response = await call(request.system);
+      }
+    } else {
+      response = await call(request.system);
+    }
 
     if (response.stop_reason === "refusal") {
       throw new PermanentGenerationError("the provider's safety layer declined the request (stop_reason: refusal)");
@@ -401,14 +617,31 @@ export function createAnthropicGenerator(): GenerateFn | null {
     } catch {
       throw new PermanentGenerationError("the provider returned output that does not parse as the draft schema");
     }
+    const usage = response.usage as {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens?: number | null;
+      cache_read_input_tokens?: number | null;
+    };
     return {
       subject: parsed.subject,
       body: parsed.body,
       attestation: parsed.attestation,
       usage: {
-        input_tokens: response.usage.input_tokens,
-        output_tokens: response.usage.output_tokens,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
       },
+      // The SDK's usage fields are the verification PR-E names: what was
+      // read from cache and what was written to it, on the credit line.
+      ...(cachedSystem
+        ? {
+            cache: {
+              read_tokens: usage.cache_read_input_tokens ?? 0,
+              written_tokens: usage.cache_creation_input_tokens ?? 0,
+              ...(cacheFallbackReason ? { fallback_reason: cacheFallbackReason } : {}),
+            },
+          }
+        : {}),
     };
   };
 }

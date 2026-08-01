@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emitEvent } from "./events";
 import { INBOUND_EVENT_KINDS } from "./event-kinds";
 import { normalisePhone } from "./meta";
+import { armSettleTimer } from "./supersede";
 import type { GraphInboundReader } from "./graph";
 
 /**
@@ -328,6 +329,10 @@ export async function recordInboundWhatsApp(
     "thread window update"
   );
 
+  // PR-C (decision 133b): every inbound arms — and RESTARTS — the thread's
+  // settle timer; the cron evaluates it server-side.
+  const settleDueAt = await armSettleTimer(db, thread.id);
+
   await emitEvent(db, {
     business_id: binding.business_id,
     actor_id: binding.integration_actor_id,
@@ -341,6 +346,7 @@ export async function recordInboundWhatsApp(
       engagement_id: thread.engagement_id,
       wamid: input.wamid,
       service_window_expires_at: windowExpiresAt,
+      ...(settleDueAt ? { settle_due_at: settleDueAt } : {}),
       ...(contactCreated ? { contact_created: true } : {}),
     },
   });
@@ -585,6 +591,9 @@ export async function pollGraphInbound(
         "thread inbound update"
       );
 
+      // PR-C (decision 133b): the settle timer arms/restarts on each inbound.
+      const settleDueAt = await armSettleTimer(db, threadId);
+
       await emitEvent(db, {
         business_id: binding.business_id,
         actor_id: binding.integration_actor_id,
@@ -597,6 +606,7 @@ export async function pollGraphInbound(
           contact_id: contactId,
           engagement_id: threadEngagementId,
           internet_message_id: detail.internetMessageId,
+          ...(settleDueAt ? { settle_due_at: settleDueAt } : {}),
         },
       });
 

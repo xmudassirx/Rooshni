@@ -21,6 +21,18 @@ import {
   type KnowledgeEntry,
 } from "../src/drafting";
 import { resolveEscalation, LIGHT_MODEL_FLOOR, LIGHT_MODEL_ESCALATION, DRAFT_CONTEXT_BUDGETS } from "../src/model-router";
+import {
+  assembleReplyPrompt,
+  composeReplyDraft,
+  type ComposeReplyInput,
+} from "../src/drafting";
+import {
+  nextSettleDueAt,
+  resolveSettleMinutes,
+  resolveSettleRealMs,
+  SETTLE_WINDOW_DEFAULT_MINUTES,
+} from "../src/supersede";
+import { parseReferenceIds } from "../src/graph";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -2831,6 +2843,116 @@ async function main() {
        values ($1, $2, $3, 'email', 'outbound', 'superseded', 'never lived')`,
       [f.business_id, f.agent_id, t]
     );
+  });
+
+  // --- PR-C: the settle window (pure policy, timeScale-proven) ------------
+  await expectOk("settle options resolve instant/1/3/5 with default 3; unlawful values fall to the default", async () => {
+    if (resolveSettleMinutes({}) !== SETTLE_WINDOW_DEFAULT_MINUTES) throw new Error("absent ≠ default");
+    if (resolveSettleMinutes({ draft_settle_minutes: 0 }) !== 0) throw new Error("instant not honoured");
+    if (resolveSettleMinutes({ draft_settle_minutes: 1 }) !== 1) throw new Error("1 min not honoured");
+    if (resolveSettleMinutes({ draft_settle_minutes: 5 }) !== 5) throw new Error("5 min not honoured");
+    if (resolveSettleMinutes({ draft_settle_minutes: 7 }) !== SETTLE_WINDOW_DEFAULT_MINUTES) {
+      throw new Error("an unlawful value did not fall to the default");
+    }
+    if (resolveSettleRealMs({ draft_settle_minutes: 5 }, 60) !== 60_000) {
+      throw new Error("the per-conversation override did not win");
+    }
+    if (resolveSettleRealMs({ draft_settle_minutes: 5 }, 0) !== 0) {
+      throw new Error("an instant per-conversation override did not win");
+    }
+    if (resolveSettleRealMs({ draft_settle_minutes: 1 }, null) !== 60_000) {
+      throw new Error("the business setting did not apply without an override");
+    }
+  });
+
+  await expectOk("the settle clock RESTARTS on each inbound in a burst (timeScale-proven)", async () => {
+    const windowMs = 3 * 60 * 1000;
+    const t0 = new Date("2026-08-01T10:00:00.000Z");
+    const t1 = new Date(t0.getTime() + 2 * 60 * 1000);
+    const due0 = new Date(nextSettleDueAt(t0, windowMs));
+    const due1 = new Date(nextSettleDueAt(t1, windowMs));
+    const scaled = scaleDurationMs(windowMs);
+    if (due0.getTime() - t0.getTime() !== scaled) throw new Error("due is not now + the scaled window");
+    if (due1.getTime() <= due0.getTime()) throw new Error("a second inbound did not RESTART the window");
+    if (due1.getTime() - due0.getTime() !== t1.getTime() - t0.getTime()) {
+      throw new Error("the restart did not track the new inbound's moment");
+    }
+  });
+
+  // --- PR-D/E: the reply register and the cache-marked stable prefix ------
+  const s16ReplyInput: ComposeReplyInput = {
+    business_name: "Test Firm",
+    sign_off: "Test Firm",
+    first_name: "Amina",
+    full_name: "Amina Khan",
+    channel: "email",
+    enquiry_title: "Amina Khan — enquiry",
+    stage_label: "Contacted",
+    form_answers: [{ name: "visa_type", label: "Visa type", value: "Spouse visa" }],
+    no_go_rules: [
+      "Light never states or implies a guarantee of visa success, application outcome, or Home Office timescales.",
+      "Light never gives case-specific legal advice in an unstamped channel.",
+    ],
+    retrieval: { entries: [], route_matches: ["spouse_family"] },
+    thread_messages: [
+      { role: "firm", body: "Hello Amina, thank you for your enquiry.", at: "2026-08-01T09:00:00Z", channel: "email" },
+      { role: "client", body: "Thanks — how much does a spouse visa application cost?", at: "2026-08-01T10:00:00Z", channel: "email" },
+    ],
+    new_inbound_count: 1,
+  };
+
+  await expectOk("the reply prompt carries the register laws, the transcript, and a CACHE-MARKED stable prefix", async () => {
+    const { systemBlocks, prompt } = assembleReplyPrompt(s16ReplyInput);
+    if (systemBlocks.length !== 2 || !systemBlocks.every((b) => b.cache)) {
+      throw new Error("the stable prefix is not two cache-marked blocks");
+    }
+    if (!/case-specific legal advice is never given/.test(systemBlocks[0]!.text)) {
+      throw new Error("the reply register is missing from the stable prefix");
+    }
+    if (!/Invite a consultation ONLY where the answer genuinely needs one/.test(systemBlocks[0]!.text)) {
+      throw new Error("the consultation restraint is missing");
+    }
+    if (!/never states or implies a guarantee/.test(systemBlocks[0]!.text)) {
+      throw new Error("the no-go register is missing from the stable prefix");
+    }
+    if (!/how much does a spouse visa application cost/.test(prompt)) {
+      throw new Error("the client's actual question is not in the uncached tail");
+    }
+    if (/how much does a spouse visa application cost/.test(systemBlocks.map((b) => b.text).join())) {
+      throw new Error("the fresh inbound leaked into the cached prefix");
+    }
+  });
+
+  await expectOk("a reply about fees escalates (no-go proximity) and the cache figures land on the credit line", async () => {
+    let sawBlocks: Array<{ text: string; cache?: boolean }> | undefined;
+    const fake: GenerateFn = async (request) => {
+      sawBlocks = request.systemBlocks;
+      return {
+        subject: "Re: your enquiry",
+        body: "Hello Amina, fees depend on the published schedule — happy to confirm in a consultation.",
+        attestation: { attested: true, statement: "Checked against every law." },
+        usage: { input_tokens: 900, output_tokens: 80 },
+        cache: { read_tokens: 700, written_tokens: 0 },
+      };
+    };
+    const composed = await composeReplyDraft(fake, s16ReplyInput);
+    if (!sawBlocks || !sawBlocks.some((b) => b.cache)) throw new Error("the generator was not handed cache-marked blocks");
+    if (composed.credit_line.tier !== "pro" || !/no-go proximity/.test(composed.credit_line.reason)) {
+      throw new Error(`a fee question did not escalate: ${composed.credit_line.tier} (${composed.credit_line.reason})`);
+    }
+    if (composed.credit_line.cache?.read_tokens !== 700) {
+      throw new Error("cache figures did not land on the credit line");
+    }
+  });
+
+  await expectOk("reference-id parsing reads In-Reply-To/References into RFC ids", async () => {
+    const ids = parseReferenceIds([
+      "<abc-123@firm.example>",
+      "<older@firm.example> <abc-123@firm.example>\r\n <newest@client.example>",
+    ]);
+    if (ids.length !== 3 || !ids.includes("<newest@client.example>")) {
+      throw new Error(`parsed: ${JSON.stringify(ids)}`);
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
