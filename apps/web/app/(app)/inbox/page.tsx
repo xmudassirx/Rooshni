@@ -96,10 +96,10 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
             : row.action === "superseded" || row.action === "withdrawn"
               ? // Session 16: superseded is a FACT in neutral chrome — not a
                 // stamp act (red), not done (green), not Light's channel.
-                // JUDGMENT (Session 21): withdrawn wears the same neutral
+                // JUDGMENT: (Session 21) withdrawn wears the same neutral
                 // chrome — retiring one's own proposal exercises no stamp
                 // authority (approve/reject remain the stamps), so red would
-                // overclaim; awaiting sign-off at close.
+                // overclaim.
                 "border-rule bg-paper-deep text-ink-soft"
               : "border-stamp/40 bg-stamp/10 text-stamp"
         )}
