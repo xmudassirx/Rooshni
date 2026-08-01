@@ -35,6 +35,14 @@ import {
 } from "../src/supersede";
 import { parseReferenceIds } from "../src/graph";
 import { resolveSignOffBody, resolveSignOffMode, resolveSignOffText } from "../src/sign-off";
+import { resolveBookingUrl, substituteBookingLink } from "../src/booking-link";
+import {
+  extractEmailPlainText,
+  plainTextOfBody,
+  renderEmailHtml,
+  resolveEmailIdentity,
+} from "../src/email-html";
+import { whatsAppInboundConsent } from "../src/inbound";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -3059,6 +3067,341 @@ async function main() {
     if (findRegisterBreach("a — b") !== "em dash" || findRegisterBreach("a – b") !== "en dash") {
       throw new Error("the checker did not name the breach");
     }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 19 — multi-touch workflow + HTML email (PR-i..iv) and the
+  // inbound-consent ruling fold-in.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 19 — booking link (PR-iv):");
+
+  await expectOk("[link] resolves to the configured booking URL — WYSIWYS: the stored body carries the real address", async () => {
+    const out = substituteBookingLink("You can book here: [link].", "https://xlaw.example/book");
+    if (out !== "You can book here: https://xlaw.example/book.") throw new Error(`got: ${out}`);
+    if (resolveBookingUrl({ booking_url: " https://xlaw.example/book " }) !== "https://xlaw.example/book") {
+      throw new Error("resolveBookingUrl did not accept a lawful https URL");
+    }
+    if (resolveBookingUrl({ booking_url: "not-a-url" }) !== null || resolveBookingUrl({}) !== null) {
+      throw new Error("a malformed or absent booking_url must read as unset");
+    }
+  });
+
+  await expectError(
+    "[link] with no configured booking URL is refused — a client never receives a literal token",
+    /no booking URL/,
+    async () => substituteBookingLink("Book here: [link]", null)
+  );
+
+  await expectOk("composition substitutes the booking URL into the generated body, and the prompt invites the token only when configured", async () => {
+    let sawSystem = "";
+    const fake: GenerateFn = async (request) => {
+      sawSystem = request.system;
+      return {
+        subject: null,
+        body: "Hello Amina, we can help. Book a consultation here: [link].",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    const composed = await composeDraft(fake, { ...s18Input("intro"), booking_url: "https://xlaw.example/book" });
+    if (!/booking page/.test(sawSystem)) throw new Error("the prompt does not carry the booking-link line when configured");
+    if (!composed.body.includes("https://xlaw.example/book") || composed.body.includes("[link]")) {
+      throw new Error(`the token did not resolve: ${composed.body}`);
+    }
+    await composeDraft(fake, s18Input("intro")).then(
+      () => {
+        throw new Error("a [link] body with no booking URL must be refused");
+      },
+      (err) => {
+        if (!(err instanceof PermanentGenerationError && /no booking URL/.test(err.message))) throw err;
+      }
+    );
+    let unconfiguredSystem = "";
+    const cleanFake: GenerateFn = async (request) => {
+      unconfiguredSystem = request.system;
+      return {
+        subject: null,
+        body: "Hello Amina, we can help with that.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    await composeDraft(cleanFake, s18Input("intro"));
+    if (/booking page/.test(unconfiguredSystem)) {
+      throw new Error("the prompt invites [link] with no booking URL configured");
+    }
+  });
+
+  console.log("\nSession 19 — the HTML email dress (PR-iii):");
+
+  const s19DressBody =
+    "Hello Amina, thank you for your enquiry with X Law.\nWe will call you shortly.\n\n" +
+    "You can book here: https://xlaw.example/book and ask about fees & timings <at any point>.\n\n" +
+    "X Law";
+  const s19Identity = resolveEmailIdentity("X Law", { regulated_status: "IAA Level 2 (casework)" });
+
+  await expectOk("html/plain parity from ONE body — the deterministic inverse returns exactly the plain source", async () => {
+    const html = renderEmailHtml(s19DressBody, s19Identity);
+    const back = extractEmailPlainText(html);
+    if (back !== s19DressBody) {
+      throw new Error(`parity broken.\n--- body:\n${s19DressBody}\n--- extracted:\n${back}`);
+    }
+    if (plainTextOfBody(html, "html") !== s19DressBody) throw new Error("plainTextOfBody(html) disagrees");
+    if (plainTextOfBody(s19DressBody, "plain") !== s19DressBody) throw new Error("plain rows must pass through untouched");
+  });
+
+  await expectOk("the dress is minimal and honest: firm footer + regulated line, links only, no images and no tracking, escaped markup", async () => {
+    const html = renderEmailHtml(s19DressBody, s19Identity);
+    if (!html.includes("X Law") || !html.includes("IAA Level 2 (casework)")) {
+      throw new Error("the firm/regulated footer lines are missing");
+    }
+    if (!/<a href="https:\/\/xlaw\.example\/book"/.test(html)) throw new Error("the URL was not linkified");
+    if (/<img|<script|pixel|track/i.test(html)) throw new Error("chrome/images/tracking found in the dress");
+    if (!html.includes("&lt;at any point&gt;") || !html.includes("&amp;")) {
+      throw new Error("body markup was not escaped");
+    }
+    const bare = renderEmailHtml("Hello.", resolveEmailIdentity("X Law", {}));
+    if (/IAA|regulated/i.test(bare)) throw new Error("an unset regulated status must render NO line — honest absence");
+  });
+
+  console.log("\nSession 19 — the ATTACHMENTS pre-flight (PR-i):");
+
+  await expectOk("the declared vocabulary carries route_guide (0032 — documents are entries with a file)", async () => {
+    const r = await db.query<{ n: number }>(
+      `select count(*)::int as n from private.drafting_field_declarations() d
+       where d.key = 'knowledge_category'
+         and d.validation -> 'allowed' @> '[{"key": "route_guide"}]'::jsonb`
+    );
+    if (r.rows[0]!.n !== 1) throw new Error("route_guide is not declared");
+  });
+
+  // A fresh consented contact + engagement for the attachment and
+  // multi-touch tests — no leftovers from earlier sections.
+  const s19Contact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name, given_name)
+     values ($1, $2, 'person', 'Sana Iqbal', 'Sana') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s19ContactId = s19Contact.rows[0]!.id;
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'sana@example.test', true, '{"transactional": true}'::jsonb),
+            ($1, $2, $3, 'whatsapp', '+447700900123', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s19ContactId]
+  );
+  const s19Engagement = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'Sana Iqbal — enquiry', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s19EngagementId = s19Engagement.rows[0]!.id;
+  const s19EmailThread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, engagement_id, channel)
+     values ($1, $2, $3, $4, 'email') returning id`,
+    [f.business_id, f.agent_id, s19ContactId, s19EngagementId]
+  );
+  const s19EmailThreadId = s19EmailThread.rows[0]!.id;
+
+  const s19DeclareDraft = async (attachments: unknown): Promise<string> => {
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications
+         (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, drafted_by_actor_id, attributes)
+       values ($1, $2, $3, $4, $5, 'email', 'outbound', 'draft', 'Hello Sana, our guide is attached for your route.', $2, $6::jsonb)
+       returning id`,
+      [f.business_id, f.agent_id, s19EmailThreadId, s19ContactId, s19EngagementId, JSON.stringify({ attachments })]
+    );
+    const commId = r.rows[0]!.id;
+    await db.query(`select public.submit_communication($1, $2)`, [commId, f.agent_id]);
+    await recordCompliance(commId);
+    return commId;
+  };
+
+  const s19MissingFileId = "00000000-0000-7000-8000-00000000dead";
+  const s19MissingComm = await s19DeclareDraft([
+    { file_id: s19MissingFileId, filename: "spouse-guide.pdf", mime_type: "application/pdf", size_bytes: 1024 },
+  ]);
+  await expectError(
+    "REFUSAL: a declared attachment whose file does not exist blocks the stamp (PR-i's ordered proof)",
+    /does not exist/,
+    () => db.query(`select public.approve_communication($1, $2)`, [s19MissingComm, f.human_id])
+  );
+  await db.query(`select public.reject_communication($1, $2, $3)`, [s19MissingComm, f.human_id, "harness cleanup — the refusal is the proof"]);
+
+  const s19File = await db.query<{ id: string }>(
+    `insert into public.files (business_id, storage_key, filename, mime_type, size_bytes, sha256, uploaded_by)
+     values ($1, 'route-guides/test/spouse-guide.pdf', 'spouse-guide.pdf', 'application/pdf', 2048, repeat('b', 64), $2) returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s19FileId = s19File.rows[0]!.id;
+
+  const s19UnlinkedComm = await s19DeclareDraft([
+    { file_id: s19FileId, filename: "spouse-guide.pdf", mime_type: "application/pdf", size_bytes: 2048 },
+  ]);
+  await expectError(
+    "REFUSAL: a declared attachment that exists but is NOT LINKED to the message blocks the stamp",
+    /not linked/,
+    () => db.query(`select public.approve_communication($1, $2)`, [s19UnlinkedComm, f.human_id])
+  );
+  await expectOk("linking the declared file earns the stamp — existence + linkage is the whole check", async () => {
+    await db.query(
+      `insert into public.file_links (business_id, file_id, entity_type, entity_id, role)
+       values ($1, $2, 'communication', $3, 'attachment')`,
+      [f.business_id, s19FileId, s19UnlinkedComm]
+    );
+    await db.query(`select public.approve_communication($1, $2)`, [s19UnlinkedComm, f.human_id]);
+  });
+
+  await expectError(
+    "REFUSAL: a declared attachment over the 8MB ceiling blocks the stamp (the visible config error)",
+    /8MB/,
+    async () => {
+      const big = await db.query<{ id: string }>(
+        `insert into public.files (business_id, storage_key, filename, mime_type, size_bytes, sha256, uploaded_by)
+         values ($1, 'route-guides/test/oversize.pdf', 'oversize.pdf', 'application/pdf', ${9 * 1024 * 1024}, repeat('c', 64), $2) returning id`,
+        [f.business_id, f.agent_id]
+      );
+      const commId = await s19DeclareDraft([
+        { file_id: big.rows[0]!.id, filename: "oversize.pdf", mime_type: "application/pdf", size_bytes: 9 * 1024 * 1024 },
+      ]);
+      await db.query(
+        `insert into public.file_links (business_id, file_id, entity_type, entity_id, role)
+         values ($1, $2, 'communication', $3, 'attachment')`,
+        [f.business_id, big.rows[0]!.id, commId]
+      );
+      try {
+        await db.query(`select public.approve_communication($1, $2)`, [commId, f.human_id]);
+      } finally {
+        await db.query(`select public.reject_communication($1, $2, $3)`, [commId, f.human_id, "harness cleanup"]);
+      }
+    }
+  );
+
+  console.log("\nSession 19 — multi-touch two-stamp independence (PR-ii):");
+
+  const s19WaThread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, engagement_id, channel)
+     values ($1, $2, $3, $4, 'whatsapp') returning id`,
+    [f.business_id, f.agent_id, s19ContactId, s19EngagementId, ]
+  );
+  const s19Intro = await db.query<{ id: string }>(
+    `insert into public.communications
+       (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, drafted_by_actor_id)
+     values ($1, $2, $3, $4, $5, 'email', 'outbound', 'draft', 'Hello Sana, thank you for your enquiry with X Law.', $2) returning id`,
+    [f.business_id, f.agent_id, s19EmailThreadId, s19ContactId, s19EngagementId]
+  );
+  const s19IntroId = s19Intro.rows[0]!.id;
+  const s19WaIntro = await db.query<{ id: string }>(
+    `insert into public.communications
+       (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, drafted_by_actor_id, attributes)
+     values ($1, $2, $3, $4, $5, 'whatsapp', 'outbound', 'draft', 'Hello Sana, thank you for your enquiry with X Law.', $2,
+             '{"wa_template": {"name": "enquiry_intro", "language": "en_GB"}, "companion": "whatsapp"}'::jsonb) returning id`,
+    [f.business_id, f.agent_id, s19WaThread.rows[0]!.id, s19ContactId, s19EngagementId]
+  );
+  const s19WaIntroId = s19WaIntro.rows[0]!.id;
+
+  await expectOk("the intro pair pends TOGETHER — one per channel, the 0029 guard permits exactly this shape", async () => {
+    await db.query(`select public.submit_communication($1, $2)`, [s19IntroId, f.agent_id]);
+    await recordCompliance(s19IntroId);
+    await db.query(`select public.submit_communication($1, $2)`, [s19WaIntroId, f.agent_id]);
+    await recordCompliance(s19WaIntroId);
+    const r = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.communications
+       where engagement_id = $1 and status = 'pending_approval' and direction = 'outbound'`,
+      [s19EngagementId]
+    );
+    if (r.rows[0]!.n !== 2) throw new Error(`expected 2 pending drafts, saw ${r.rows[0]!.n}`);
+  });
+
+  await expectOk("stamping the EMAIL intro leaves the WhatsApp intro pending — two individual stamps, never one act", async () => {
+    await db.query(`select public.approve_communication($1, $2)`, [s19IntroId, f.human_id]);
+    const r = await db.query<{ status: string }>(`select status from public.communications where id = $1`, [s19WaIntroId]);
+    if (r.rows[0]!.status !== "pending_approval") {
+      throw new Error(`the WhatsApp intro moved with the email stamp: ${r.rows[0]!.status}`);
+    }
+  });
+
+  await expectOk("refusing the WhatsApp intro leaves the stamped email untouched — the touches are independent", async () => {
+    await db.query(`select public.reject_communication($1, $2, $3)`, [s19WaIntroId, f.human_id, "Not this lead — email is enough."]);
+    const r = await db.query<{ status: string }>(`select status from public.communications where id = $1`, [s19IntroId]);
+    if (r.rows[0]!.status !== "approved") throw new Error(`the email intro was disturbed: ${r.rows[0]!.status}`);
+  });
+
+  console.log("\nSession 19 — inbound WhatsApp consent (founder-ruled fold-in):");
+
+  await expectOk("an inbound message earns TRANSACTIONAL consent only — marketing is never inferred, prior values pass through", async () => {
+    const window = { opened_at: "2026-08-01T10:00:00Z", expires_at: "2026-08-02T10:00:00Z", source: "whatsapp_inbound" };
+    const fresh = whatsAppInboundConsent(null, "2026-08-01T10:00:00Z", window);
+    if (fresh.transactional !== true || fresh.source !== "inbound_message") throw new Error("fresh consent is wrong");
+    if ("marketing" in fresh) throw new Error("marketing consent was invented from an inbound message");
+    const merged = whatsAppInboundConsent({ marketing: false, note: "kept" }, "2026-08-01T10:00:00Z", window);
+    if (merged.marketing !== false || merged.note !== "kept") throw new Error("prior consent values were disturbed");
+    if (merged.transactional !== true) throw new Error("transactional consent was not granted");
+  });
+
+  await expectOk("the DEFECT case, then the law: a lead-form contact's WhatsApp reply draft is refused on consent until the inbound's consent row lands — then the stamp is earned", async () => {
+    // A lead-form contact: phone + email consent only (the live shape).
+    const lead = await db.query<{ id: string }>(
+      `insert into public.contacts (business_id, created_by, type, display_name, given_name)
+       values ($1, $2, 'person', 'Bilal Ahmed', 'Bilal') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    const leadId = lead.rows[0]!.id;
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'phone', '+447700900456', true, '{"transactional": true, "marketing": true, "source": "meta_lead_form"}'::jsonb),
+              ($1, $2, $3, 'email', 'bilal@example.test', true, '{"transactional": true, "marketing": true, "source": "meta_lead_form"}'::jsonb)`,
+      [f.business_id, f.agent_id, leadId]
+    );
+    const waThread = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'whatsapp') returning id`,
+      [f.business_id, f.agent_id, leadId]
+    );
+    // The client's first inbound WhatsApp message (in-window).
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, occurred_at)
+       values ($1, $2, $3, $4, 'whatsapp', 'inbound', 'received', 'Salaam, can you help with my spouse visa?', now())`,
+      [f.business_id, f.agent_id, waThread.rows[0]!.id, leadId]
+    );
+    // Light's free-form reply draft.
+    const reply = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, 'whatsapp', 'outbound', 'draft', 'Hello Bilal, yes, we help with spouse visa applications.', $2) returning id`,
+      [f.business_id, f.agent_id, waThread.rows[0]!.id, leadId]
+    );
+    const replyId = reply.rows[0]!.id;
+    await db.query(`select public.submit_communication($1, $2)`, [replyId, f.agent_id]);
+    await recordCompliance(replyId);
+
+    // The defect the founder caught live: the WA WINDOW passes (an inbound
+    // is in-window) while CONSENT refuses — two checks disagreeing about
+    // the same fact.
+    let refused = false;
+    try {
+      await db.query(`select public.approve_communication($1, $2)`, [replyId, f.human_id]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/session window/.test(message)) throw new Error("the WA window check refused — the defect was elsewhere");
+      refused = /consent/i.test(message);
+    }
+    if (!refused) throw new Error("the defect case did not refuse on consent");
+
+    // The ruling's fix: ingest writes the consent row the inbound earned.
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'whatsapp', '+447700900456', true, $4::jsonb)`,
+      [
+        f.business_id,
+        f.agent_id,
+        leadId,
+        JSON.stringify(whatsAppInboundConsent(null, new Date().toISOString(), {
+          opened_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+          source: "whatsapp_inbound",
+        })),
+      ]
+    );
+    await db.query(`select public.approve_communication($1, $2)`, [replyId, f.human_id]);
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
