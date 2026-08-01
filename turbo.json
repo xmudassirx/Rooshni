@@ -28,7 +28,10 @@
         "META_VERIFY_TOKEN",
         "META_ACCESS_TOKEN",
         "WHATSAPP_ACCESS_TOKEN",
-        "WHATSAPP_PHONE_NUMBER_ID"
+        "WHATSAPP_PHONE_NUMBER_ID",
+        "MARKETING_DEMO_BUSINESS_ID",
+        "NEXT_PUBLIC_APP_URL",
+        "NEXT_PUBLIC_SITE_URL"
       ]
     },
     "dev": {
