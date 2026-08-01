@@ -1490,3 +1490,102 @@ await sign-off in the close report and are NOT recorded here.
      truth), and the History withdrawn arm. The dangling
      meta_lead_to_consultation v2 was NOT withdrawn by the builder — the
      founder's witnessed withdrawal through the UI is the DoD (GO-LIVE).
+
+## Session 22 (1 August 2026) — Phase 2 completion, pre-rulings recorded on in-prompt authority
+
+Entries 153–156 quote the founder pre-rulings for the four workstreams,
+"approved in this prompt; record each as a DECISIONS candidate quoting it; do
+not re-ask" (Session 22 prompt, 1 August 2026 — the §8 quoted-approval
+pattern). Entry 157 quotes the founder's mid-session Workstream 5 ruling of
+the same night. The session's Lane B calls await sign-off in the close report
+and are NOT recorded here.
+
+153. **The Meta Conversions loop (WS1, rulings 1a–1e).** Quoted from the
+     prompt: "Outcome events to Meta via the Conversions API using the
+     existing META_ACCESS_TOKEN and the lead's leadgen id (stored on the
+     engagement from ingest). Event mapping, founder-ruled: stage transition
+     to consultation_booked → Meta 'Schedule'; transition to instructed →
+     Meta 'Purchase' with value = the engagement's recorded fee if a money
+     row exists, else no value field (never invent an amount); terminal
+     disqualified with junk reason → no event (we do not teach Meta our
+     triage). Events fire from stage_history writes via the workflow/event
+     layer — server side, never client. … SHA-256 normalised email/phone
+     only; raw PII never leaves the database; the payload is recorded on The
+     Record (event kind meta.conversion_sent) with the hashed fields as
+     sent. … spend_records … a daily cron pull of ad spend per campaign via
+     the Marketing API IF the existing token's scopes allow it; if the token
+     lacks ads_read, build fail-closed with the visible skip naming the
+     missing scope … (do not mint new credentials). … Settings → Integrations
+     gains a Conversions row (one door): on/off toggle (default OFF until I
+     flip it), test event code field … connection state honestly read.
+     Everything evented. … conversions fire only for engagements whose source
+     is Meta and whose business has the toggle on. A send failure is a
+     recorded, visible, retryable event — never blocks the stage transition
+     itself." Landed as conversions.ts (the ruled mapping in one named
+     place, the tick-riding sweep + the fire_conversion executor going real —
+     the Session 6 meta.signal_stubbed STUB retires), pullMetaSpend
+     (spend_records' first producer), and the Conversions row.
+
+154. **Billing & usage + credit caps (WS2, rulings 2a–2c).** Quoted from the
+     prompt: "The Billing & usage page goes real: monthly metered spend from
+     events.cost (the s15 producer), by day and by action kind, the tile
+     reading the same truth. Pricing display in the business's currency at
+     our recorded cost — no margin invented; pilot pricing is a founder
+     decision later, so label the figures 'metered cost' honestly. …
+     businesses.settings.ai_budget gains soft_cap and hard_cap (monthly,
+     owner-set, both optional). Soft cap crossed = a visible banner on
+     dashboard + Billing and an event; hard cap crossed = generation refuses
+     with a visible failed/blocked step naming the cap (the s15
+     provider-failure lane — never a silent stub), workflow sends that need
+     no generation continue, and the approval gate is untouched. Enforcement
+     server-side in the drafting path (the doctrine's budget line), not
+     client. … No payment collection here — the meter and caps only." Landed
+     as the priced cost block (model-router pricing beside the model ids,
+     both generation producers), ai-budget.ts (guardGenerationBudget in both
+     drafting callers; billing.soft_cap_crossed once per month), the real
+     Billing page and the caps door.
+
+155. **The Light performance tile (WS3).** Quoted from the prompt: "one
+     dashboard tile reading existing truth only: drafts generated this week,
+     approval rate (stamped vs rejected), edit-before-stamp rate, compliance
+     refusals count, mean tokens per draft, spend this week — all derivable
+     from events + draft_feedback + communications statuses. No new stores,
+     no model calls, honest empty states. This tile is my shadow-exit
+     calibration instrument." Landed as light-performance.ts (pure, proven
+     against a constructed fixture) + the dashboard tile with counts from
+     COUNT aggregates.
+
+156. **The mobile/responsive sweep (WS4).** Quoted from the prompt:
+     "solicitors stamp from phones. Scope: Approval Inbox (cards, credit
+     line, compliance chip, Approve/Edit/Reject usable one-handed),
+     Conversations (thread view, composer, drafting register), Dashboard
+     (tiles stack), Settings (tabs usable), sign-in. Breakpoint discipline
+     per the existing design system; no feature changes, no new components
+     beyond responsive variants; the master-mockup remains design authority —
+     where it shows no mobile answer, follow its spirit and mark a JUDGMENT.
+     … list any surface deliberately left desktop-only with reason (The
+     Record's dense ledger may be one — say so rather than mangling it)."
+     Landed as thumb-height responsive variants on the button/tab
+     primitives, the one-handed stamp row, and the stacking already carried
+     by the shell's sub-880px drawer; The Record's dense ledger is the
+     declared desktop-only surface.
+
+157. **The read-layer diet (WS5, founder-ruled mid-session), and THE LAW
+     (5e).** Quoted from the founder's message (1 August 2026): "5a. Approval
+     Inbox: server-side pagination, oldest-wait-first (submitted_at per
+     D134), default 20, selector 10/20/50. The bulk-reject path must operate
+     on the full filtered set server-side, not the visible page … 5b. The
+     Record: windowed reverse-chronological infinite scroll, day-anchored, no
+     page numbers; each window a bounded query. 5c. Conversations: thread
+     list windowed; within a thread load the recent tail and fetch older on
+     upward scroll … 5d. Contacts, Enquiries pipeline lists, Approval
+     History: server-side pagination, default 20. 5e. THE LAW (record as
+     DECISIONS candidate): any count shown anywhere (sidebar badges,
+     dashboard tiles, performance tile) derives from count aggregates, never
+     from fetching rows to count them; and no list surface fetches unbounded
+     rows. Add a smoke pinning the inbox query's bound." Landed: 5a, 5d and
+     5e this session (read-policy.ts is the policy's one home; the harness
+     pins the inbox bound with a file tripwire; the bulk refusal gained the
+     server-side full-set scope). 5b and 5c were NOT built — closed honestly
+     at the last complete piece per the same ruling; their pre-ruled shapes
+     stand for their own session.

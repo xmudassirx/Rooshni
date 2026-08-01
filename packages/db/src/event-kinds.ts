@@ -132,4 +132,34 @@ export const WORKFLOW_EVENT_KINDS = {
   definitionWithdrawn: "workflow.definition_withdrawn",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 22 — the Meta Conversions loop (WS1). Same JUDGMENT as above:
+ * kinds are TS constants, the single truth every emitter imports. The
+ * Session 6 STUB kind (meta.signal_stubbed) is retired from the executor;
+ * its historical rows stand on the append-only ledger.
+ */
+export const CONVERSION_EVENT_KINDS = {
+  /** An outcome event left for Meta's Conversions API — the payload AS SENT
+   * (hashed em/ph only, never raw PII) rides the event payload (ruling 1b). */
+  conversionSent: "meta.conversion_sent",
+  /** Meta refused (or the send failed) — reason, attempt count and
+   * retryability recorded; the stage transition was never blocked (1e). */
+  conversionSendFailed: "meta.conversion_send_failed",
+  /** The daily ad-spend pull ran — campaigns and rows in the payload (1c). */
+  spendPulled: "meta.spend_pulled",
+  /** The daily pull stood down visibly — e.g. the token lacks ads_read; the
+   * missing scope is named (1c, fail closed). */
+  spendPullSkipped: "meta.spend_pull_skipped",
+} as const satisfies Record<string, EventAction>;
+
+/**
+ * Session 22 — billing & usage (WS2). Same JUDGMENT as above: kinds are TS
+ * constants, the single truth every emitter imports.
+ */
+export const BILLING_EVENT_KINDS = {
+  /** The month's metered spend crossed the owner-set soft cap — once per
+   * month on The Record; the pages banner from live truth (ruling 2b). */
+  softCapCrossed: "billing.soft_cap_crossed",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

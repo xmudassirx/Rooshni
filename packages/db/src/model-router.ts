@@ -44,6 +44,57 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/**
+ * Session 22 (WS2, ruling 2a) — pricing the meter. Our RECORDED cost, no
+ * margin invented: the provider's published list rates for the two routed
+ * models, held here in the ONE config module beside the model ids they
+ * price. PROVISIONAL constants (the AUTO_CLOSE_POLICY precedent) — re-cut
+ * when the provider's pricing page moves; the numbers are provisional, the
+ * no-margin law is not.
+ *
+ * JUDGMENT: the provider bills in USD; the ruled display is the business's
+ * currency (GBP for the pilot). The conversion is a pinned provisional rate,
+ * recorded on every priced line (fx_rate) so each amount is auditable
+ * against the rate that produced it.
+ */
+export const MODEL_PRICING_USD_PER_MTOK: Record<
+  string,
+  { input: number; output: number; cache_read: number; cache_write: number }
+> = {
+  [LIGHT_MODEL_FLOOR.model]: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+  [LIGHT_MODEL_ESCALATION.model]: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+};
+
+export const USD_TO_GBP_RATE = 0.79;
+
+export interface GenerationPrice {
+  amount_usd: number;
+  amount_gbp: number;
+  fx_rate: number;
+}
+
+/** Price one generation from its recorded usage. Returns null for a model
+ * the table does not know — an unpriced line stays honestly unpriced, never
+ * guessed. Amounts are rounded to 6 dp (fractions of a penny are real at
+ * these magnitudes). */
+export function priceGeneration(input: {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+}): GenerationPrice | null {
+  const rates = MODEL_PRICING_USD_PER_MTOK[input.model];
+  if (!rates) return null;
+  const usd =
+    (input.input_tokens / 1_000_000) * rates.input +
+    (input.output_tokens / 1_000_000) * rates.output +
+    ((input.cache_read_tokens ?? 0) / 1_000_000) * rates.cache_read +
+    ((input.cache_write_tokens ?? 0) / 1_000_000) * rates.cache_write;
+  const round6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
+  return { amount_usd: round6(usd), amount_gbp: round6(usd * USD_TO_GBP_RATE), fx_rate: USD_TO_GBP_RATE };
+}
+
 export interface EscalationDecision {
   tier: "standard" | "pro";
   model: string;

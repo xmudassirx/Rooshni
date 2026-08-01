@@ -15,6 +15,9 @@ import {
   type DraftAttestation,
 } from "./drafting";
 import type { FormAnswer } from "./meta";
+import { fireEngagementConversions } from "./conversions";
+import { assessAiBudget, guardGenerationBudget, maybeEmitSoftCapCrossed } from "./ai-budget";
+import { priceGeneration } from "./model-router";
 import { resolveSignOffText } from "./sign-off";
 import { resolveBookingUrl, substituteBookingLink } from "./booking-link";
 import { declareAttachment, findPublishedRouteGuide, type RouteGuide } from "./route-guides";
@@ -876,6 +879,7 @@ async function executeDraftComm(
     let composeInput: Parameters<typeof composeDraft>[1] | null = null;
     let attestation: DraftAttestation;
     let guide: RouteGuide | null = null;
+    let budgetBefore: Awaited<ReturnType<typeof assessAiBudget>> | null = null;
 
     if (generative) {
       const generator = createAnthropicGenerator();
@@ -901,6 +905,13 @@ async function executeDraftComm(
       const formAnswers = (facts.attributes?.form_answers as FormAnswer[] | undefined) ?? [];
       const leadText = `${leadTextFromAnswers(formAnswers)}\n${facts.title}`;
       try {
+        // Session 22 (WS2, ruling 2b): the hard cap refuses GENERATION here,
+        // server-side, before any model call — the s15 permanent-failure lane
+        // (the catch below records the visible failure naming the cap and the
+        // step fails loudly). The template path and every send continue; the
+        // approval gate never sees this check.
+        budgetBefore = await assessAiBudget(db, run.business_id);
+        guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
         const retrieval = await retrieveKnowledgeEntries(db, run.business_id, leadText);
         const noGoRules = await loadNoGoRules(db, run.business_id);
         // PR-i (Session 19): the intro email carries the route-matched
@@ -1107,6 +1118,10 @@ async function executeDraftComm(
       try {
         const generator = createAnthropicGenerator();
         if (generator) {
+          // WS2: the retry is generation too — the hard cap binds it the
+          // same way; a refusal here leaves attempt 1's recorded breach
+          // standing (visible, unapprovable, honest).
+          if (budgetBefore) guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
           const retry = await composeDraft(generator, composeInput, {
             escalationOverride: {
               tier: composed.credit_line.tier,
@@ -1177,6 +1192,16 @@ async function executeDraftComm(
     if (composed) {
       // The credit line on The Record (doctrine: no invisible spend — every
       // metered act is a priced line; events.cost feeds the billing surface).
+      // Session 22 (WS2): the cost block now carries the token split and the
+      // PRICED amount (list rates + recorded fx, model-router.ts) — our
+      // recorded cost, no margin invented (ruling 2a).
+      const price = priceGeneration({
+        model: composed.credit_line.model,
+        input_tokens: composed.usage.input_tokens,
+        output_tokens: composed.usage.output_tokens,
+        cache_read_tokens: composed.credit_line.cache?.read_tokens,
+        cache_write_tokens: composed.credit_line.cache?.written_tokens,
+      });
       await emitEvent(db, {
         business_id: run.business_id,
         actor_id: drafter,
@@ -1196,8 +1221,28 @@ async function executeDraftComm(
           provider: "anthropic",
           model: composed.credit_line.model,
           tokens: composed.usage.input_tokens + composed.usage.output_tokens,
+          input_tokens: composed.usage.input_tokens,
+          output_tokens: composed.usage.output_tokens,
+          ...(composed.credit_line.cache
+            ? {
+                cache_read_tokens: composed.credit_line.cache.read_tokens,
+                cache_write_tokens: composed.credit_line.cache.written_tokens,
+              }
+            : {}),
+          ...(price ? { amount_gbp: price.amount_gbp, amount_usd: price.amount_usd, fx_rate: price.fx_rate } : {}),
         },
       });
+      // WS2: a soft-cap crossing lands once per month on The Record; it
+      // never blocks — the banner is the pages' live read.
+      if (budgetBefore && price) {
+        await maybeEmitSoftCapCrossed(db, {
+          business_id: run.business_id,
+          actor_id: drafter,
+          before_gbp: budgetBefore.spend_gbp,
+          after_gbp: budgetBefore.spend_gbp + price.amount_gbp,
+          budget: budgetBefore,
+        });
+      }
     }
 
     await submitCommunication(db, {
@@ -1504,37 +1549,36 @@ async function executeFireConversion(
   report: TickReport
 ): Promise<void> {
   const { run } = bundle;
-  const engineActor = (run.context.engine_actor_id as string) ?? run.created_by;
-  const engagements = await q<{ outcome: string | null }[]>(
-    db.from("engagements").select("outcome").eq("id", run.engagement_id).limit(1),
-    "engagement outcome lookup"
-  );
-  // STUB — the Meta Conversions/junk-signal wiring is its own contract+wiring
-  // session pair. The signal that WOULD fire is logged; nothing leaves.
-  const event = await emitEvent(db, {
-    business_id: run.business_id,
-    actor_id: engineActor,
-    action: "meta.signal_stubbed",
-    entity_type: "engagement",
-    entity_id: run.engagement_id,
-    payload: {
-      stub: true,
-      note: "STUB — Meta outcome-feedback wiring is a later session; this signal would have fired here. See docs/GO-LIVE.md.",
-      signal: step.config.signal ?? "outcome_feedback",
-      engagement_outcome: engagements[0]?.outcome ?? null,
-      cooling: step.config.cooling ?? null,
-      workflow_run_id: run.id,
-    },
-  });
-  await completeStep(
-    db,
-    bundle,
-    stepRun,
-    "completed",
-    { stubbed: true, signal_event_id: event.id },
-    advanceArgs(bundle.steps, step.id, now),
-    report
-  );
+  // Session 22 (WS1): the STUB retires — the ruled conversions (Schedule on
+  // consultation_booked, Purchase on instructed; junk teaches Meta NOTHING)
+  // fire through the real Conversions layer. Provider failures are recorded,
+  // visible and retried by the tick sweep; the run is NEVER blocked by the
+  // ad platform (ruling 1e) — the step completes with an honest outcome
+  // either way.
+  let outcome: Record<string, unknown>;
+  let status: "completed" | "skipped" = "completed";
+  try {
+    const fired = await fireEngagementConversions(db, {
+      business_id: run.business_id,
+      engagement_id: run.engagement_id,
+    });
+    if (!fired.enabled) {
+      status = "skipped";
+      outcome = { reason: "conversions are OFF for this business (Settings → Integrations)", conversions_enabled: false };
+    } else {
+      outcome = {
+        conversions_enabled: true,
+        sent: fired.sent,
+        failed: fired.failed,
+        ...(fired.skipped.length ? { skipped: fired.skipped } : {}),
+      };
+    }
+  } catch (err) {
+    // Even a resolver failure never blocks the run — the sweep owns retries.
+    status = "skipped";
+    outcome = { reason: `conversion layer unavailable: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  await completeStep(db, bundle, stepRun, status, outcome, advanceArgs(bundle.steps, step.id, now), report);
 }
 
 // ---------------------------------------------------------------------------

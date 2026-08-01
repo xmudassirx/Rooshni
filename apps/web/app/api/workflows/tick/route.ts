@@ -8,7 +8,9 @@ import {
   dispatchApprovedCommunications,
   pollGmailInbound,
   pollGraphInbound,
+  pullMetaSpend,
   runWorkflowTick,
+  sweepConversions,
   sweepPreActiveSignups,
   sweepSettleAndSupersede,
 } from "@rooshni/db";
@@ -106,6 +108,17 @@ async function tick(request: NextRequest): Promise<NextResponse> {
   // unevented supersede markers land on The Record.
   const settle = await sweepSettleAndSupersede(db, { generator: createAnthropicGenerator() });
 
+  // Session 22 (WS1): the conversions sweep runs AFTER the workflow pass and
+  // dispatch — stage moves made this tick get their outcome events this same
+  // tick, and visibly failed sends are retried here (never blocking anything;
+  // the toggle-off default means this is a no-op until the founder flips it).
+  const conversions = await sweepConversions(db);
+
+  // The daily ad-spend pull (spend_records' first producer) — one pull per
+  // UTC day per toggle-on business; fail-closed with a visible skip naming
+  // the missing ads_read scope when the token cannot read insights.
+  const spend = await pullMetaSpend(db);
+
   return NextResponse.json({
     ok:
       report.errors.length === 0 &&
@@ -113,13 +126,17 @@ async function tick(request: NextRequest): Promise<NextResponse> {
       dispatch.errors.length === 0 &&
       inbound.errors.length === 0 &&
       gmail.errors.length === 0 &&
-      settle.errors.length === 0,
+      settle.errors.length === 0 &&
+      conversions.errors.length === 0 &&
+      spend.errors.length === 0,
     report,
     signups,
     dispatch,
     inbound,
     gmail,
     settle,
+    conversions,
+    spend,
   });
 }
 

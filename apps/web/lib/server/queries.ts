@@ -1,15 +1,28 @@
 import "server-only";
 import type { ActorType, ApprovalInboxRow, EventRow } from "@rooshni/db";
 import {
+  clampPage,
+  clampPageSize,
+  computeLightPerformance,
+  DEFAULT_LIST_WINDOW,
+  evaluateAiBudget,
+  pageRange,
+  MONTH_SPEND_ROW_BOUND,
+  monthWindowUtc,
   plainTextOfBody,
+  pricedAmountGbp,
   readGmailEnv,
   readGraphEnv,
   renderEmailHtml,
+  resolveAiBudget,
+  resolveConversionsConfig,
   resolveEmailIdentity,
   resolveMailProvider,
   resolveSignOffBody,
   resolveSignOffMode,
   resolveSignOffText,
+  weekWindowUtc,
+  type LightPerformance,
 } from "@rooshni/db";
 import { scaleDurationMs } from "@rooshni/config";
 import { getAppContext } from "./context";
@@ -38,6 +51,8 @@ export interface PipelineStage {
   key: string;
   label: string;
   isTerminal: boolean;
+  /** WS5d/5e: the stage's TRUE size (count aggregate); cards is a window. */
+  total: number;
   cards: PipelineCard[];
 }
 
@@ -59,14 +74,45 @@ export async function getPipeline(): Promise<PipelineStage[]> {
     .order("sort_order", { ascending: true });
   if (stagesError) throw new Error(`stage_definitions query failed: ${stagesError.message}`);
 
-  const { data: engagements, error: engError } = await db
-    .from("engagements")
-    .select("id, title, stage_id, stage_entered_at, attributes, attribution")
-    .eq("business_id", business.id)
-    .is("archived_at", null);
-  if (engError) throw new Error(`engagements query failed: ${engError.message}`);
+  // WS5d (Session 22): each stage column reads a WINDOW (oldest wait first)
+  // and its TOTAL comes from a COUNT aggregate (5e) — the demo-era read
+  // fetched every engagement plus the entire approval_inbox on every render.
+  const stageList = stages ?? [];
+  const perStage = await Promise.all(
+    stageList.map((stage) =>
+      Promise.all([
+        db
+          .from("engagements")
+          .select("id, title, stage_id, stage_entered_at, attributes, attribution")
+          .eq("business_id", business.id)
+          .eq("stage_id", stage.id)
+          .is("archived_at", null)
+          .order("stage_entered_at", { ascending: true })
+          .limit(DEFAULT_LIST_WINDOW),
+        db
+          .from("engagements")
+          .select("id", { count: "exact", head: true })
+          .eq("business_id", business.id)
+          .eq("stage_id", stage.id)
+          .is("archived_at", null),
+      ])
+    )
+  );
+  const engagements = perStage.flatMap(([rows], i) => {
+    if (rows.error) throw new Error(`engagements query (${stageList[i]!.key}) failed: ${rows.error.message}`);
+    return rows.data ?? [];
+  });
+  const totalByStage = new Map(
+    stageList.map((stage, i) => {
+      const [, countResult] = perStage[i]!;
+      if (countResult.error) {
+        throw new Error(`engagement count (${stage.key}) failed: ${countResult.error.message}`);
+      }
+      return [stage.id, countResult.count ?? 0];
+    })
+  );
 
-  const engagementIds = (engagements ?? []).map((e) => e.id);
+  const engagementIds = engagements.map((e) => e.id);
 
   const [participants, tasks, inboxRows] = await Promise.all([
     engagementIds.length
@@ -85,7 +131,14 @@ export async function getPipeline(): Promise<PipelineStage[]> {
           .is("archived_at", null)
           .order("due_at", { ascending: true })
       : Promise.resolve({ data: [], error: null }),
-    db.from("approval_inbox").select("*").eq("business_id", business.id),
+    // Slim and scoped: only the VISIBLE cards' pending items, id columns only.
+    engagementIds.length
+      ? db
+          .from("approval_inbox")
+          .select("engagement_id, item_type, channel")
+          .eq("business_id", business.id)
+          .in("engagement_id", engagementIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (participants.error) throw new Error(`participants query failed: ${participants.error.message}`);
   if (tasks.error) throw new Error(`tasks query failed: ${tasks.error.message}`);
@@ -106,20 +159,22 @@ export async function getPipeline(): Promise<PipelineStage[]> {
     }
   }
 
-  const inboxByEngagement = new Map<string, ApprovalInboxRow[]>();
-  for (const row of (inboxRows.data ?? []) as ApprovalInboxRow[]) {
+  type SlimInboxRow = { engagement_id: string | null; item_type: string; channel: string | null };
+  const inboxByEngagement = new Map<string, SlimInboxRow[]>();
+  for (const row of (inboxRows.data ?? []) as SlimInboxRow[]) {
     if (!row.engagement_id) continue;
     const list = inboxByEngagement.get(row.engagement_id) ?? [];
     list.push(row);
     inboxByEngagement.set(row.engagement_id, list);
   }
 
-  return (stages ?? []).map((stage) => ({
+  return stageList.map((stage) => ({
     id: stage.id,
     key: stage.key,
     label: stage.label,
     isTerminal: stage.is_terminal,
-    cards: (engagements ?? [])
+    total: totalByStage.get(stage.id) ?? 0,
+    cards: engagements
       .filter((e) => e.stage_id === stage.id)
       .sort((a, b) => a.stage_entered_at.localeCompare(b.stage_entered_at))
       .map((e) => {
@@ -151,15 +206,104 @@ export async function getPipeline(): Promise<PipelineStage[]> {
 
 // --- The Approval Inbox -----------------------------------------------------
 
-export async function getInbox(): Promise<ApprovalInboxRow[]> {
+/**
+ * Session 22 (WS5a) — the Approval Inbox reads a WINDOW: server-side
+ * pagination, oldest-wait-first (awaiting_since keys to submitted_at, D134),
+ * default 20, selector 10/20/50. The total is a COUNT aggregate (5e) so the
+ * page never fetches rows to count them.
+ */
+export interface InboxPage {
+  rows: ApprovalInboxRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  /** Pending COMMUNICATIONS in the full filtered set — the bulk-reject
+   * scope's honest denominator (count aggregate). */
+  pendingCommunications: number;
+}
+
+export async function getInboxPage(input: { page?: number; pageSize?: number } = {}): Promise<InboxPage> {
   const { db, business } = await getAppContext();
-  const { data, error } = await db
-    .from("approval_inbox")
-    .select("*")
-    .eq("business_id", business.id)
-    .order("awaiting_since", { ascending: true });
-  if (error) throw new Error(`approval_inbox query failed: ${error.message}`);
-  return (data ?? []) as ApprovalInboxRow[];
+  const pageSize = clampPageSize(input.pageSize);
+  const page = clampPage(input.page);
+  const range = pageRange(page, pageSize);
+
+  const [rowsResult, totalResult, commResult] = await Promise.all([
+    db
+      .from("approval_inbox")
+      .select("*")
+      .eq("business_id", business.id)
+      .order("awaiting_since", { ascending: true })
+      .range(range.from, range.to),
+    db
+      .from("approval_inbox")
+      .select("*", { count: "exact", head: true })
+      .eq("business_id", business.id),
+    db
+      .from("approval_inbox")
+      .select("*", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("item_type", "communication"),
+  ]);
+  if (rowsResult.error) throw new Error(`approval_inbox query failed: ${rowsResult.error.message}`);
+  if (totalResult.error) throw new Error(`approval_inbox count failed: ${totalResult.error.message}`);
+  if (commResult.error) throw new Error(`approval_inbox comm count failed: ${commResult.error.message}`);
+  const total = totalResult.count ?? 0;
+  return {
+    rows: (rowsResult.data ?? []) as ApprovalInboxRow[],
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    pendingCommunications: commResult.count ?? 0,
+  };
+}
+
+/**
+ * WS5e — the dashboard's stamps-owed tile from COUNT aggregates only: the
+ * total, the per-type breakdown (one head count per known type) and the
+ * single oldest row for the waiting line. Never a full fetch to count.
+ */
+export interface InboxSummary {
+  total: number;
+  byType: { type: string; count: number }[];
+  oldestAwaitingSince: string | null;
+}
+
+const INBOX_ITEM_TYPES = ["communication", "content", "task", "workflow_definition"];
+
+export async function getInboxSummary(): Promise<InboxSummary> {
+  const { db, business } = await getAppContext();
+  const [totalResult, oldestResult, ...typeResults] = await Promise.all([
+    db.from("approval_inbox").select("*", { count: "exact", head: true }).eq("business_id", business.id),
+    db
+      .from("approval_inbox")
+      .select("awaiting_since")
+      .eq("business_id", business.id)
+      .order("awaiting_since", { ascending: true })
+      .limit(1),
+    ...INBOX_ITEM_TYPES.map((type) =>
+      db
+        .from("approval_inbox")
+        .select("*", { count: "exact", head: true })
+        .eq("business_id", business.id)
+        .eq("item_type", type)
+    ),
+  ]);
+  if (totalResult.error) throw new Error(`inbox summary count failed: ${totalResult.error.message}`);
+  if (oldestResult.error) throw new Error(`inbox summary oldest failed: ${oldestResult.error.message}`);
+  const byType = INBOX_ITEM_TYPES.flatMap((type, i) => {
+    const result = typeResults[i]!;
+    if (result.error) throw new Error(`inbox summary ${type} count failed: ${result.error.message}`);
+    const count = result.count ?? 0;
+    return count > 0 ? [{ type, count }] : [];
+  });
+  return {
+    total: totalResult.count ?? 0,
+    byType,
+    oldestAwaitingSince: (oldestResult.data?.[0]?.awaiting_since as string | undefined) ?? null,
+  };
 }
 
 /** Open tasks for the sidebar badge — an earned count or nothing. */
@@ -521,30 +665,53 @@ export interface InboxHistoryRow {
   engagementId: string | null;
 }
 
+const HISTORY_ACTIONS = [
+  "communication.approved",
+  "communication.rejected",
+  "communication.superseded",
+  "workflow.definition_withdrawn",
+];
+
+export interface InboxHistoryPage {
+  rows: InboxHistoryRow[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
+
 /** Session 11 — the inbox History tab: stamped and refused decisions read
  * from The Record (the events ARE the history; the default view stays
- * stamps-owed-only). */
-export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> {
+ * stamps-owed-only). Session 22 (WS5d): windowed server-side, default 20,
+ * the total a COUNT aggregate. */
+export async function getInboxHistory(days: 7 | 30, page = 1): Promise<InboxHistoryPage> {
   const { db, business } = await getAppContext();
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const range = pageRange(page, DEFAULT_LIST_WINDOW);
 
-  const { data: events, error } = await db
-    .from("events")
-    .select("id, action, occurred_at, entity_id, payload, actors(display_name)")
-    .eq("business_id", business.id)
-    // Session 21: a withdrawn workflow definition is a decided item too —
-    // it lands here from The Record like every other decision.
-    .in("action", [
-      "communication.approved",
-      "communication.rejected",
-      "communication.superseded",
-      "workflow.definition_withdrawn",
-    ])
-    .gte("occurred_at", since)
-    .order("occurred_at", { ascending: false })
-    .limit(200);
+  const [{ data: events, error }, countResult] = await Promise.all([
+    db
+      .from("events")
+      .select("id, action, occurred_at, entity_id, payload, actors(display_name)")
+      .eq("business_id", business.id)
+      // Session 21: a withdrawn workflow definition is a decided item too —
+      // it lands here from The Record like every other decision.
+      .in("action", HISTORY_ACTIONS)
+      .gte("occurred_at", since)
+      .order("occurred_at", { ascending: false })
+      .range(range.from, range.to),
+    db
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .in("action", HISTORY_ACTIONS)
+      .gte("occurred_at", since),
+  ]);
   if (error) throw new Error(`inbox history query failed: ${error.message}`);
-  if (!events?.length) return [];
+  if (countResult.error) throw new Error(`inbox history count failed: ${countResult.error.message}`);
+  const total = countResult.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / DEFAULT_LIST_WINDOW));
+  const emptyPage = { total, page: clampPage(page), pageCount };
+  if (!events?.length) return { rows: [], ...emptyPage };
 
   const commIds = [
     ...new Set(
@@ -565,7 +732,7 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
   if (commError) throw new Error(`history communications query failed: ${commError.message}`);
   const commById = new Map((comms ?? []).map((c) => [c.id, c]));
 
-  return events.flatMap((e): InboxHistoryRow[] => {
+  const rows: InboxHistoryRow[] = events.flatMap((e): InboxHistoryRow[] => {
     if (!e.entity_id) return [];
     if (e.action === "workflow.definition_withdrawn") {
       // Session 21: the payload carries the definition's key/version and the
@@ -641,6 +808,7 @@ export async function getInboxHistory(days: 7 | 30): Promise<InboxHistoryRow[]> 
       },
     ];
   });
+  return { rows, ...emptyPage };
 }
 
 // --- Dashboard ---------------------------------------------------------------
@@ -673,9 +841,20 @@ export interface DashboardData {
    * and the monitor honestly cannot run.
    */
   stuck: StuckEnquiry[] | null;
-  /** Metered credits on the ledger this calendar month. */
-  creditsThisMonth: number;
+  /** Priced metered cost on the ledger this month, GBP (WS2: the tile reads
+   * the same truth as Billing & usage). */
+  meteredCostGbpThisMonth: number;
   meteredEventsThisMonth: number;
+  /** Pre-s22 cost lines with no priced amount — counted, never invented. */
+  unpricedEventsThisMonth: number;
+  /** WS2: the cap banner's live truth (computed here so the dashboard needs
+   * no second read of the month's cost rows). */
+  budget: {
+    softCapGbp: number | null;
+    hardCapGbp: number | null;
+    softCrossed: boolean;
+    hardCrossed: boolean;
+  };
 }
 
 export async function getDashboard(): Promise<DashboardData> {
@@ -688,7 +867,7 @@ export async function getDashboard(): Promise<DashboardData> {
   const startOfMonth = new Date(startOfToday);
   startOfMonth.setDate(1);
 
-  const [newRows, taskRows, slaRows, costRows] = await Promise.all([
+  const [newRows, taskRows, slaRows, costRows, bizSettingsRow] = await Promise.all([
     db
       .from("engagements")
       .select("*", { count: "exact", head: true })
@@ -715,13 +894,16 @@ export async function getDashboard(): Promise<DashboardData> {
       .select("cost")
       .eq("business_id", business.id)
       .gte("occurred_at", startOfMonth.toISOString())
-      .not("cost", "is", null),
+      .not("cost", "is", null)
+      .limit(MONTH_SPEND_ROW_BOUND),
+    db.from("businesses").select("settings").eq("id", business.id).maybeSingle(),
   ]);
   for (const [label, result] of [
     ["engagements (new today)", newRows],
     ["tasks (today)", taskRows],
     ["engagements (stage SLA)", slaRows],
     ["events (cost)", costRows],
+    ["businesses (settings)", bizSettingsRow],
   ] as const) {
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
@@ -756,16 +938,16 @@ export async function getDashboard(): Promise<DashboardData> {
     stuck = null;
   }
 
-  let credits = 0;
+  // WS2: the tile reads the same priced truth as Billing & usage — GBP from
+  // the cost block's amount; pre-pricing lines counted, never invented.
+  let meteredCost = 0;
   let metered = 0;
+  let unpriced = 0;
   for (const row of costRows.data ?? []) {
-    const cost = row.cost as EventRow["cost"];
-    if (typeof cost?.credits === "number") {
-      credits += cost.credits;
-      metered += 1;
-    } else if (cost) {
-      metered += 1;
-    }
+    const amount = pricedAmountGbp(row.cost as Record<string, unknown> | null);
+    metered += 1;
+    if (amount === null) unpriced += 1;
+    else meteredCost += amount;
   }
 
   return {
@@ -780,8 +962,19 @@ export async function getDashboard(): Promise<DashboardData> {
       };
     }),
     stuck,
-    creditsThisMonth: credits,
+    meteredCostGbpThisMonth: meteredCost,
     meteredEventsThisMonth: metered,
+    unpricedEventsThisMonth: unpriced,
+    budget: (() => {
+      const budget = resolveAiBudget((bizSettingsRow.data?.settings ?? {}) as Record<string, unknown>);
+      const assessment = evaluateAiBudget(meteredCost, budget);
+      return {
+        softCapGbp: budget.soft_cap_gbp,
+        hardCapGbp: budget.hard_cap_gbp,
+        softCrossed: assessment.soft_crossed,
+        hardCrossed: assessment.hard_crossed,
+      };
+    })(),
   };
 }
 
@@ -1456,43 +1649,168 @@ export async function getMemberDetail(actorId: string): Promise<MemberDetail | n
 
 // --- Billing & usage ---------------------------------------------------------------
 
-export interface CreditUsage {
-  totalCredits: number;
-  /** Metered actions this calendar month, grouped by ledger action. */
-  byAction: { action: string; count: number; credits: number }[];
+export interface MeteredUsage {
+  /** Priced metered cost this UTC month, GBP (ruling 2a: our recorded cost,
+   * no margin — labelled "metered cost" honestly). */
+  totalGbp: number;
+  pricedLines: number;
+  /** Cost lines recorded before the s22 pricing landed — shown as token
+   * counts, never retro-priced. */
+  unpricedLines: number;
+  unpricedTokens: number;
+  byDay: { day: string; gbp: number; lines: number }[];
+  byAction: { action: string; lines: number; gbp: number; tokens: number }[];
+  budget: {
+    softCapGbp: number | null;
+    hardCapGbp: number | null;
+    softCrossed: boolean;
+    hardCrossed: boolean;
+  };
+  isOwner: boolean;
 }
 
-export async function getCreditUsage(): Promise<CreditUsage> {
-  const { db, business } = await getAppContext();
-  const startOfMonth = new Date();
-  startOfMonth.setDate(1);
-  startOfMonth.setHours(0, 0, 0, 0);
+/**
+ * Session 22 (WS2, ruling 2a) — the meter reads events.cost, the s15
+ * producer's truth: this month's spend by day and by action kind, priced
+ * lines summed in GBP, pre-pricing lines counted honestly as tokens.
+ * Bounded read (law 5e's spirit — never unbounded rows).
+ */
+export async function getMeteredUsage(): Promise<MeteredUsage> {
+  const { db, business, membershipRole } = await getAppContext();
+  const now = new Date();
+  const window = monthWindowUtc(now);
 
-  const { data, error } = await db
-    .from("events")
-    .select("action, cost")
-    .eq("business_id", business.id)
-    .gte("occurred_at", startOfMonth.toISOString())
-    .not("cost", "is", null);
-  if (error) throw new Error(`events query failed: ${error.message}`);
+  const [{ data, error }, { data: bizRow, error: bizError }] = await Promise.all([
+    db
+      .from("events")
+      .select("action, occurred_at, cost")
+      .eq("business_id", business.id)
+      .not("cost", "is", null)
+      .gte("occurred_at", window.start)
+      .lt("occurred_at", window.end)
+      .limit(MONTH_SPEND_ROW_BOUND),
+    db.from("businesses").select("settings").eq("id", business.id).maybeSingle(),
+  ]);
+  if (error) throw new Error(`metered usage query failed: ${error.message}`);
+  if (bizError) throw new Error(`budget settings query failed: ${bizError.message}`);
 
-  const byAction = new Map<string, { count: number; credits: number }>();
-  let total = 0;
+  let totalGbp = 0;
+  let pricedLines = 0;
+  let unpricedLines = 0;
+  let unpricedTokens = 0;
+  const byDay = new Map<string, { gbp: number; lines: number }>();
+  const byAction = new Map<string, { lines: number; gbp: number; tokens: number }>();
   for (const row of data ?? []) {
-    const cost = row.cost as EventRow["cost"];
-    const credits = typeof cost?.credits === "number" ? cost.credits : 0;
-    total += credits;
-    const entry = byAction.get(row.action) ?? { count: 0, credits: 0 };
-    entry.count += 1;
-    entry.credits += credits;
-    byAction.set(row.action, entry);
+    const cost = row.cost as Record<string, unknown> | null;
+    const amount = pricedAmountGbp(cost);
+    const tokens = typeof cost?.tokens === "number" ? (cost.tokens as number) : 0;
+    const day = String(row.occurred_at).slice(0, 10);
+    const dayEntry = byDay.get(day) ?? { gbp: 0, lines: 0 };
+    const actionEntry = byAction.get(row.action) ?? { lines: 0, gbp: 0, tokens: 0 };
+    dayEntry.lines += 1;
+    actionEntry.lines += 1;
+    actionEntry.tokens += tokens;
+    if (amount === null) {
+      unpricedLines += 1;
+      unpricedTokens += tokens;
+    } else {
+      totalGbp += amount;
+      pricedLines += 1;
+      dayEntry.gbp += amount;
+      actionEntry.gbp += amount;
+    }
+    byDay.set(day, dayEntry);
+    byAction.set(row.action, actionEntry);
   }
+
+  const budget = resolveAiBudget((bizRow?.settings ?? {}) as Record<string, unknown>);
+  const assessment = evaluateAiBudget(totalGbp, budget);
   return {
-    totalCredits: total,
+    totalGbp,
+    pricedLines,
+    unpricedLines,
+    unpricedTokens,
+    byDay: [...byDay.entries()]
+      .map(([day, v]) => ({ day, ...v }))
+      .sort((a, b) => b.day.localeCompare(a.day)),
     byAction: [...byAction.entries()]
       .map(([action, v]) => ({ action, ...v }))
-      .sort((a, b) => b.credits - a.credits),
+      .sort((a, b) => b.gbp - a.gbp || b.lines - a.lines),
+    budget: {
+      softCapGbp: budget.soft_cap_gbp,
+      hardCapGbp: budget.hard_cap_gbp,
+      softCrossed: assessment.soft_crossed,
+      hardCrossed: assessment.hard_crossed,
+    },
+    isOwner: membershipRole === "owner",
   };
+}
+
+/**
+ * Session 22 (WS3) — the Light performance tile's truth: existing rows only
+ * (events + draft_feedback + communication statuses), counts from COUNT
+ * aggregates (law 5e), the week's cost blocks as one bounded read, and the
+ * arithmetic in the pure computeLightPerformance the harness proves.
+ */
+export async function getLightPerformance(): Promise<LightPerformance> {
+  const { db, business } = await getAppContext();
+  const week = weekWindowUtc(new Date());
+  const countEvents = (action: string) =>
+    db
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("action", action)
+      .gte("occurred_at", week.start)
+      .lt("occurred_at", week.end);
+
+  const [drafts, stamped, rejected, edits, breaches, costRows] = await Promise.all([
+    countEvents("light.draft_generated"),
+    countEvents("communication.approved"),
+    countEvents("communication.rejected"),
+    db
+      .from("draft_feedback")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("kind", "edit")
+      .gte("created_at", week.start)
+      .lt("created_at", week.end),
+    db
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .eq("action", "communication.compliance_checked")
+      .eq("payload->>result", "breach")
+      .gte("occurred_at", week.start)
+      .lt("occurred_at", week.end),
+    db
+      .from("events")
+      .select("cost")
+      .eq("business_id", business.id)
+      .eq("action", "light.draft_generated")
+      .gte("occurred_at", week.start)
+      .lt("occurred_at", week.end)
+      .limit(MONTH_SPEND_ROW_BOUND),
+  ]);
+  for (const [label, result] of [
+    ["drafts generated", drafts],
+    ["stamps", stamped],
+    ["rejections", rejected],
+    ["edit signals", edits],
+    ["compliance refusals", breaches],
+    ["cost blocks", costRows],
+  ] as const) {
+    if (result.error) throw new Error(`performance ${label} query failed: ${result.error.message}`);
+  }
+
+  return computeLightPerformance({
+    drafts_generated: drafts.count ?? 0,
+    stamped: stamped.count ?? 0,
+    rejected: rejected.count ?? 0,
+    edit_signals: edits.count ?? 0,
+    compliance_refusals: breaches.count ?? 0,
+    cost_blocks: (costRows.data ?? []).map((r) => r.cost as Record<string, unknown> | null),
+  });
 }
 
 // --- Website ---------------------------------------------------------------------
@@ -2332,25 +2650,59 @@ interface EngagementEmbed {
   } | null;
 }
 
-export async function getContacts(): Promise<ContactListRow[]> {
-  const { db, business } = await getAppContext();
+export interface ContactsPage {
+  rows: ContactListRow[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
 
-  const [contacts, channels, relationships, participants, lastComms] = await Promise.all([
+/**
+ * Session 22 (WS5d): the contacts list reads a WINDOW — server-side
+ * pagination (default 20), hydration scoped to the PAGE's contact ids, the
+ * total a COUNT aggregate. The demo-era read fetched every contact, every
+ * channel, every relationship and EVERY communication row on each render.
+ */
+export async function getContacts(page = 1): Promise<ContactsPage> {
+  const { db, business } = await getAppContext();
+  const range = pageRange(page, DEFAULT_LIST_WINDOW);
+
+  const [contacts, totalResult] = await Promise.all([
     db
       .from("contacts")
       .select("id, display_name, type, status, locale, first_touch")
       .eq("business_id", business.id)
       .is("archived_at", null)
-      .order("display_name", { ascending: true }),
+      .order("display_name", { ascending: true })
+      .range(range.from, range.to),
+    db
+      .from("contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .is("archived_at", null),
+  ]);
+  if (contacts.error) throw new Error(`contacts query failed: ${contacts.error.message}`);
+  if (totalResult.error) throw new Error(`contacts count failed: ${totalResult.error.message}`);
+  const total = totalResult.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / DEFAULT_LIST_WINDOW));
+  const pageIds = (contacts.data ?? []).map((c) => c.id as string);
+  if (pageIds.length === 0) {
+    return { rows: [], total, page: clampPage(page), pageCount };
+  }
+  const idList = pageIds.join(",");
+
+  const [channels, relationships, participants, lastCommRows] = await Promise.all([
     db
       .from("contact_channels")
       .select("contact_id, channel, value, is_primary, consent")
       .eq("business_id", business.id)
+      .in("contact_id", pageIds)
       .is("archived_at", null),
     db
       .from("contact_relationships")
       .select("from_contact_id, to_contact_id, relationship")
       .eq("business_id", business.id)
+      .or(`from_contact_id.in.(${idList}),to_contact_id.in.(${idList})`)
       .is("archived_at", null),
     db
       .from("engagement_participants")
@@ -2358,26 +2710,56 @@ export async function getContacts(): Promise<ContactListRow[]> {
         "contact_id, engagements(id, archived_at, outcome, title, stage_entered_at, attributes, stage_definitions(key, label, is_terminal, terminal_outcome))"
       )
       .eq("business_id", business.id)
+      .in("contact_id", pageIds)
       .is("archived_at", null),
-    db
-      .from("communications")
-      .select("contact_id, occurred_at")
-      .eq("business_id", business.id)
-      .is("archived_at", null)
-      .not("contact_id", "is", null)
-      .order("occurred_at", { ascending: false }),
+    // Last activity per PAGE contact: one single-row read each — exact and
+    // bounded, never the whole communications table.
+    Promise.all(
+      pageIds.map((id) =>
+        db
+          .from("communications")
+          .select("contact_id, occurred_at")
+          .eq("business_id", business.id)
+          .eq("contact_id", id)
+          .is("archived_at", null)
+          .order("occurred_at", { ascending: false })
+          .limit(1)
+      )
+    ),
   ]);
   for (const [label, result] of [
-    ["contacts", contacts],
     ["contact_channels", channels],
     ["contact_relationships", relationships],
     ["engagement_participants", participants],
-    ["communications", lastComms],
   ] as const) {
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
+  const lastComms = {
+    data: lastCommRows.flatMap((r) => {
+      if (r.error) throw new Error(`last activity query failed: ${r.error.message}`);
+      return r.data ?? [];
+    }),
+  };
 
+  // Names for relationship rendering: the page's own names plus any related
+  // contacts that sit off-page — one bounded lookup.
   const nameById = new Map((contacts.data ?? []).map((c) => [c.id, c.display_name as string]));
+  const offPageIds = [
+    ...new Set(
+      (relationships.data ?? [])
+        .flatMap((r) => [r.from_contact_id, r.to_contact_id])
+        .filter((id) => !nameById.has(id))
+    ),
+  ];
+  if (offPageIds.length > 0) {
+    const { data: extraNames, error: extraError } = await db
+      .from("contacts")
+      .select("id, display_name")
+      .eq("business_id", business.id)
+      .in("id", offPageIds);
+    if (extraError) throw new Error(`related contact names query failed: ${extraError.message}`);
+    for (const c of extraNames ?? []) nameById.set(c.id, c.display_name as string);
+  }
 
   const channelsByContact = new Map<string, ChannelConsent[]>();
   for (const c of channels.data ?? []) {
@@ -2426,7 +2808,7 @@ export async function getContacts(): Promise<ContactListRow[]> {
     }
   }
 
-  return (contacts.data ?? []).map((c) => {
+  const rows = (contacts.data ?? []).map((c) => {
     const firstTouch = (c.first_touch ?? {}) as Record<string, unknown>;
     const myChannels = channelsByContact.get(c.id) ?? [];
     const primary = (kind: string) =>
@@ -2448,6 +2830,7 @@ export async function getContacts(): Promise<ContactListRow[]> {
       lastActivityAt: lastByContact.get(c.id) ?? null,
     };
   });
+  return { rows, total, page: clampPage(page), pageCount };
 }
 
 export interface ContactEnquiry {
@@ -2896,6 +3279,44 @@ export async function getMailPipeState(): Promise<MailPipeState> {
       carrierConfigured: readGmailEnv() !== null,
       mailbox: typeof gmailSettings.mailbox === "string" ? gmailSettings.mailbox : null,
     },
+  };
+}
+
+export interface ConversionsRowState {
+  isOwner: boolean;
+  enabled: boolean;
+  datasetId: string | null;
+  testEventCode: string | null;
+  /** Env presence as a boolean, never a value (the s20 wiring-state law). */
+  tokenPresent: boolean;
+  /** Is the Lead Ads page binding in place (settings.meta.page_id)? */
+  pageBound: boolean;
+}
+
+/**
+ * Session 22 (WS1, ruling 1d) — the Conversions row's state, honestly read:
+ * the toggle, the dataset id and test event code as stored, token presence
+ * as a boolean, and whether the Session 10 page binding exists. Nothing here
+ * invents a connection.
+ */
+export async function getConversionsState(): Promise<ConversionsRowState> {
+  const { db, business, membershipRole } = await getAppContext();
+  const { data: bizRow, error } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (error) throw new Error(`conversions settings query failed: ${error.message}`);
+  const settings = (bizRow?.settings ?? {}) as Record<string, unknown>;
+  const config = resolveConversionsConfig(settings);
+  const meta = (settings.meta ?? {}) as Record<string, unknown>;
+  return {
+    isOwner: membershipRole === "owner",
+    enabled: config.enabled,
+    datasetId: config.dataset_id,
+    testEventCode: config.test_event_code,
+    tokenPresent: !!process.env.META_ACCESS_TOKEN,
+    pageBound: typeof meta.page_id === "string" && meta.page_id !== "",
   };
 }
 

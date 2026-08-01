@@ -203,6 +203,76 @@ export async function setMailProviderAction(
   return { error: null, saved: true };
 }
 
+export interface ConversionsActionState {
+  error: string | null;
+  saved?: boolean;
+}
+
+/**
+ * Session 22 (WS1, ruling 1d) — the Conversions row's ONE door: toggle
+ * (default OFF until the founder flips it), dataset id (JUDGMENT: the CAPI
+ * destination — the pre-ruled surface named toggle + test code only; the
+ * destination id is the minimal additive fill on the same row) and Meta's
+ * test_event_code passthrough. Owner-gated server-side; one settings merge;
+ * everything evented (settings.updated with the keys and stored values —
+ * none of these three is a credential).
+ */
+export async function setConversionsAction(
+  _prev: ConversionsActionState,
+  formData: FormData
+): Promise<ConversionsActionState> {
+  const enabled = formData.get("conversions_enabled") === "on";
+  const datasetId = String(formData.get("dataset_id") ?? "").trim();
+  const testEventCode = String(formData.get("test_event_code") ?? "").trim();
+  if (datasetId !== "" && !/^\d{5,20}$/.test(datasetId)) {
+    return { error: "The dataset id is the numeric id from Events Manager (digits only)." };
+  }
+
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "The Conversions switch is the owner's pen — ask the owner to change it." };
+  }
+
+  const { data: bizRow, error: readError } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (readError || !bizRow) return { error: `Settings read failed: ${readError?.message ?? "no row"}` };
+
+  const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
+  const meta = { ...((settings.meta as Record<string, unknown>) ?? {}) };
+  meta.conversions = {
+    ...(enabled ? { enabled: true } : {}),
+    ...(datasetId !== "" ? { dataset_id: datasetId } : {}),
+    ...(testEventCode !== "" ? { test_event_code: testEventCode } : {}),
+  };
+  settings.meta = meta;
+
+  const { error: writeError } = await db
+    .from("businesses")
+    .update({ settings })
+    .eq("id", business.id);
+  if (writeError) return { error: `Save failed: ${writeError.message}` };
+
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: FIRST_LIGHT_EVENT_KINDS.settingsUpdated,
+    entity_type: "business",
+    entity_id: business.id,
+    payload: {
+      keys: ["meta.conversions"],
+      conversions_enabled: enabled,
+      dataset_id: datasetId || null,
+      test_event_code: testEventCode || null,
+    },
+  });
+
+  revalidatePath("/settings");
+  return { error: null, saved: true };
+}
+
 /**
  * PR-i (Session 19): store a route guide's document — bytes to the private
  * Supabase Storage bucket (service client; files.storage_key has always

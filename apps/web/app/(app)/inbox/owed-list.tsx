@@ -27,10 +27,19 @@ const initialState: BulkRejectState = { error: null };
  * bulk act that exists — Reject. Approve has no bulk path here or anywhere:
  * selection never attaches to the stamp, only to the refusal.
  */
-export function OwedList({ cards }: { cards: InboxCardProps[] }) {
+export function OwedList({
+  cards,
+  pendingCommunications,
+}: {
+  cards: InboxCardProps[];
+  /** WS5a: the FULL filtered set's size (a server count aggregate) — the
+   * all-pending refusal's honest denominator, page-independent. */
+  pendingCommunications: number;
+}) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkScope, setBulkScope] = useState<"selected" | "all_pending">("selected");
   const [reason, setReason] = useState("");
   const [notice, setNotice] = useState<BulkRejectState | null>(null);
   const [state, submit, submitting] = useActionState(bulkRejectAction, initialState);
@@ -129,17 +138,35 @@ export function OwedList({ cards }: { cards: InboxCardProps[] }) {
             <span className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
               {selected.size} selected
             </span>
-            <span className="ml-auto font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+            <span className="ml-auto font-mono text-[10px] tracking-wide text-ink-faint uppercase max-[720px]:hidden">
               rejection only — approval is never bulk; every stamp is individual
             </span>
             <Button
               variant="approve"
               size="sm"
               disabled={selected.size === 0 || submitting}
-              onClick={() => setBulkOpen(true)}
+              onClick={() => {
+                setBulkScope("selected");
+                setBulkOpen(true);
+              }}
             >
               Reject selected…
             </Button>
+            {/* WS5a: the full-set refusal — server-side over EVERY pending
+                draft, not this page's cards. Still rejection-only. */}
+            {pendingCommunications > selectableIds.length ? (
+              <Button
+                variant="approve"
+                size="sm"
+                disabled={submitting}
+                onClick={() => {
+                  setBulkScope("all_pending");
+                  setBulkOpen(true);
+                }}
+              >
+                Reject all {pendingCommunications}…
+              </Button>
+            ) : null}
             <Button variant="ghost" size="sm" onClick={exitSelection}>
               Cancel
             </Button>
@@ -172,13 +199,17 @@ export function OwedList({ cards }: { cards: InboxCardProps[] }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Reject {selected.size} draft{selected.size === 1 ? "" : "s"}
+              {bulkScope === "all_pending"
+                ? `Reject all ${pendingCommunications} pending drafts`
+                : `Reject ${selected.size} draft${selected.size === 1 ? "" : "s"}`}
             </DialogTitle>
             <DialogDescription>
-              One shared reason, applied to every selected draft — but each
-              rejection lands as its own refusal on its row and The Record,
-              exactly as if rejected alone, and returns that draft to
-              Light&rsquo;s queue.
+              {bulkScope === "all_pending"
+                ? "The full pending set is read server-side at the moment of refusal — every page, not only the drafts shown here. "
+                : "One shared reason, applied to every selected draft — but each "}
+              {bulkScope === "all_pending"
+                ? "Each rejection still lands as its own refusal on its row and The Record, and returns that draft to Light's queue."
+                : "rejection lands as its own refusal on its row and The Record, exactly as if rejected alone, and returns that draft to Light's queue."}
             </DialogDescription>
           </DialogHeader>
           <form
@@ -188,10 +219,11 @@ export function OwedList({ cards }: { cards: InboxCardProps[] }) {
               if (!reason.trim()) e.preventDefault();
             }}
           >
+            <input type="hidden" name="scope" value={bulkScope} />
             <input
               type="hidden"
               name="communicationIds"
-              value={JSON.stringify([...selected])}
+              value={JSON.stringify(bulkScope === "all_pending" ? [] : [...selected])}
             />
             <button
               type="button"
@@ -225,11 +257,17 @@ export function OwedList({ cards }: { cards: InboxCardProps[] }) {
                 variant="approve"
                 size="sm"
                 type="submit"
-                disabled={!reason.trim() || submitting || selected.size === 0}
+                disabled={
+                  !reason.trim() ||
+                  submitting ||
+                  (bulkScope === "selected" && selected.size === 0)
+                }
               >
                 {submitting
                   ? "Recording…"
-                  : `Reject ${selected.size} with reason`}
+                  : bulkScope === "all_pending"
+                    ? `Reject all ${pendingCommunications} with reason`
+                    : `Reject ${selected.size} with reason`}
               </Button>
             </DialogFooter>
           </form>

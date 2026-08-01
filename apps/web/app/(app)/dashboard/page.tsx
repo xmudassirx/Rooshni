@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BudgetBanner } from "@/components/shell/budget-banner";
 import { EmptyState } from "@/components/shell/empty-state";
 import { OpenFirstLightButton } from "@/components/shell/open-first-light";
 import { PageHead } from "@/components/shell/page-head";
@@ -7,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { durationSince, formatTime } from "@/lib/format";
 import {
   getDashboard,
-  getInbox,
+  getInboxSummary,
+  getLightPerformance,
   getPipeline,
   type StuckEnquiry,
 } from "@/lib/server/queries";
@@ -24,9 +26,9 @@ const ITEM_TYPE_LABELS: Record<string, [string, string]> = {
   stage_move: ["stage move", "stage moves"],
 };
 
-function typeBreakdown(byType: Map<string, number>): string {
-  return [...byType.entries()]
-    .map(([type, count]) => {
+function typeBreakdown(byType: { type: string; count: number }[]): string {
+  return byType
+    .map(({ type, count }) => {
       const [one, many] = ITEM_TYPE_LABELS[type] ?? [type, `${type}s`];
       return `${count} ${count === 1 ? one : many}`;
     })
@@ -109,32 +111,33 @@ function StuckItems({ stuck }: { stuck: StuckEnquiry[] }) {
 }
 
 export default async function DashboardPage() {
-  const [dash, inbox, pipeline] = await Promise.all([
+  // WS5e (Session 22): the stamps-owed numbers are COUNT aggregates + one
+  // oldest row — never a full inbox fetch to count it.
+  const [dash, inbox, pipeline, perf] = await Promise.all([
     getDashboard(),
-    getInbox(),
+    getInboxSummary(),
     getPipeline(),
+    getLightPerformance(),
   ]);
 
-  const byType = new Map<string, number>();
-  for (const row of inbox) {
-    byType.set(row.item_type, (byType.get(row.item_type) ?? 0) + 1);
-  }
-  const oldest = inbox[0]?.awaiting_since ?? null;
+  const oldest = inbox.oldestAwaitingSince;
 
+  // WS5e: stage sizes are the COUNT aggregates the query carries — the cards
+  // themselves are a window and never the census.
   const stageCounts = pipeline.map((s) => ({
     label: s.label,
-    count: s.cards.length,
+    count: s.total,
     hot: s.cards.some((c) => c.pendingApprovals > 0),
   }));
   const maxCount = Math.max(1, ...stageCounts.map((s) => s.count));
   const pipelineTotal = stageCounts.reduce((sum, s) => sum + s.count, 0);
 
-  const monitorsClear = inbox.length === 0 && (dash.stuck?.length ?? 0) === 0;
+  const monitorsClear = inbox.total === 0 && (dash.stuck?.length ?? 0) === 0;
 
   // Day one, before the first enquiry or stamp: the true empty state
   // (Session 11 mockup). It never shows an invented number — and it points
   // honestly at First Light instead of claiming a crawl that hasn't run.
-  if (pipelineTotal === 0 && inbox.length === 0) {
+  if (pipelineTotal === 0 && inbox.total === 0) {
     return (
       <>
         <PageHead title="Dashboard" sub="Your day, once there is one" />
@@ -165,6 +168,17 @@ export default async function DashboardPage() {
         sub="Vigilance and tiles over live rows — attention curation arrives with the monitors session"
       />
 
+      {/* WS2 (Session 22): the cap banner renders from live truth — soft
+          warns, hard says generation is refusing; the ledger holds the
+          crossing event once per month. */}
+      <BudgetBanner
+        softCapGbp={dash.budget.softCapGbp}
+        hardCapGbp={dash.budget.hardCapGbp}
+        softCrossed={dash.budget.softCrossed}
+        hardCrossed={dash.budget.hardCrossed}
+        spendGbp={dash.meteredCostGbpThisMonth}
+      />
+
       {/* Morning digest — Light's slot. Light has not written one yet, and an
           unwritten digest never pretends otherwise (decision 19 caveat). */}
       <div className="light-panel mb-4 rounded-xl p-4">
@@ -180,7 +194,7 @@ export default async function DashboardPage() {
           </b>
           {" · "}
           <b>
-            {inbox.length} stamp{inbox.length === 1 ? "" : "s"} owed
+            {inbox.total} stamp{inbox.total === 1 ? "" : "s"} owed
           </b>
           {" · "}
           <b>
@@ -192,7 +206,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* Vigilance — deterministic monitors only; nothing invented. */}
-      {inbox.length > 0 ? (
+      {inbox.total > 0 ? (
         <VigilanceItem
           tone="red"
           monitor="Monitor: inbox age · advise-only — Light never acts past a gate"
@@ -203,7 +217,7 @@ export default async function DashboardPage() {
           }
         >
           <b>
-            {inbox.length} approval{inbox.length === 1 ? "" : "s"} waiting:
+            {inbox.total} approval{inbox.total === 1 ? "" : "s"} waiting:
           </b>{" "}
           the oldest has waited {oldest ? durationSince(oldest) : "—"} for your
           stamp.
@@ -227,11 +241,11 @@ export default async function DashboardPage() {
       <div className="mt-4 grid grid-cols-1 gap-3 min-[680px]:grid-cols-2 min-[1600px]:grid-cols-4">
         <Tile href="/inbox" head="Stamps owed">
           <div className="font-display text-3xl leading-none font-black">
-            {inbox.length}
+            {inbox.total}
           </div>
           <div className="mt-1.5 text-xs text-ink-soft">
-            {inbox.length
-              ? `${typeBreakdown(byType)} — oldest ${oldest ? durationSince(oldest) : "—"}`
+            {inbox.total
+              ? `${typeBreakdown(inbox.byType)} — oldest ${oldest ? durationSince(oldest) : "—"}`
               : "Nothing waits for your stamp."}
           </div>
         </Tile>
@@ -280,15 +294,49 @@ export default async function DashboardPage() {
           )}
         </Tile>
 
-        <Tile href="/record" head="AI credits · this month">
+        {/* WS3 (Session 22): the shadow-exit calibration instrument — existing
+            truth only (events + draft_feedback + communication statuses),
+            honest empty states, no model calls. */}
+        <Tile href="/record" head="✦ Light performance · this week">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <div>
+              <span className="font-display text-[22px] leading-none font-black">
+                {perf.approval_rate_pct !== null ? `${perf.approval_rate_pct}%` : "—"}
+              </span>{" "}
+              <span className="text-[10.5px] text-ink-faint">approval</span>
+            </div>
+            <div>
+              <span className="font-display text-[22px] leading-none font-black">
+                {perf.edit_rate_pct !== null ? `${perf.edit_rate_pct}%` : "—"}
+              </span>{" "}
+              <span className="text-[10.5px] text-ink-faint">edit-before-stamp</span>
+            </div>
+          </div>
+          <div className="mt-1.5 text-xs leading-relaxed text-ink-soft">
+            {perf.drafts_generated
+              ? `${perf.drafts_generated} draft${perf.drafts_generated === 1 ? "" : "s"} generated · ${perf.stamped} stamped · ${perf.rejected} rejected · ${perf.compliance_refusals} compliance refusal${perf.compliance_refusals === 1 ? "" : "s"} · ${perf.mean_tokens !== null ? `${perf.mean_tokens.toLocaleString("en-GB")} mean tokens` : "no token data"} · £${perf.spend_gbp.toFixed(2)} spend`
+              : "No drafts generated this week — the tile fills itself from The Record, never invention."}
+            {perf.approval_rate_pct === null && perf.drafts_generated > 0
+              ? " No stamps or rejections yet this week, so no rate is claimed."
+              : ""}
+          </div>
+        </Tile>
+
+        <Tile href="/billing" head="Metered cost · this month">
           <div className="font-display text-[22px] leading-none font-black">
-            {dash.creditsThisMonth} credit{dash.creditsThisMonth === 1 ? "" : "s"}
+            £{dash.meteredCostGbpThisMonth.toFixed(2)}
           </div>
           <div className="mt-1.5 text-xs text-ink-soft">
             {dash.meteredEventsThisMonth
-              ? `${dash.meteredEventsThisMonth} metered action${dash.meteredEventsThisMonth === 1 ? "" : "s"} on The Record this month.`
+              ? `${dash.meteredEventsThisMonth} metered action${dash.meteredEventsThisMonth === 1 ? "" : "s"} on The Record this month${
+                  dash.unpricedEventsThisMonth
+                    ? ` (${dash.unpricedEventsThisMonth} pre-meter, unpriced)`
+                    : ""
+                }.`
               : "No metered actions on The Record this month."}{" "}
-            Caps and the meter arrive with Billing &amp; usage.
+            {dash.budget.hardCapGbp !== null || dash.budget.softCapGbp !== null
+              ? "Caps set in Billing & usage."
+              : "No caps set — Billing & usage is the door."}
           </div>
         </Tile>
       </div>

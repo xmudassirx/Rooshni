@@ -61,18 +61,31 @@ export function DecisionControls({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
+      {/* WS4 (Session 22): one-handed on a phone — the stamp spans the full
+          width thumb-first, Edit and Reject share the row beneath; desktop
+          keeps the inline row. Same controls, responsive placement only. */}
+      <div className="flex flex-wrap items-center gap-2 max-[560px]:grid max-[560px]:grid-cols-2">
         {preflightPass ? (
-          <form action={approve}>
+          <form action={approve} className="max-[560px]:col-span-2">
             <input type="hidden" name="communicationId" value={communicationId} />
-            <Button variant="approve" size="sm" disabled={approving || rejecting}>
+            <Button
+              variant="approve"
+              size="sm"
+              disabled={approving || rejecting}
+              className="max-[560px]:w-full"
+            >
               <Stamp /> {approving ? "Stamping…" : "Approve"}
             </Button>
           </form>
         ) : (
           // The Approve control must be earned: pre-flight withholds the
           // stamp, so the button is not offered — not merely discouraged.
-          <Button variant="default" size="sm" disabled className="border-stamp text-stamp">
+          <Button
+            variant="default"
+            size="sm"
+            disabled
+            className="border-stamp text-stamp max-[560px]:col-span-2 max-[560px]:w-full"
+          >
             <Ban /> Blocked by pre-flight
           </Button>
         )}

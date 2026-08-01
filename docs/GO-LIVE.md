@@ -354,3 +354,35 @@ Add to this list during build; check items off only at go-live.
       Inbox, find the meta_lead_to_consultation v2 definition card, withdraw
       it with reason "superseded by v3", see it land in History and on The
       Record, and see the inbox count drop by one.
+- [ ] **Flip the Conversions toggle + supply the dataset id + set a test
+      event code** (introduced Session 22, WS1): the Meta Conversions loop is
+      built and OFF by default — nothing fires until the owner flips it.
+      Steps: Settings → Integrations → Meta Conversions row → enter the
+      DATASET ID (Events Manager → Data sources → your dataset — the numeric
+      id), set a TEST EVENT CODE first (Events Manager → Test events tab
+      shows it) so events land in the test stream and pollute nothing, tick
+      "Send outcome events to Meta", Save. Verify with
+      `npm run circuit:conversion --workspace=@rooshni/db -- --engagement <test enquiry id>`
+      (the DoD witnessing step), then CLEAR the test event code the day real
+      reporting should begin — with the code set, events never enter real
+      attribution. Uses the existing META_ACCESS_TOKEN; no new secret.
+- [ ] **Grant ads_read to the Meta system-user token IF the daily spend pull
+      reports a scope skip** (introduced Session 22, WS1c): the pull rides
+      the Conversions toggle and fails closed with a visible
+      `meta.spend_pull_skipped` event naming the missing scope when the
+      token cannot read insights. Console step: Meta Business Settings →
+      Users → System users → the token's system user → Add assets / Generate
+      new token → include **ads_read** for the ad account running the lead
+      campaigns → replace `META_ACCESS_TOKEN` in .env.local + Vercel (same
+      variable, wider scope — note the new mint date). If the existing token
+      already carries ads_read, the pull simply works and this line ticks
+      itself at the first `meta.spend_pulled` event.
+- [ ] **Re-cut the provisional pricing constants before the first real
+      pilot bill conversation** (introduced Session 22, WS2): per-model list
+      rates and the USD→GBP rate live in
+      `packages/db/src/model-router.ts` (MODEL_PRICING_USD_PER_MTOK,
+      USD_TO_GBP_RATE — the AUTO_CLOSE_POLICY provisional-constants
+      precedent, every priced line records the fx it used). Verify both
+      against the provider's current pricing page and the day's rate; the
+      figures shown are METERED COST, no margin — pilot pricing is a
+      separate founder decision.

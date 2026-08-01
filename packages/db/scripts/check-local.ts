@@ -46,6 +46,31 @@ import { whatsAppInboundConsent } from "../src/inbound";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
 import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
 import { rankGuideCandidates, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
+import {
+  buildConversionPayload,
+  buildConversionUserData,
+  classifyMetaSpendError,
+  MAX_CONVERSION_ATTEMPTS,
+  resolveConversionsConfig,
+  selectConversionCandidates,
+  sha256Hex,
+} from "../src/conversions";
+import {
+  evaluateAiBudget,
+  guardGenerationBudget,
+  pricedAmountGbp,
+  resolveAiBudget,
+  softCapJustCrossed,
+} from "../src/ai-budget";
+import { priceGeneration, USD_TO_GBP_RATE } from "../src/model-router";
+import { computeLightPerformance, weekWindowUtc } from "../src/light-performance";
+import {
+  clampPage,
+  clampPageSize,
+  DEFAULT_PAGE_SIZE,
+  MAX_LIST_WINDOW,
+  pageRange,
+} from "../src/read-policy";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -3766,6 +3791,366 @@ async function main() {
     for (const status of ["draft", "active", "paused", "withdrawn"]) {
       if (canWithdrawWorkflowDefinition({ status, isOwner: true })) {
         throw new Error(`a ${status} definition must never offer Withdraw`);
+      }
+    }
+  });
+
+  // Session 22 (WS1) — the Meta Conversions loop: the founder-ruled mapping,
+  // hashing law and isolation proven at the pure seams the sweep runs on.
+  console.log("\nSession 22 — the Meta Conversions loop (WS1):");
+
+  const s22Config = { enabled: true, dataset_id: "1234567890", test_event_code: "TEST99" };
+  const s22Facts = new Map([
+    [
+      "eng-meta",
+      {
+        engagement_id: "eng-meta",
+        source: "meta",
+        leadgen_id: "444455556666777",
+        email: " Ayesha.Khan@Example.COM ",
+        phone: "+44 7700 900123",
+        invoice: null,
+      },
+    ],
+    [
+      "eng-meta-fee",
+      {
+        engagement_id: "eng-meta-fee",
+        source: "meta",
+        leadgen_id: "444455556666778",
+        email: "lead2@example.com",
+        phone: "+447700900124",
+        invoice: { total: 1500, currency: "GBP" },
+      },
+    ],
+    [
+      "eng-organic",
+      {
+        engagement_id: "eng-organic",
+        source: "website",
+        leadgen_id: null,
+        email: "organic@example.com",
+        phone: null,
+        invoice: null,
+      },
+    ],
+  ]);
+  const s22Now = new Date("2026-08-01T12:00:00Z");
+  const s22Moves = [
+    { stage_history_id: "sh-1", engagement_id: "eng-meta", to_stage_key: "consultation_booked", moved_at: "2026-08-01T11:00:00Z" },
+    { stage_history_id: "sh-2", engagement_id: "eng-meta-fee", to_stage_key: "instructed", moved_at: "2026-08-01T11:30:00Z" },
+    { stage_history_id: "sh-3", engagement_id: "eng-meta", to_stage_key: "disqualified", moved_at: "2026-08-01T11:40:00Z" },
+    { stage_history_id: "sh-4", engagement_id: "eng-meta", to_stage_key: "unresponsive", moved_at: "2026-08-01T11:41:00Z" },
+    { stage_history_id: "sh-5", engagement_id: "eng-organic", to_stage_key: "consultation_booked", moved_at: "2026-08-01T11:42:00Z" },
+  ];
+
+  await expectOk("conversions fire on the ruled transitions ONLY — junk and every other stage teach Meta nothing", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    const names = candidates.map((c) => `${c.stage_history_id}:${c.event_name}`).sort();
+    if (names.join(",") !== "sh-1:Schedule,sh-2:Purchase") {
+      throw new Error(`ruled mapping broken — got ${names.join(",")}`);
+    }
+  });
+
+  await expectOk("a non-Meta engagement never converts (isolation, ruling 1e)", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[4]!],
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    if (candidates.length !== 0) throw new Error("an organic-source engagement produced a conversion");
+  });
+
+  await expectOk("toggle OFF fires nothing — the default until the founder flips it", async () => {
+    const candidates = selectConversionCandidates({
+      config: { enabled: false, dataset_id: "1234567890", test_event_code: null },
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    if (candidates.length !== 0) throw new Error("a disabled business produced conversions");
+    const resolved = resolveConversionsConfig({ meta: {} });
+    if (resolved.enabled) throw new Error("an absent conversions block must resolve to OFF");
+  });
+
+  await expectOk("hashed fields only — raw email and phone never appear in the payload as sent", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[0]!],
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    const payload = buildConversionPayload(candidates[0]!, s22Config.test_event_code);
+    const json = JSON.stringify(payload);
+    if (/ayesha|khan|example\.com|7700|900123/i.test(json)) {
+      throw new Error("raw PII leaked into the CAPI payload");
+    }
+    const userData = payload.data[0]!.user_data;
+    if (userData.em?.[0] !== sha256Hex("ayesha.khan@example.com")) {
+      throw new Error("email hash is not the SHA-256 of the normalised (trimmed, lowercased) address");
+    }
+    if (userData.ph?.[0] !== sha256Hex("447700900123")) {
+      throw new Error("phone hash is not the SHA-256 of the digits-only E.164 form");
+    }
+    if (userData.lead_id !== 444455556666777) throw new Error("the leadgen id must ride user_data.lead_id");
+    if (payload.test_event_code !== "TEST99") throw new Error("test_event_code must pass through when set");
+    if (payload.data[0]!.event_id !== "sh-1") throw new Error("the stage_history id must be the CAPI event_id");
+  });
+
+  await expectOk("Purchase carries value ONLY when a money row exists — an amount is never invented", async () => {
+    const candidates = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[1]!],
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    const withFee = candidates[0]!;
+    if (withFee.custom_data.value !== 1500 || withFee.custom_data.currency !== "GBP") {
+      throw new Error("the recorded fee (invoice total + currency) must ride custom_data");
+    }
+    const noFeeFacts = new Map(s22Facts);
+    noFeeFacts.set("eng-meta-fee", { ...s22Facts.get("eng-meta-fee")!, invoice: null });
+    const bare = selectConversionCandidates({
+      config: s22Config,
+      moves: [s22Moves[1]!],
+      facts: noFeeFacts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map(),
+      now: s22Now,
+    })[0]!;
+    if ("value" in bare.custom_data || "currency" in bare.custom_data) {
+      throw new Error("a Purchase with no money row must carry NO value field");
+    }
+  });
+
+  await expectOk("an already-sent stage move never fires twice, and the attempt ceiling retires a failing one", async () => {
+    const sent = selectConversionCandidates({
+      config: s22Config,
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(["sh-1"]),
+      failedAttempts: new Map(),
+      now: s22Now,
+    });
+    if (sent.some((c) => c.stage_history_id === "sh-1")) throw new Error("a sent conversion re-fired");
+    const retired = selectConversionCandidates({
+      config: s22Config,
+      moves: s22Moves,
+      facts: s22Facts,
+      sentStageHistoryIds: new Set(),
+      failedAttempts: new Map([["sh-2", MAX_CONVERSION_ATTEMPTS]]),
+      now: s22Now,
+    });
+    if (retired.some((c) => c.stage_history_id === "sh-2")) {
+      throw new Error("a candidate past the attempt ceiling must be retired (its trail is on The Record)");
+    }
+  });
+
+  await expectOk("a leadgen id that cannot round-trip as a JSON number is omitted, never mangled", async () => {
+    const exact = buildConversionUserData({ leadgen_id: "444455556666777", email: null, phone: null });
+    if (exact.lead_id !== 444455556666777) throw new Error("a safe leadgen id must be carried");
+    const unsafe = buildConversionUserData({ leadgen_id: "99999999999999999999", email: "a@b.com", phone: null });
+    if (unsafe.lead_id !== undefined) throw new Error("a precision-unsafe leadgen id must be omitted");
+    if (!unsafe.em) throw new Error("matching must still ride the hashed fields");
+  });
+
+  await expectOk("the spend pull fails closed naming the missing ads_read scope", async () => {
+    const classified = classifyMetaSpendError({
+      message: "(#200) Ad account access requires ads_read or ads_management permission",
+      type: "OAuthException",
+      code: 200,
+    });
+    if (!classified.missing_scope) throw new Error("a permissions refusal must classify as a scope gap");
+    if (!/ads_read/.test(classified.reason)) throw new Error("the skip must NAME the missing scope");
+    const other = classifyMetaSpendError({ message: "Unsupported get request", type: "GraphMethodException", code: 100 });
+    if (other.missing_scope) throw new Error("an unrelated error must not masquerade as a scope gap");
+  });
+
+  // Session 22 (WS2) — billing caps and the priced meter: enforcement lives
+  // in the drafting path via these seams; the approval/send doors above run
+  // with no budget dependency at all (the structural proof that sends
+  // continue — nothing in the SQL pipeline reads a cap).
+  console.log("\nSession 22 — billing caps and the priced meter (WS2):");
+
+  await expectOk("the caps resolve from settings.ai_budget — absent, zero or junk means no cap", async () => {
+    const none = resolveAiBudget({});
+    if (none.soft_cap_gbp !== null || none.hard_cap_gbp !== null) throw new Error("absent caps must be null");
+    const junk = resolveAiBudget({ ai_budget: { soft_cap: -5, hard_cap: "ten" } });
+    if (junk.soft_cap_gbp !== null || junk.hard_cap_gbp !== null) throw new Error("junk caps must be null");
+    const set = resolveAiBudget({ ai_budget: { soft_cap: 5, hard_cap: 20 } });
+    if (set.soft_cap_gbp !== 5 || set.hard_cap_gbp !== 20) throw new Error("set caps must read back");
+  });
+
+  await expectError(
+    "the hard cap refuses generation VISIBLY, naming the cap — the s15 permanent-failure lane",
+    /hard cap.*£1\.00.*generation refuses/i,
+    async () => {
+      guardGenerationBudget(1.02, { soft_cap_gbp: null, hard_cap_gbp: 1 });
+    }
+  );
+
+  await expectOk("under the hard cap (or with only a soft cap) generation proceeds — soft NEVER throws", async () => {
+    guardGenerationBudget(0.99, { soft_cap_gbp: null, hard_cap_gbp: 1 });
+    guardGenerationBudget(999, { soft_cap_gbp: 5, hard_cap_gbp: null });
+    guardGenerationBudget(999, { soft_cap_gbp: null, hard_cap_gbp: null });
+  });
+
+  await expectOk("the hard-cap refusal is the s15 lane's PermanentGenerationError (never a silent stub)", async () => {
+    try {
+      guardGenerationBudget(2, { soft_cap_gbp: null, hard_cap_gbp: 1 });
+      throw new Error("no refusal was raised");
+    } catch (err) {
+      if (!(err instanceof PermanentGenerationError)) {
+        throw new Error("the refusal must ride the permanent-failure lane so the step fails visibly");
+      }
+      if (!/template-path drafts continue|sends.*continue/i.test((err as Error).message)) {
+        throw new Error("the refusal must state that non-generative work continues");
+      }
+    }
+  });
+
+  await expectOk("the soft cap banners without blocking — crossing detected exactly once", async () => {
+    const budget = { soft_cap_gbp: 5, hard_cap_gbp: null };
+    if (!softCapJustCrossed(4.9, 5.1, budget)) throw new Error("the crossing must be detected");
+    if (softCapJustCrossed(3, 4, budget)) throw new Error("no crossing below the cap");
+    if (softCapJustCrossed(5.2, 6, budget)) throw new Error("an already-crossed month must not re-fire");
+    if (softCapJustCrossed(1, 9, { soft_cap_gbp: null, hard_cap_gbp: null })) {
+      throw new Error("no soft cap means no crossing");
+    }
+    const assessed = evaluateAiBudget(5.1, budget);
+    if (!assessed.soft_crossed || assessed.hard_crossed) {
+      throw new Error("a soft crossing must never read as a hard stop");
+    }
+  });
+
+  await expectOk("the meter prices at list rates with the recorded fx — an unknown model stays unpriced", async () => {
+    const floor = priceGeneration({ model: LIGHT_MODEL_FLOOR.model, input_tokens: 1_000_000, output_tokens: 0 });
+    if (!floor || floor.amount_usd !== 1 || floor.amount_gbp !== Math.round(1 * USD_TO_GBP_RATE * 1e6) / 1e6) {
+      throw new Error("floor input pricing must be the list rate times the recorded fx");
+    }
+    const cached = priceGeneration({
+      model: LIGHT_MODEL_FLOOR.model,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 1_000_000,
+    });
+    if (!cached || cached.amount_usd !== 0.1) throw new Error("cache reads price at the cache-read rate");
+    if (priceGeneration({ model: "some-future-model", input_tokens: 1000, output_tokens: 10 }) !== null) {
+      throw new Error("an unknown model must stay unpriced, never guessed");
+    }
+    if (pricedAmountGbp({ provider: "anthropic", model: LIGHT_MODEL_FLOOR.model, tokens: 1200 }) !== null) {
+      throw new Error("a pre-meter cost block must read as unpriced, never retro-priced");
+    }
+    if (pricedAmountGbp({ amount_gbp: 0.02 }) !== 0.02) throw new Error("a priced line must read back");
+  });
+
+  // Session 22 (WS3) — the Light performance tile: the numbers agree with a
+  // constructed fixture's known truth (the ordered smoke), and empty weeks
+  // claim nothing.
+  console.log("\nSession 22 — the Light performance tile (WS3):");
+
+  await expectOk("the tile's numbers agree with a constructed fixture's known truth", async () => {
+    const perf = computeLightPerformance({
+      drafts_generated: 10,
+      stamped: 8,
+      rejected: 2,
+      edit_signals: 2,
+      compliance_refusals: 1,
+      cost_blocks: [
+        { tokens: 1000, amount_gbp: 0.01 },
+        { tokens: 2000, amount_gbp: 0.02 },
+        { tokens: 3000 }, // a pre-meter line: tokens counted, spend unpriced
+      ],
+    });
+    if (perf.approval_rate_pct !== 80) throw new Error(`approval rate: expected 80, got ${perf.approval_rate_pct}`);
+    if (perf.edit_rate_pct !== 25) throw new Error(`edit rate: expected 25, got ${perf.edit_rate_pct}`);
+    if (perf.mean_tokens !== 2000) throw new Error(`mean tokens: expected 2000, got ${perf.mean_tokens}`);
+    if (perf.spend_gbp !== 0.03) throw new Error(`spend: expected 0.03, got ${perf.spend_gbp}`);
+    if (perf.unpriced_lines !== 1) throw new Error("the pre-meter line must be counted, never priced");
+    if (perf.compliance_refusals !== 1 || perf.drafts_generated !== 10) throw new Error("counts must pass through");
+  });
+
+  await expectOk("an empty week claims no rate — honest empty states, never an invented number", async () => {
+    const perf = computeLightPerformance({
+      drafts_generated: 0,
+      stamped: 0,
+      rejected: 0,
+      edit_signals: 0,
+      compliance_refusals: 0,
+      cost_blocks: [],
+    });
+    if (perf.approval_rate_pct !== null || perf.edit_rate_pct !== null || perf.mean_tokens !== null) {
+      throw new Error("an empty week must render dashes, not rates");
+    }
+    if (perf.spend_gbp !== 0) throw new Error("an empty week's spend is zero");
+  });
+
+  await expectOk("the week window is Monday-started UTC and seven days wide", async () => {
+    const midWeek = weekWindowUtc(new Date("2026-08-01T12:00:00Z")); // a Saturday
+    if (midWeek.start !== "2026-07-27T00:00:00.000Z") throw new Error(`start: ${midWeek.start}`);
+    if (midWeek.end !== "2026-08-03T00:00:00.000Z") throw new Error(`end: ${midWeek.end}`);
+    const onMonday = weekWindowUtc(new Date("2026-07-27T00:30:00Z"));
+    if (onMonday.start !== "2026-07-27T00:00:00.000Z") throw new Error("a Monday belongs to its own week");
+  });
+
+  // Session 22 (WS5) — the read-layer diet: the window policy and the
+  // founder-ruled counts law (5e), with the inbox query's bound PINNED by a
+  // file tripwire (the s20 bodySizeLimit precedent).
+  console.log("\nSession 22 — the read-layer diet (WS5):");
+
+  await expectOk("the page-size policy clamps every request into the ruled selector (10/20/50, default 20)", async () => {
+    if (clampPageSize(undefined) !== DEFAULT_PAGE_SIZE) throw new Error("no size means the default");
+    if (clampPageSize(50) !== 50 || clampPageSize(10) !== 10) throw new Error("selector sizes must pass");
+    if (clampPageSize(5000) !== DEFAULT_PAGE_SIZE) throw new Error("an off-selector size must clamp to the default");
+    if (clampPage(-3) !== 1 || clampPage(undefined) !== 1) throw new Error("page floors at 1");
+    const range = pageRange(3, 20);
+    if (range.from !== 40 || range.to !== 59) throw new Error(`page 3 of 20 must be rows 40..59, got ${range.from}..${range.to}`);
+    const capped = pageRange(1, 9999);
+    if (capped.to - capped.from + 1 > MAX_LIST_WINDOW) {
+      throw new Error("no window may ever exceed MAX_LIST_WINDOW, whatever the caller asks");
+    }
+  });
+
+  await expectOk("the inbox query's bound is pinned — the paginated read calls .range() and the unbounded read is gone", async () => {
+    // cwd is packages/db (the workspace script), matching the migrations read.
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    const inboxPage = queriesSource.slice(queriesSource.indexOf("export async function getInboxPage"));
+    const inboxPageBody = inboxPage.slice(0, inboxPage.indexOf("\n}\n"));
+    if (!inboxPageBody.includes(".range(range.from, range.to)")) {
+      throw new Error("getInboxPage no longer windows its approval_inbox read — the 5a bound is broken");
+    }
+    if (!/clampPageSize|pageRange/.test(inboxPageBody)) {
+      throw new Error("getInboxPage no longer clamps through the read policy");
+    }
+    if (/export async function getInbox\(\)/.test(queriesSource)) {
+      throw new Error("the unbounded getInbox() read has returned — the diet forbids it");
+    }
+  });
+
+  await expectOk("the counts law (5e): sidebar and dashboard counts come from COUNT aggregates, never fetched rows", async () => {
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    for (const fn of ["getInboxCount", "getOpenTaskCount", "getInboxSummary"]) {
+      const start = queriesSource.indexOf(`export async function ${fn}`);
+      if (start < 0) throw new Error(`${fn} is missing`);
+      const body = queriesSource.slice(start, start + 2200);
+      if (!body.includes(`count: "exact", head: true`)) {
+        throw new Error(`${fn} must count with a head COUNT aggregate`);
       }
     }
   });

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { canWithdrawWorkflowDefinition, type ApprovalInboxRow } from "@rooshni/db";
 
+import { INBOX_PAGE_SIZES } from "@rooshni/db";
 import { PageHead } from "@/components/shell/page-head";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -8,8 +9,8 @@ import { durationSince, formatWhen } from "@/lib/format";
 import { getAppContext } from "@/lib/server/context";
 import {
   getCommunicationDetail,
-  getInbox,
   getInboxHistory,
+  getInboxPage,
   type InboxHistoryRow,
 } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
@@ -165,21 +166,86 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
   );
 }
 
+/** WS5a: the pager — server-rendered links, params preserved; the counts it
+ * shows come from the page's COUNT aggregates (5e). */
+function Pager({
+  page,
+  pageCount,
+  pageSize,
+  total,
+  makeHref,
+  sizes,
+}: {
+  page: number;
+  pageCount: number;
+  pageSize?: number;
+  total: number;
+  makeHref: (page: number, size?: number) => string;
+  sizes?: readonly number[];
+}) {
+  if (total === 0) return null;
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[10.5px] tracking-wide text-ink-faint uppercase">
+      <span>
+        page {page} of {pageCount} · {total} item{total === 1 ? "" : "s"}
+      </span>
+      {page > 1 ? (
+        <Link href={makeHref(page - 1)} className="min-h-9 content-center text-accent hover:underline">
+          ← newer waits
+        </Link>
+      ) : null}
+      {page < pageCount ? (
+        <Link href={makeHref(page + 1)} className="min-h-9 content-center text-accent hover:underline">
+          older waits →
+        </Link>
+      ) : null}
+      {sizes && pageSize ? (
+        <span className="ml-auto flex items-center gap-2">
+          per page
+          {sizes.map((s) => (
+            <Link
+              key={s}
+              href={makeHref(1, s)}
+              className={cn(
+                "min-h-9 content-center hover:underline",
+                s === pageSize ? "font-bold text-accent" : "text-ink-faint"
+              )}
+            >
+              {s}
+            </Link>
+          ))}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; days?: string }>;
+  searchParams: Promise<{ tab?: string; days?: string; page?: string; size?: string; hpage?: string }>;
 }) {
   const params = await searchParams;
   const days: 7 | 30 = params.days === "30" ? 30 : 7;
   const activeTab = params.tab === "history" ? "history" : "owed";
+  const requestedPage = Number(params.page ?? "1");
+  const requestedSize = Number(params.size ?? "");
+  const historyPage = Number(params.hpage ?? "1");
 
-  const [{ membershipRole }, rows, history] = await Promise.all([
+  // WS5a: the owed list reads a WINDOW — oldest wait first (submitted_at per
+  // D134), default 20; card detail is fetched for the page only.
+  const [{ membershipRole }, inboxPage, history] = await Promise.all([
     getAppContext(),
-    getInbox(),
-    getInboxHistory(days),
+    getInboxPage({ page: requestedPage, pageSize: requestedSize }),
+    getInboxHistory(days, Number.isFinite(historyPage) ? historyPage : 1),
   ]);
-  const cards = await Promise.all(rows.map((row) => toCardProps(row, membershipRole === "owner")));
+  const cards = await Promise.all(
+    inboxPage.rows.map((row) => toCardProps(row, membershipRole === "owner"))
+  );
+
+  const owedHref = (page: number, size?: number) =>
+    `/inbox?page=${page}&size=${size ?? inboxPage.pageSize}`;
+  const historyHref = (page: number) => `/inbox?tab=history&days=${days}&hpage=${page}`;
 
   return (
     <>
@@ -190,13 +256,13 @@ export default async function InboxPage({
       <Tabs defaultValue={activeTab}>
         <TabsList>
           <TabsTrigger value="owed">
-            Stamps owed{cards.length ? ` · ${cards.length}` : ""}
+            Stamps owed{inboxPage.total ? ` · ${inboxPage.total}` : ""}
           </TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
 
         <TabsContent value="owed">
-          {cards.length === 0 ? (
+          {inboxPage.total === 0 ? (
             <div className="glass mx-auto mt-6 max-w-[560px] rounded-2xl border-dashed p-9 text-center">
               <h2 className="mb-2 font-display text-xl font-extrabold">Nothing owed</h2>
               <p className="text-sm text-ink-soft">
@@ -205,9 +271,21 @@ export default async function InboxPage({
               </p>
             </div>
           ) : (
-            // Session 12: selection mode + bulk Reject live in the client
-            // list. Approve keeps no bulk path — see docs/DECISIONS.md.
-            <OwedList cards={cards} />
+            <>
+              {/* Session 12: selection mode + bulk Reject live in the client
+                  list. Approve keeps no bulk path — see docs/DECISIONS.md.
+                  WS5a: bulk rejection can cover the FULL filtered set
+                  server-side, not only this page. */}
+              <OwedList cards={cards} pendingCommunications={inboxPage.pendingCommunications} />
+              <Pager
+                page={inboxPage.page}
+                pageCount={inboxPage.pageCount}
+                pageSize={inboxPage.pageSize}
+                total={inboxPage.total}
+                makeHref={owedHref}
+                sizes={INBOX_PAGE_SIZES}
+              />
+            </>
           )}
         </TabsContent>
 
@@ -228,7 +306,7 @@ export default async function InboxPage({
               last 30 days
             </Link>
           </div>
-          {history.length === 0 ? (
+          {history.rows.length === 0 ? (
             <div className="glass mx-auto mt-6 max-w-[560px] rounded-2xl border-dashed p-9 text-center">
               <h2 className="mb-2 font-display text-xl font-extrabold">
                 No decisions in the last {days} days
@@ -240,9 +318,17 @@ export default async function InboxPage({
             </div>
           ) : (
             <div className="flex max-w-[860px] flex-col gap-2.5">
-              {history.map((row) => (
+              {history.rows.map((row) => (
                 <HistoryRow key={row.eventId} row={row} />
               ))}
+              {/* WS5d: History reads a window too — default 20, counted by
+                  aggregate. */}
+              <Pager
+                page={history.page}
+                pageCount={history.pageCount}
+                total={history.total}
+                makeHref={historyHref}
+              />
             </div>
           )}
         </TabsContent>
