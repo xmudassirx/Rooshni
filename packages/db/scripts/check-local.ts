@@ -13,6 +13,7 @@ import { resolveTemplateBody } from "../src/workflow";
 import { formAnswersFromFieldData } from "../src/meta";
 import {
   composeDraft,
+  findRegisterBreach,
   leadTextFromAnswers,
   matchRoutes,
   selectKnowledgeEntries,
@@ -2930,7 +2931,8 @@ async function main() {
       sawBlocks = request.systemBlocks;
       return {
         subject: "Re: your enquiry",
-        body: "Hello Amina, fees depend on the published schedule — happy to confirm in a consultation.",
+        // Session 18 register rule: fixture bodies obey the law they prove.
+        body: "Hello Amina, fees depend on the published schedule, and I would be happy to confirm in a consultation.",
         attestation: { attested: true, statement: "Checked against every law." },
         usage: { input_tokens: 900, output_tokens: 80 },
         cache: { read_tokens: 700, written_tokens: 0 },
@@ -2979,6 +2981,83 @@ async function main() {
     ]);
     if (ids.length !== 3 || !ids.includes("<newest@client.example>")) {
       throw new Error(`parsed: ${JSON.stringify(ids)}`);
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 18 — the register rule (founder-ruled): no em or en dashes in
+  // generated client-facing bodies. The prompt instructs commas and full
+  // stops; the composition screen refuses a body that slips one anyway.
+  // Human-authored text is never screened.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 18 — the client-facing register rule:");
+
+  const s18Input = (task: "intro" | "nudge") => ({
+    business_name: "Test Firm", sign_off: "Test Firm", first_name: "Amina", full_name: "Amina Khan",
+    channel: "email", task, enquiry_title: "Amina Khan — enquiry", stage_label: "New", source: "meta",
+    form_answers: [{ name: "s", label: "Situation", value: "General question" }],
+    no_go_rules: [], retrieval: { entries: [], route_matches: [] },
+  });
+
+  await expectOk("both generation prompts instruct commas and full stops, never em or en dashes", async () => {
+    let sawSystem = "";
+    const fake: GenerateFn = async (request) => {
+      sawSystem = request.system;
+      return {
+        subject: null,
+        body: "Hello Amina, thank you for your message. We can help with that.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    await composeDraft(fake, s18Input("intro"));
+    if (!/Never use an em dash or an en dash/.test(sawSystem)) {
+      throw new Error("the intro/nudge prompt does not carry the register punctuation line");
+    }
+    const { systemBlocks } = assembleReplyPrompt(s16ReplyInput);
+    if (!/Never use an em dash or an en dash/.test(systemBlocks[0]!.text)) {
+      throw new Error("the reply prompt does not carry the register punctuation line");
+    }
+  });
+
+  await expectOk("a generated body containing an EM dash is refused at composition (email path)", async () => {
+    const fake: GenerateFn = async () => ({
+      subject: null,
+      body: "Hello Amina, we can help — book a consultation.",
+      attestation: { attested: true, statement: "x" },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    let threw = false;
+    try {
+      await composeDraft(fake, s18Input("intro"));
+    } catch (err) {
+      threw = err instanceof PermanentGenerationError && /em dash/.test((err as Error).message);
+    }
+    if (!threw) throw new Error("an em dash survived composition");
+  });
+
+  await expectOk("a reply draft containing an EN dash is refused the same way (the free-form path, any channel)", async () => {
+    const fake: GenerateFn = async () => ({
+      subject: null,
+      body: "Hello Amina, appointments run Monday–Friday.",
+      attestation: { attested: true, statement: "x" },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    let threw = false;
+    try {
+      await composeReplyDraft(fake, s16ReplyInput);
+    } catch (err) {
+      threw = err instanceof PermanentGenerationError && /en dash/.test((err as Error).message);
+    }
+    if (!threw) throw new Error("an en dash survived reply composition");
+  });
+
+  await expectOk("the register screen is machine-scoped: a clean body passes, and the checker itself reads dashes only", async () => {
+    if (findRegisterBreach("Commas, and full stops. Hyphenated-words are lawful.") !== null) {
+      throw new Error("a hyphen or plain punctuation was misread as a breach");
+    }
+    if (findRegisterBreach("a — b") !== "em dash" || findRegisterBreach("a – b") !== "en dash") {
+      throw new Error("the checker did not name the breach");
     }
   });
 
