@@ -89,6 +89,24 @@ export function resolveMailProvider(settings: Record<string, unknown> | null | u
   return settings?.mail_provider === "gmail" ? "gmail" : "graph";
 }
 
+/**
+ * The ONE place a business's email carrier is chosen (Session 20) — pure, so
+ * the harness proves the isolation law: selection is absolute, a business
+ * never falls back to the OTHER provider's carrier (the firm's mail leaves
+ * only as the firm configured it), and an unconfigured selected carrier
+ * returns null — the dispatcher's visible skip, never a silent reroute.
+ */
+export function selectEmailCarrier(
+  providers: OutboundProviders,
+  settings: Record<string, unknown> | null | undefined
+): { provider: TenantMailProvider; send: SendEmailFn | null } {
+  const provider = resolveMailProvider(settings);
+  return {
+    provider,
+    send: (provider === "gmail" ? providers.sendGmail : providers.sendEmail) ?? null,
+  };
+}
+
 export interface DispatchReport {
   dispatched: number;
   failed: number;
@@ -341,13 +359,12 @@ export async function dispatchApprovedCommunications(
       let sentEmailHtml: string | null = null;
       if (comm.channel === "email") {
         // Session 20: the business's selected mail pipe carries its email —
-        // graph unless settings.mail_provider says gmail. Selection is
-        // absolute: a business never falls back to the OTHER provider's
-        // carrier (the firm's mail leaves only as the firm configured it),
-        // and an unconfigured selected carrier is a visible skip.
-        const mailProvider = resolveMailProvider(facts.settings);
-        const sendViaProvider =
-          mailProvider === "gmail" ? options.providers.sendGmail : options.providers.sendEmail;
+        // the pure selectEmailCarrier decides (isolation proven in the
+        // harness), and an unconfigured selected carrier is a visible skip.
+        const { provider: mailProvider, send: sendViaProvider } = selectEmailCarrier(
+          options.providers,
+          facts.settings
+        );
         if (!sendViaProvider) {
           report.skipped += 1;
           report.errors.push(

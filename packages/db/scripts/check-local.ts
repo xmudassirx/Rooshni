@@ -43,6 +43,9 @@ import {
   resolveEmailIdentity,
 } from "../src/email-html";
 import { whatsAppInboundConsent } from "../src/inbound";
+import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
+import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
+import { rankGuideCandidates, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -3402,6 +3405,229 @@ async function main() {
       ]
     );
     await db.query(`select public.approve_communication($1, $2)`, [replyId, f.human_id]);
+  });
+
+  // ---------------------------------------------------------------------
+  console.log("\nHotfix (1 Aug 2026) — guide documents on any route entry + the upload transport:");
+
+  await expectOk("ANY published route-matched entry bearing a file qualifies — category no longer filters (founder ruling)", async () => {
+    const entries = [
+      {
+        id: "old-guide",
+        title: "Spouse guide (separate row)",
+        attributes: { knowledge_category: "route_guide", visa_route: "spouse_partner" },
+        created_at: "2026-07-01T00:00:00Z",
+      },
+      {
+        id: "spouse-entry",
+        title: "Spouse route (text AND document)",
+        attributes: { knowledge_category: "service_description", visa_route: "spouse_partner" },
+        created_at: "2026-08-01T00:00:00Z",
+      },
+      {
+        id: "fees",
+        title: "Published fees (no route)",
+        attributes: { knowledge_category: "fees" },
+        created_at: "2026-08-01T00:00:00Z",
+      },
+    ];
+    const ranked = rankGuideCandidates(entries, ["spouse_partner"]);
+    if (ranked.length !== 2) throw new Error(`expected 2 candidates, saw ${ranked.length}`);
+    if (ranked[0]!.id !== "spouse-entry") {
+      throw new Error("the founder's newest curation must be tried first (newest-first within a route)");
+    }
+    if (ranked[1]!.id !== "old-guide") throw new Error("the route_guide row must remain a valid candidate");
+    if (ranked.some((c) => c.id === "fees")) throw new Error("a route-less entry can never carry the intro's attachment");
+  });
+
+  await expectOk("route priority outranks recency — the enquiry's declared route is tried before lead-text matches", async () => {
+    const ranked = rankGuideCandidates(
+      [
+        { id: "sw-new", title: "SW", attributes: { visa_route: "skilled_worker" }, created_at: "2026-08-01T00:00:00Z" },
+        { id: "sp-old", title: "SP", attributes: { visa_route: "spouse_partner" }, created_at: "2026-07-01T00:00:00Z" },
+      ],
+      ["spouse_partner", "skilled_worker"]
+    );
+    if (ranked[0]!.id !== "sp-old") throw new Error("the declared route's guide must be tried first");
+  });
+
+  await expectOk("the server-action transport admits the 8MB attachment law — bodySizeLimit covers the ceiling (the 413 tripwire)", async () => {
+    // cwd is packages/db (the workspace script), matching the migrations read.
+    const config = readFileSync(resolve("../../apps/web/next.config.ts"), "utf8");
+    const match = config.match(/bodySizeLimit:\s*"(\d+)mb"/);
+    if (!match) throw new Error("next.config.ts declares no serverActions.bodySizeLimit — the 1MB default caps uploads below the enforced 8MB law (the 413 defect)");
+    const transportBytes = Number(match[1]) * 1024 * 1024;
+    if (transportBytes <= ATTACHMENT_MAX_BYTES) {
+      throw new Error(`transport limit ${match[1]}mb must exceed the 8MB app ceiling — the transport is not a gate`);
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  console.log("\nSession 20 — provider selection isolation (WS2):");
+
+  const fakeCarrier = (provider: string) => async (): Promise<SendResult> => ({
+    provider,
+    providerMessageId: `<fake@${provider}>`,
+  });
+
+  await expectOk("mail_provider resolves gmail ONLY on the literal — unknown values can never route mail to an unintended carrier", async () => {
+    if (resolveMailProvider(undefined) !== "graph") throw new Error("absent settings must default to graph");
+    if (resolveMailProvider({}) !== "graph") throw new Error("empty settings must default to graph");
+    if (resolveMailProvider({ mail_provider: "gmail" }) !== "gmail") throw new Error("gmail selection was not honoured");
+    if (resolveMailProvider({ mail_provider: "outlook" }) !== "graph") throw new Error("an unknown value must read as the graph default");
+  });
+
+  await expectOk("a Graph business never touches Gmail paths and vice versa — selection is absolute, no cross-provider fallback", async () => {
+    const graphSend = fakeCarrier("graph");
+    const gmailSend = fakeCarrier("gmail");
+    const both: OutboundProviders = { sendEmail: graphSend, sendGmail: gmailSend };
+    if (selectEmailCarrier(both, {}).send !== graphSend) throw new Error("a graph business must get the graph carrier");
+    if (selectEmailCarrier(both, { mail_provider: "gmail" }).send !== gmailSend) {
+      throw new Error("a gmail business must get the gmail carrier");
+    }
+    // The isolation refusals: the OTHER provider's carrier is never a fallback.
+    const graphOnly: OutboundProviders = { sendEmail: graphSend };
+    const gmailChoice = selectEmailCarrier(graphOnly, { mail_provider: "gmail" });
+    if (gmailChoice.send !== null) throw new Error("a gmail business must NEVER fall back to the graph carrier");
+    if (gmailChoice.provider !== "gmail") throw new Error("the visible skip must name the selected provider");
+    const gmailOnly: OutboundProviders = { sendGmail: gmailSend };
+    if (selectEmailCarrier(gmailOnly, {}).send !== null) {
+      throw new Error("a graph business must NEVER fall back to the gmail carrier");
+    }
+  });
+
+  console.log("\nSession 20 — the Gmail inbound claims (0033):");
+
+  await expectOk("gmail claims: idempotent on the RFC message id; invisible and closed to signed-in sessions", async () => {
+    await db.query(
+      `insert into public.gmail_mail_events (internet_message_id, gmail_message_id, mailbox)
+       values ('<s20@example.test>', 'gm-1', 'firm@workspace.test')`
+    );
+    let threw = false;
+    try {
+      await db.query(`insert into public.gmail_mail_events (internet_message_id) values ('<s20@example.test>')`);
+    } catch (err) {
+      threw = /duplicate key/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!threw) throw new Error("a replayed RFC id claimed twice — the poll would double-ingest");
+    const n = await db.query<{ n: number }>(`select count(*)::int as n from public.gmail_mail_events`);
+    if (n.rows[0]!.n !== 1) throw new Error("the duplicate changed the claim table");
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    try {
+      const visible = await db.query<{ n: number }>(`select count(*)::int as n from public.gmail_mail_events`);
+      if (visible.rows[0]!.n !== 0) throw new Error("a signed-in session can read raw provider claims");
+      let insertRefused = false;
+      try {
+        await db.query(`insert into public.gmail_mail_events (internet_message_id) values ('<forged@example.test>')`);
+      } catch (err) {
+        insertRefused = /row-level security|permission denied/.test(err instanceof Error ? err.message : String(err));
+      }
+      if (!insertRefused) throw new Error("a signed-in session wrote a claim row");
+    } finally {
+      await db.exec(`reset role`);
+      await db.exec(`set request.jwt.claim.sub = ''`);
+    }
+  });
+
+  console.log("\nSession 20 — allowlist parity across providers (WS1):");
+
+  await expectOk("the door reads the EMAIL, never the provider — the same allowed address opens under google and azure alike", async () => {
+    await db.query(`insert into public.allowed_emails (email, note) values ('parity@example.test', 's20 parity smoke')`);
+    const claimsFor = (provider: string) =>
+      JSON.stringify({
+        sub: ids.user,
+        email: "parity@example.test",
+        app_metadata: { provider, providers: [provider] },
+      });
+    await db.exec(`set role authenticated`);
+    try {
+      for (const provider of ["google", "azure"]) {
+        await db.exec(`set request.jwt.claims = '${claimsFor(provider)}'`);
+        const r = await db.query<{ n: number }>(`select count(*)::int as n from public.allowed_emails`);
+        if (r.rows[0]!.n !== 1) throw new Error(`the ${provider} door saw ${r.rows[0]!.n} rows — parity broken`);
+      }
+      // The refusal, same parity: an unallowed email is refused through
+      // EITHER door — the provider buys nothing.
+      for (const provider of ["google", "azure"]) {
+        await db.exec(
+          `set request.jwt.claims = '${JSON.stringify({ sub: ids.member, email: "stranger-s20@example.test", app_metadata: { provider } })}'`
+        );
+        const r = await db.query<{ n: number }>(`select count(*)::int as n from public.allowed_emails`);
+        if (r.rows[0]!.n !== 0) throw new Error(`an unallowed ${provider} account saw an allowlist row`);
+      }
+    } finally {
+      await db.exec(`reset role`);
+    }
+  });
+
+  console.log("\nSession 20 — the Gmail carriage document (pure MIME):");
+
+  await expectOk("buildGmailMime carries the self-minted Message-ID, the addressed headers, and a body that decodes back verbatim", async () => {
+    const mime = buildGmailMime({
+      from: "firm@workspace.test",
+      to: "client@example.test",
+      subject: "Your enquiry with X Law",
+      body: "Hello Sana,\n\nThank you for your enquiry.",
+      bodyFormat: "plain",
+      messageId: "<mint-1@workspace.test>",
+    });
+    if (!mime.includes("Message-ID: <mint-1@workspace.test>")) throw new Error("the self-minted Message-ID is missing — replies could never thread");
+    if (!mime.includes("To: client@example.test") || !mime.includes("From: firm@workspace.test")) {
+      throw new Error("addressing headers missing");
+    }
+    if (!mime.includes("Content-Type: text/plain")) throw new Error("a plain body must ride text/plain");
+    const b64 = mime.split("\r\n\r\n")[1]!.replace(/\r\n/g, "");
+    if (Buffer.from(b64, "base64").toString("utf8") !== "Hello Sana,\n\nThank you for your enquiry.") {
+      throw new Error("the body did not decode back verbatim — WYSIWYS broken at the carriage layer");
+    }
+    const html = buildGmailMime({
+      from: "firm@workspace.test",
+      to: "client@example.test",
+      subject: "Your enquiry",
+      body: "<p>Hello</p>",
+      bodyFormat: "html",
+      messageId: "<mint-2@workspace.test>",
+    });
+    if (!html.includes("Content-Type: text/html")) throw new Error("an html body must ride text/html");
+  });
+
+  await expectOk("attachments ride as named multipart parts and non-ASCII subjects are RFC 2047 encoded", async () => {
+    const pdfBytes = Buffer.from("%PDF-1.4 fake guide").toString("base64");
+    const mime = buildGmailMime({
+      from: "firm@workspace.test",
+      to: "client@example.test",
+      subject: "Guide — attachéd",
+      body: "The guide is attached.",
+      bodyFormat: "plain",
+      messageId: "<mint-3@workspace.test>",
+      attachments: [{ filename: "spouse-guide.pdf", mimeType: "application/pdf", contentBase64: pdfBytes }],
+    });
+    if (!mime.includes("multipart/mixed")) throw new Error("an attachment demands multipart/mixed");
+    if (!mime.includes('filename="spouse-guide.pdf"')) throw new Error("the attachment part is unnamed");
+    if (!mime.includes(pdfBytes.slice(0, 40))) throw new Error("the attachment bytes are not in the document");
+    if (!/Subject: =\?UTF-8\?B\?/.test(mime)) throw new Error("a non-ASCII subject must be RFC 2047 encoded");
+  });
+
+  await expectOk("extractGmailBodyText prefers the nested text/plain part and honestly strips html-only mail to its words", async () => {
+    const plain = extractGmailBodyText({
+      mimeType: "multipart/alternative",
+      parts: [
+        { mimeType: "text/html", body: { data: Buffer.from("<b>Hi</b>").toString("base64url") } },
+        {
+          mimeType: "multipart/related",
+          parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Hi there").toString("base64url") } }],
+        },
+      ],
+    });
+    if (plain !== "Hi there") throw new Error(`expected the nested plain part, saw "${plain}"`);
+    const stripped = extractGmailBodyText({
+      mimeType: "text/html",
+      body: { data: Buffer.from("<p>Salaam,</p><p>Can you &amp; the team help?</p>").toString("base64url") },
+    });
+    if (!stripped.includes("Salaam,") || !stripped.includes("Can you & the team help?") || /<p>/.test(stripped)) {
+      throw new Error(`html-only mail must yield the words, never markup: "${stripped}"`);
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
