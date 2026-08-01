@@ -1,10 +1,11 @@
 import Link from "next/link";
-import type { ApprovalInboxRow } from "@rooshni/db";
+import { canWithdrawWorkflowDefinition, type ApprovalInboxRow } from "@rooshni/db";
 
 import { PageHead } from "@/components/shell/page-head";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { durationSince, formatWhen } from "@/lib/format";
+import { getAppContext } from "@/lib/server/context";
 import {
   getCommunicationDetail,
   getInbox,
@@ -24,7 +25,7 @@ function channelLabel(channel: string | null): string {
   return channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-async function toCardProps(row: ApprovalInboxRow): Promise<InboxCardProps> {
+async function toCardProps(row: ApprovalInboxRow, isOwner: boolean): Promise<InboxCardProps> {
   const isComm = row.item_type === "communication";
   const detail = isComm ? await getCommunicationDetail(row.item_id) : null;
   const scheduledNote = `Waiting since ${formatWhen(row.awaiting_since)}${
@@ -36,7 +37,13 @@ async function toCardProps(row: ApprovalInboxRow): Promise<InboxCardProps> {
   return {
     itemType: row.item_type,
     itemId: row.item_id,
-    channelLabel: channelLabel(row.channel),
+    // Session 21: the single truth for the Withdraw control's rendering —
+    // only a pending definition (this view holds nothing else), only to the
+    // owner. The 0034 pipeline refuses everyone else regardless.
+    withdrawable:
+      row.item_type === "workflow_definition" &&
+      canWithdrawWorkflowDefinition({ status: "pending_approval", isOwner }),
+    channelLabel: row.item_type === "workflow_definition" ? "Workflow" : channelLabel(row.channel),
     draftedBy: row.drafted_by,
     draftedByAgent: row.drafted_by_type === "agent",
     recipient: detail?.contactName ?? null,
@@ -86,9 +93,13 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
           "mt-0.5 rounded-md border px-2 py-0.5 font-mono text-[9.5px] font-semibold tracking-wide uppercase",
           row.action === "approved"
             ? "border-ledger/40 bg-ledger/10 text-ledger"
-            : row.action === "superseded"
+            : row.action === "superseded" || row.action === "withdrawn"
               ? // Session 16: superseded is a FACT in neutral chrome — not a
                 // stamp act (red), not done (green), not Light's channel.
+                // JUDGMENT (Session 21): withdrawn wears the same neutral
+                // chrome — retiring one's own proposal exercises no stamp
+                // authority (approve/reject remain the stamps), so red would
+                // overclaim; awaiting sign-off at close.
                 "border-rule bg-paper-deep text-ink-soft"
               : "border-stamp/40 bg-stamp/10 text-stamp"
         )}
@@ -97,11 +108,15 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
           ? "✓ Approved"
           : row.action === "superseded"
             ? "⇢ Superseded"
-            : "✗ Rejected"}
+            : row.action === "withdrawn"
+              ? "⤺ Withdrawn"
+              : "✗ Rejected"}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
-          <Badge variant="source">{channelLabel(row.channel)}</Badge>
+          <Badge variant="source">
+            {row.action === "withdrawn" ? "Workflow" : channelLabel(row.channel)}
+          </Badge>
           {row.contactName ? <span className="font-semibold">→ {row.contactName}</span> : null}
           <span className="ml-auto font-mono text-[10px] text-ink-faint">
             {formatWhen(row.occurredAt)}
@@ -120,6 +135,10 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
                   ? "a new client message arrived — regenerated against the full thread"
                   : row.reason}
             </p>
+          ) : row.action === "withdrawn" ? (
+            // Session 21: the owner's stated reason — a fact in neutral
+            // chrome, not a stamp refusal.
+            <p className="mt-1 text-[12px] text-ink-soft">&ldquo;{row.reason}&rdquo;</p>
           ) : (
             <p className="mt-1 text-[12px] text-stamp">&ldquo;{row.reason}&rdquo;</p>
           )
@@ -155,8 +174,12 @@ export default async function InboxPage({
   const days: 7 | 30 = params.days === "30" ? 30 : 7;
   const activeTab = params.tab === "history" ? "history" : "owed";
 
-  const [rows, history] = await Promise.all([getInbox(), getInboxHistory(days)]);
-  const cards = await Promise.all(rows.map(toCardProps));
+  const [{ membershipRole }, rows, history] = await Promise.all([
+    getAppContext(),
+    getInbox(),
+    getInboxHistory(days),
+  ]);
+  const cards = await Promise.all(rows.map((row) => toCardProps(row, membershipRole === "owner")));
 
   return (
     <>

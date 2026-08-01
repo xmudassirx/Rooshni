@@ -5,9 +5,11 @@ import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   approveCommunication,
+  canWithdrawWorkflowDefinition,
   createServiceClient,
   emitEvent,
   rejectCommunication,
+  withdrawWorkflowDefinition,
   DRAFTING_EVENT_KINDS,
 } from "@rooshni/db";
 
@@ -254,6 +256,67 @@ export async function bulkRejectAction(
     };
   }
   return { error: null, rejected, failed: 0 };
+}
+
+export interface WithdrawDefinitionState {
+  error: string | null;
+  /** The withdrawal landed — the card shows its transient
+   * "Withdrawn — on The Record" state before leaving the view. */
+  withdrawn?: boolean;
+}
+
+/**
+ * Session 21 (founder-ruled) — the stuck-definition escape hatch. An OWNER
+ * withdraws a pending_approval workflow definition with a required reason:
+ * terminal, frozen, evented, visible in History. The 0034 pipeline function
+ * is the real gate (owner + pending + reason, enforced in the database);
+ * this action is the face, and the wrapper puts the act on The Record.
+ * Approve stays absent — the definition-approval pipeline is its own later
+ * session (decision 116: no control that cannot act).
+ */
+export async function withdrawDefinitionAction(
+  _prev: WithdrawDefinitionState,
+  formData: FormData
+): Promise<WithdrawDefinitionState> {
+  const definitionId = String(formData.get("definitionId") ?? "");
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!isUuid(definitionId)) return { error: "No definition was selected." };
+  if (!reason) {
+    return { error: "A reason is required. It is recorded on the row and the ledger." };
+  }
+
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "Withdrawing a pending definition is the owner's act." };
+  }
+
+  const { data: def, error: lookupError } = await db
+    .from("workflow_definitions")
+    .select("id, key, version, status")
+    .eq("id", definitionId)
+    .eq("business_id", business.id)
+    .maybeSingle();
+  if (lookupError) return { error: `Definition lookup failed: ${lookupError.message}` };
+  if (!def) return { error: "That definition no longer exists." };
+  if (!canWithdrawWorkflowDefinition({ status: def.status, isOwner: true })) {
+    return { error: `Only a stamp-awaiting definition can be withdrawn. This one is "${def.status}".` };
+  }
+
+  try {
+    await withdrawWorkflowDefinition(db, {
+      business_id: business.id,
+      definition_id: definitionId,
+      actor_id: actor.id,
+      reason,
+      definition_key: def.key,
+      definition_version: def.version,
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Withdrawal failed." };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null, withdrawn: true };
 }
 
 export interface EditDraftState {

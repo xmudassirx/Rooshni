@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { DecisionControls } from "./decision-controls";
+import { WithdrawControl } from "./withdraw-control";
 import { editDraftAction, type EditDraftState } from "./actions";
 
 export interface CardCheck {
@@ -45,8 +46,13 @@ export interface CardContext {
 }
 
 export interface InboxCardProps {
-  itemType: "communication" | "content" | "task";
+  itemType: "communication" | "content" | "task" | "workflow_definition";
   itemId: string;
+  /** Session 21 — a pending workflow definition offers exactly one control,
+   * Withdraw, and only to the owner (canWithdrawWorkflowDefinition is the
+   * single truth; the database refuses everyone else regardless). Approve
+   * stays absent until the definition-approval pipeline's own session. */
+  withdrawable: boolean;
   channelLabel: string;
   draftedBy: string | null;
   draftedByAgent: boolean;
@@ -417,6 +423,15 @@ export function InboxCard(props: InboxCardProps) {
           blockedDetails={failures.map((f) => f.detail as string)}
           onEdit={editing ? undefined : () => setEditing(true)}
         />
+      ) : props.itemType === "workflow_definition" ? (
+        <div className="flex flex-col gap-1.5">
+          {props.withdrawable ? <WithdrawControl definitionId={props.itemId} /> : null}
+          <p className="text-[12.5px] text-ink-soft">
+            {props.withdrawable
+              ? "Approve arrives with the definition-approval pipeline in a later session — withdrawing is the only act this card offers."
+              : "The approve/reject pipeline for workflow definitions arrives in a later session — only the owner may withdraw this proposal."}
+          </p>
+        </div>
       ) : (
         <p className="text-[12.5px] text-ink-soft">
           The approve/reject pipeline for {props.itemType} items arrives in a
