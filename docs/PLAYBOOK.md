@@ -227,6 +227,15 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   WhatsApp webhook fails closed without `META_APP_SECRET` (signature before
   parse) and may create Level 2 rows but can never approve, publish or send.
 
+- The **declared-attachments pre-flight** (Session 19, 0032, decision
+  candidate 145): a communication declaring attachments
+  (attributes.attachments) cannot reach `approved`/`sent` unless every
+  declared file EXISTS (live files row), is LINKED to that communication
+  (file_links, role attachment), and sits within the 8MB ceiling — the
+  decision-19 machinery extended, fail closed with the reason named. The
+  body-mentions-attachment check is retained beneath it. The 8MB refusal is
+  enforced at the upload door, at the stamp, and at dispatch alike.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail

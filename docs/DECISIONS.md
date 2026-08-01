@@ -1334,3 +1334,91 @@ sign-off in the close report and are NOT recorded here.
      the only gap; nothing else was loosened. Standing rule, recorded in the
      middleware comment: a session that ships a cookie-less external route
      adds its exclusion in the same session.
+
+## Session 19 (1 August 2026) — multi-touch workflow + HTML email, pre-rulings recorded on in-prompt authority
+
+Entries 145–148 are the founder pre-rulings PR-i..iv, "approved here; record
+as DECISIONS candidates quoting this prompt" (Session 19 prompt, 1 August
+2026 — the §8 quoted-approval pattern). Entry 149 quotes the founder's
+mid-session ruling of the same day (the consent fold-in). The session's Lane
+B calls await sign-off in the close report and are NOT recorded here.
+
+145. **Attachments on workflow drafts (PR-i).** Quoted from the prompt:
+     "Workflow draft steps gain config for attachments: template-declared
+     per-route documents (e.g. a Spouse Visa guide PDF) stored as files rows
+     linked via file_links to a content_items row of a template-declared
+     kind (route_guide), uploaded/managed in Settings → Knowledge alongside
+     pack entries (one door: knowledge is knowledge, documents are entries
+     with a file). The drafting engine attaches the route-matched guide to
+     the intro email when one is PUBLISHED; the ATTACHMENTS pre-flight check
+     verifies the file exists and is linked before the stamp. No guide
+     published = no attachment, never a placeholder. Graph send carries the
+     attachment (size-sane: refuse >8MB with a visible config error)."
+     Landed as 0032 (route_guide joins the declared knowledge_category
+     vocabulary; comm_preflight v4 verifies declared attachments —
+     existence, linkage, 8MB ceiling), the Settings → Knowledge upload door
+     (PDF ≤8MB, bytes in the private Supabase Storage `files` bucket under
+     files.storage_key), the drafter's route-matched attach + file_links
+     row, and Graph carriage (≤3MB inline under Mail.Send; 3–8MB via the
+     upload-session flow behind the Mail.ReadWrite GO-LIVE consent).
+
+146. **Multi-touch intro (PR-ii).** Quoted from the prompt: "The
+     meta_lead_to_consultation workflow's intro step becomes config-driven
+     multi-channel: email intro (with guide when published) AND, where a
+     WhatsApp consent + template mapping exists, the approved enquiry_intro
+     template send — two drafts, two individual stamps (113: bulk approve
+     never), each WYSIWYS per its channel (118/119). Nudges unchanged. If
+     the business has no WhatsApp configured, email-only, silently
+     correct." Landed as step-config `companion_channels` (the executor
+     drafts the WhatsApp companion from the approved template text verbatim
+     where whatsapp-channel consent + the wa_template mapping exist; the
+     run still blocks on the EMAIL stamp alone — decisions 48/51 hold), the
+     0029 guard permitting exactly one pending per channel, and the
+     `chore:install-multitouch-intro` re-issue (a NEW definition version
+     through the pipeline — decision 40, never editing the active one).
+
+147. **HTML email dress (PR-iii).** Quoted from the prompt: "Outbound
+     emails gain a minimal, honest HTML wrapper: firm display name,
+     regulated-status footer line rendered from Settings (v3 template), the
+     body as clean typographic HTML generated from the plain-text body
+     (paragraphs, links, nothing else: no marketing chrome, no images, no
+     tracking pixels ever). WYSIWYS holds: the stamp view shows the
+     rendered HTML the client will receive (or a faithful preview of it)
+     and the plain-text alternative is generated from the same body.
+     body_format moves to html for these sends; The Record stores what was
+     sent. Template-rendered, never hardcoded per vertical." Landed as one
+     deterministic renderer (email-html.ts) shared by the stamp preview,
+     the dispatcher and the parity smoke; after a successful send the row
+     records the exact dispatched document (body = the sent HTML,
+     body_format = html, attributes.plain_body preserving the approved
+     plain source; the compliance-check row already pins it); reading
+     surfaces show the words, with an "as sent (HTML)" sandboxed view.
+
+148. **Booking link config (PR-iv).** Quoted from the prompt:
+     "businesses.settings gains booking_url. When set, [link] substitution
+     in client-facing messages resolves to it (X Law will point it at its
+     existing booking page); when unset, current signup-resume behaviour
+     stands (the s10 JUDGMENT honoured). One door: Settings → General. The
+     nurture [link] (platform-side) is NOT this and stays as-is." Landed as
+     booking-link.ts (substitution at composition, so the STORED body
+     carries the real URL — WYSIWYS), the generation prompts inviting the
+     token only when configured, a fail-fast refusal wherever [link]
+     survives with no URL configured (a client never receives a literal
+     token), and the owner-gated Settings → General field. The platform
+     nurture [link] is untouched.
+
+149. **An inbound message on a channel is transactional consent to be
+     answered on that channel (founder-ruled fold-in).** Quoted from the
+     founder's mid-session ruling (1 August 2026): "inbound WhatsApp ingest
+     creates-or-refreshes a TRANSACTIONAL consent row on the whatsapp
+     channel for that contact (source: inbound_message) — transactional
+     only, marketing consent untouched. Backfill the same for any existing
+     inbound-bearing contacts … 'an inbound message on a channel is
+     transactional consent to be answered on that channel.'" Context: found
+     live — a lead-form contact's inbound WhatsApp passed the WA WINDOW
+     check while the CONSENT check refused the reply draft's stamp; two
+     checks disagreeing about the same fact. Landed as the pure
+     whatsAppInboundConsent() merge (transactional only, prior marketing
+     values pass through untouched) applied by ingest scoped to the matched
+     contact, the evented `backfill:wa-consent` chore for existing
+     inbound-bearing contacts, and the defect-then-law smoke.
