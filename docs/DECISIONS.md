@@ -1174,3 +1174,104 @@ recorded here.
      companion click-review fix needs no ruling: an edited pending body
      wears an "edited by <name> · <time>" chip read from draft_feedback —
      a fact in neutral chrome, never gold, red or green.
+
+## Session 16 (1 August 2026) — inbound supersede engine + live inbox, pre-rulings recorded on in-prompt authority
+
+Entries 135–141 are the founder pre-rulings PR-A..PR-G, "approved in this
+prompt; record as DECISIONS candidates quoting it; do not re-ask" (Session 16
+prompt, 1 August 2026 — the §8 quoted-approval pattern; each elaborates a limb
+of decision 133). The session's Lane B calls await sign-off in the close
+report and are NOT recorded here.
+
+135. **Inbound capture is the prerequisite and is in scope (PR-A).** Quoted
+     from the prompt: "(i) WhatsApp inbound via the existing Cloud API
+     webhook → communications rows (direction inbound, thread-matched by
+     phone/wa id, consent refreshed per Meta's 24h service window rules —
+     record the window state on the thread); (ii) email inbound via
+     Microsoft Graph for the connected tenant mailbox — poll on the existing
+     5-min cron this session (subscription webhooks are a future tightening,
+     note on GO-LIVE), matched to threads by references/in-reply-to headers
+     and sender address, unmatched inbound creating a new thread on the
+     contact. Every inbound is evented. If Graph polling needs a new scope
+     or admin consent, STOP and hand me the exact console steps (Lane C
+     credentials-at-need)." Landed as 0028 + inbound.ts +
+     /api/whatsapp/webhook + the Graph poll on the tick; the Mail.Read
+     console steps are on GO-LIVE (the anticipated Lane C).
+
+136. **Supersede mechanics (PR-B; decision 133a/c made structural).** Quoted
+     from the prompt: "At most ONE pending outbound draft per engagement per
+     channel — enforce in the database (partial unique index on pending
+     status), not app behaviour … the old draft transitions to status
+     `superseded` (enum extension — migration; superseded is terminal,
+     evented, visible in Approval Inbox History, never deletable); the new
+     draft carries fresh pre-flight, fresh compliance check, fresh credit
+     line, and its card reads 'supersedes an earlier draft · N new messages
+     since'. A HUMAN outbound sent on the thread while a draft pends
+     auto-supersedes the pending draft immediately (no settle wait), evented
+     with reason human_replied. The client clock (D134): a superseding draft
+     INHERITS the original submitted_at." Landed as 0029/0030: the guard
+     indexes, the terminal/frozen/never-deleted trigger, the service-only
+     supersede_communication pipeline (atomic retire → submit through the
+     0017 door → clock inheritance via a transaction-local value only the
+     pipeline sets), and the same-transaction auto-supersede trigger on any
+     outbound reaching approved/sent.
+
+137. **The settle window (PR-C; decision 133b).** Quoted from the prompt:
+     "Business-level setting in Settings (instant / 1 min / 3 min / 5 min,
+     DEFAULT 3) with per-conversation override; the window restarts on each
+     new inbound in the burst; timer state lives on the workflow/thread row
+     server-side (durable, cron-evaluated — same pattern as nudge timers),
+     never client-side. Copy states the trade honestly ('faster drafts may
+     answer an unfinished thought')." Landed as comm_threads settle columns
+     (0030), the timeScale-scaled arming on every inbound, the cron sweep
+     with optimistic claims, and the Settings → General + per-conversation
+     controls.
+
+138. **Proactive Conversations drafting (PR-D; decision 133d).** Quoted from
+     the prompt: "Every settled inbound burst on an active thread yields ONE
+     draft, per the same laws, regardless of whether a workflow step asked
+     for it — Conversations is now a drafting surface, not only a viewing
+     one. 'Ask Light to draft' button = manual trigger that bypasses the
+     remaining settle wait. Per-conversation toggle PAUSES auto-draft (it
+     never enables — on is the default). Drafts born from inbound replies
+     follow the reply register: answer what the inbound actually asked
+     (generalities lawful, case-specific advice never — no-go rule 2),
+     consultation invited only where the answer genuinely needs one … Reply
+     drafts appear in BOTH Approval Inbox and inline in the Conversation
+     thread (same row, two views, one stamp)."
+
+139. **Prompt caching (PR-E; decision 133f).** Quoted from the prompt: "Use
+     Anthropic prompt caching via the SDK: mark the stable prefix (no-go
+     register, register laws, tone exemplars, selected pack entries) as
+     cached; thread tail and fresh inbound stay uncached. Cache read/write
+     tokens land on the credit line ('cache: X read / Y written'). Verify
+     with the SDK's usage fields; if the API rejects cache_control for any
+     reason, fall back to uncached with a recorded reason — never fail a
+     draft over caching."
+
+140. **Sign-off, approver option (PR-F; decision 133e).** Quoted from the
+     prompt: "businesses.settings.email_sign_off gains mode: firm_name
+     (default, shipped) | approver. In approver mode the PENDING body
+     carries the firm name; when a holder of stamp authority OPENS the card,
+     the rendered body resolves the sign-off to THEIR display name before
+     their eyes (WYSIWYS: what they see at stamp is what sends — the
+     resolution happens at render+stamp server-side as one act, and the
+     dispatched body records the resolved name). If this render-resolve
+     cannot be made WYSIWYS-clean, STOP and say so (Lane C) rather than
+     shipping a body that changes after the stamp." Landed WYSIWYS-clean by
+     construction: render and stamp share one deterministic resolver over
+     the STORED body; the stamp act re-runs the compliance check on the
+     exact resolved words with the carried attestation (decision 132) and is
+     withheld on any failure.
+
+141. **Live inbox (PR-G).** Quoted from the prompt: "Supabase Realtime
+     subscription on the approval-pending count and list for the signed-in
+     business: new pending drafts appear without refresh; the sidebar count
+     updates live; a single subtle notification sound on arrival
+     (user-toggleable in Settings → Appearance, default ON; respect the
+     browser's autoplay/interaction rules honestly — no sound before first
+     user interaction is fine and expected). No polling loops; Realtime
+     only. Same treatment for Conversations thread view (new inbound appears
+     live)." Landed as 0031 (communications joins the supabase_realtime
+     publication; authorisation is RLS) + the shell-mounted single
+     subscription that re-renders server-side.

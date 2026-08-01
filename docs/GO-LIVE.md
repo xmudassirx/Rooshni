@@ -205,6 +205,43 @@ Add to this list during build; check items off only at go-live.
       requirement but no recorded check, so they are unapprovable until
       rejected or purged — bulk rejection covers them in the daily shadow
       chore.
+- [ ] **Grant Mail.Read (application) + admin consent for inbound email**
+      (introduced Session 16, PR-A — Lane C credentials-at-need): the send
+      path deliberately holds Mail.Send only; the Graph inbound poll cannot
+      read the tenant mailbox until the founder grants the read permission.
+      Exact console steps: Azure portal → Microsoft Entra ID → App
+      registrations → the existing Barakah app → API permissions → Add a
+      permission → Microsoft Graph → Application permissions → Mail →
+      **Mail.Read** → Add permissions → **Grant admin consent for <tenant>**.
+      Until granted, every poll records a visible ErrorAccessDenied in the
+      tick report (fail closed, never silent). Consider Application Access
+      Policy scoping (New-ApplicationAccessPolicy) to confine the app to the
+      one mailbox — recommended, not required for the pilot.
+- [ ] **Register the WhatsApp inbound webhook + wire the bindings**
+      (introduced Session 16, PR-A): Meta app dashboard → WhatsApp →
+      Configuration → Webhook → Callback URL
+      `https://<production-host>/api/whatsapp/webhook`, Verify token =
+      `META_VERIFY_TOKEN`'s value → Verify and save → subscribe to the
+      **messages** field. If the WhatsApp product lives on a DIFFERENT Meta
+      app than the Lead Ads webhook, its App Secret differs and
+      `META_APP_SECRET` must match the app that signs this webhook — verify
+      before saving. Then bind the tenant:
+      `npm run wire-inbound --workspace=@rooshni/db -- --whatsapp <phone_number_id> --mailbox <firm mailbox> <business_id>`
+      (the phone-number id is WhatsApp → API Setup; the mailbox is
+      GRAPH_SENDER_ADDRESS's value). Unwired inbound fails loudly and is
+      retried by Meta once wired.
+- [ ] **Graph webhook subscriptions replace the inbound poll** (introduced
+      Session 16, PR-A — future tightening, founder-ruled in-prompt): email
+      inbound currently rides the 5-minute cron poll; Microsoft Graph change
+      notifications (subscription webhooks with clientState validation and
+      renewal) deliver near-instant inbound and cut polling egress. Its own
+      session; the poll stays the lawful fallback.
+- [ ] **Run `npm run supersede:normalise` once after the 0030 live apply**
+      (introduced Session 16, PR-B): the migration retires older duplicate
+      pending drafts (newest-wins) with a needs_event marker; the chore puts
+      each transition on The Record (communication.superseded, reason
+      migration_normalisation). The cron sweep self-heals leftovers, but the
+      explicit run closes the books the same day. Idempotent.
 - [ ] **Stub-era approved rows never dispatch** (introduced Session 10):
       Session 3/6 demo drafts that were approved in the stub era carry
       `communication.send_stubbed` events; the dispatcher permanently walks

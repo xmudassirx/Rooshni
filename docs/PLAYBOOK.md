@@ -209,6 +209,24 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   the firm's own words. `draft_feedback` (0025) is append-only: the refine
   signal, once recorded, is history.
 
+- The **supersede doors** (Session 16, 0028–0030, decisions 133/135–136): at
+  most ONE pending outbound draft per engagement per channel — a partial
+  unique index, with a thread-keyed twin for engagement-less threads.
+  `superseded` is terminal, frozen and never deletable: status never leaves
+  it, its words and placement never change, DELETE is refused, and no row is
+  born superseded. The only paths in are the service-only
+  `supersede_communication()` — which atomically retires the pending draft,
+  submits its successor through the 0017 door under the same drafter law,
+  and hands the ORIGINAL `submitted_at` across via a transaction-local value
+  only that pipeline can set (the 0027 clock stays closed to every API
+  role) — and the same-transaction trigger that supersedes every OTHER
+  pending draft on a thread when an outbound reaches approved/sent (the
+  human always wins; no orphan survives a reply). The **inbound claim
+  tables** (`wa_webhook_events`, `graph_mail_events`) are RLS-on with no
+  policies — service-role only, idempotent on the provider's message id; the
+  WhatsApp webhook fails closed without `META_APP_SECRET` (signature before
+  parse) and may create Level 2 rows but can never approve, publish or send.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail
