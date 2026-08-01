@@ -30,6 +30,15 @@ import { createServerClient } from "@supabase/ssr";
 // on the verify-token handshake (GET) and app-secret signature (POST), and
 // everything it may create stays Level 2 under the integration actor's
 // grant; it can never approve, publish or send (Session 10).
+// /api/whatsapp/webhook is public for the same reason (hotfix, 1 Aug 2026:
+// the Session 16 route was never added here, so Meta's verification GET was
+// rewritten to the holding page) — it FAILS CLOSED without META_APP_SECRET,
+// verifies X-Hub-Signature-256 against the raw body before parsing, and may
+// create Level 2 rows only; it can never approve, publish or send.
+// AUDIT NOTE (same hotfix): a cookie-less external caller's route must be
+// listed here in the session that ships it — the exclusion list is part of
+// a webhook's definition of done. Current inventory: signup trio (prefix),
+// Stripe webhook, Meta leads, WhatsApp webhook, cron tick, health.
 const PUBLIC_PATHS = [
   "/construction",
   "/signin",
@@ -40,6 +49,7 @@ const PUBLIC_PATHS = [
   "/api/health",
   "/api/workflows/tick",
   "/api/meta/leads",
+  "/api/whatsapp/webhook",
 ];
 
 function isPublic(pathname: string): boolean {

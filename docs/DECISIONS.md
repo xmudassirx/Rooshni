@@ -1315,3 +1315,22 @@ sign-off in the close report and are NOT recorded here.
      left uncommitted in place, never `git add -A`). This strengthens the
      §3.2 single-session rule from "separate worktrees, each granted in its
      prompt" to a standing checkout law.
+
+## Hotfix (1 August 2026) — WhatsApp webhook public-path exclusion, ordered on founder authority
+
+144. **A webhook's middleware exclusion is part of its definition of done.**
+     Quoted from the founder's hotfix order (1 August 2026): "the holding-page
+     middleware rewrites cookie-less requests to /construction, and
+     /api/whatsapp/webhook (Session 16) was never added to the public-path
+     exclusions — Meta's webhook verification receives the construction page
+     instead of the challenge echo. … Record the defect + fix as a DECISIONS
+     candidate (the exclusion list is part of the webhook's definition of
+     done — a webhook that cannot be verified was never shipped)." Fix:
+     `/api/whatsapp/webhook` joins PUBLIC_PATHS (the route itself fails
+     closed without META_APP_SECRET, signature before parse — Session 16's
+     doors unchanged). The ordered audit swept every cookie-less external
+     route: the signup trio (prefix-covered), Stripe webhook, Meta leads,
+     cron tick and health were already excluded; the WhatsApp webhook was
+     the only gap; nothing else was loosened. Standing rule, recorded in the
+     middleware comment: a session that ships a cookie-less external route
+     adds its exclusion in the same session.
