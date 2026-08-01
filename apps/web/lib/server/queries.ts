@@ -848,6 +848,13 @@ export interface ConversationThread {
   awaitingYou: boolean;
   hasPendingDraft: boolean;
   enquiry: { id: string; title: string; stageLabel: string | null } | null;
+  /** Session 16 (PR-C/D): the drafting preferences and settle state, straight
+   * off the thread row — durable server-side truth, never client state. */
+  autoDraftPaused: boolean;
+  settleOverrideSeconds: number | null;
+  settleDueAt: string | null;
+  /** Session 16 (PR-A): Meta's 24h service window as recorded on the thread. */
+  waServiceWindowExpiresAt: string | null;
   contact: {
     type: "person" | "organisation";
     status: string;
@@ -873,7 +880,9 @@ export async function getConversations(): Promise<ConversationThread[]> {
   const [threads, comms] = await Promise.all([
     db
       .from("comm_threads")
-      .select("id, subject, channel, contact_id, engagement_id")
+      .select(
+        "id, subject, channel, contact_id, engagement_id, auto_draft_paused, settle_override_seconds, draft_settle_due_at, wa_service_window_expires_at"
+      )
       .eq("business_id", business.id)
       .is("archived_at", null),
     db
@@ -1036,6 +1045,11 @@ export async function getConversations(): Promise<ConversationThread[]> {
               stageLabel: stage?.label ?? null,
             }
           : null,
+        autoDraftPaused: Boolean(t.auto_draft_paused),
+        settleOverrideSeconds:
+          typeof t.settle_override_seconds === "number" ? t.settle_override_seconds : null,
+        settleDueAt: t.draft_settle_due_at ?? null,
+        waServiceWindowExpiresAt: t.wa_service_window_expires_at ?? null,
         contact: {
           type: contact.type as "person" | "organisation",
           status: contact.status,

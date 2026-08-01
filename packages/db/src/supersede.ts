@@ -632,7 +632,15 @@ async function processSettledThread(
  */
 export async function sweepSettleAndSupersede(
   db: SupabaseClient,
-  options: { generator: GenerateFn | null; now?: Date; onlyThreadId?: string }
+  options: {
+    generator: GenerateFn | null;
+    now?: Date;
+    onlyThreadId?: string;
+    /** "Ask Light to draft" (133d): the manual trigger works on a PAUSED
+     * thread too — pausing stops the automatic drafting, not the human's
+     * explicit ask. Only honoured together with onlyThreadId. */
+    ignorePause?: boolean;
+  }
 ): Promise<SettleSweepReport> {
   const report: SettleSweepReport = {
     threads_evaluated: 0,
@@ -676,7 +684,7 @@ export async function sweepSettleAndSupersede(
         report.skipped += 1;
         continue;
       }
-      if (thread.auto_draft_paused) {
+      if (thread.auto_draft_paused && !(options.ignorePause && options.onlyThreadId === thread.id)) {
         // PR-D: the toggle PAUSES auto-draft — the settled burst is noted
         // and dropped; "Ask Light to draft" remains the manual door.
         report.skipped += 1;
