@@ -1612,28 +1612,49 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
   // tick, forever, and was a top egress source. Non-engagement events are
   // excluded by indexed predicate (events_entity_idx) instead of read-then-
   // skipped; consumed lookups carry only the trigger_event_id.
-  const definitions = await q<Pick<WorkflowDefinitionRow, "id" | "business_id" | "key" | "trigger">[]>(
-    db.from("workflow_definitions").select("id, business_id, key, trigger").eq("status", "active").is("archived_at", null),
+  // WS6 (Session 23, founder-ruled after the 116-burst): consumption is
+  // per workflow KEY (workflow_trigger_consumptions — a re-issue inherits
+  // its predecessors' consumed history), and an activated re-issue starts
+  // runs only for arrivals AFTER the predecessor's consumption frontier
+  // (trigger_frontier_at, stamped by the gated activation). The claim
+  // constraint in start_workflow_run makes replays structurally impossible
+  // even if this scan is wrong.
+  const definitions = await q<
+    (Pick<WorkflowDefinitionRow, "id" | "business_id" | "key" | "trigger"> & {
+      trigger_frontier_at: string | null;
+    })[]
+  >(
+    db
+      .from("workflow_definitions")
+      .select("id, business_id, key, trigger, trigger_frontier_at")
+      .eq("status", "active")
+      .is("archived_at", null),
     "active definitions"
   );
   for (const definition of definitions) {
     const action = definition.trigger?.action;
     if (!action) continue;
     try {
+      let eventScan = db
+        .from("events")
+        .select("id, entity_id, source:payload->attribution->>source")
+        .eq("business_id", definition.business_id)
+        .eq("action", action)
+        .eq("entity_type", "engagement");
+      if (definition.trigger_frontier_at) {
+        eventScan = eventScan.gt("occurred_at", definition.trigger_frontier_at);
+      }
       const events = await q<{ id: string; entity_id: string | null; source: string | null }[]>(
-        db
-          .from("events")
-          .select("id, entity_id, source:payload->attribution->>source")
-          .eq("business_id", definition.business_id)
-          .eq("action", action)
-          .eq("entity_type", "engagement")
-          .order("occurred_at", { ascending: true })
-          .limit(200),
+        eventScan.order("occurred_at", { ascending: true }).limit(200),
         "trigger event scan"
       );
       if (events.length === 0) continue;
-      const consumedRows = await q<{ trigger_event_id: string | null }[]>(
-        db.from("workflow_runs").select("trigger_event_id:context->>trigger_event_id").eq("definition_id", definition.id),
+      const consumedRows = await q<{ trigger_event_id: string }[]>(
+        db
+          .from("workflow_trigger_consumptions")
+          .select("trigger_event_id")
+          .eq("business_id", definition.business_id)
+          .eq("workflow_key", definition.key),
         "consumed trigger lookup"
       );
       const consumed = new Set(consumedRows.map((r) => r.trigger_event_id).filter(Boolean));
@@ -1658,9 +1679,14 @@ export async function runWorkflowTick(db: SupabaseClient, options: TickOptions =
           report.runs_started += 1;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          // Another live run already works this lead, or a parallel tick got
-          // here first — both are the idempotency keys doing their job.
-          if (!/duplicate key|workflow_runs_one_live_uniq|workflow_runs_trigger_event_uniq/.test(message)) {
+          // Another live run already works this lead, a parallel tick got
+          // here first, or the KEY already consumed this event (WS6) — all
+          // are the idempotency structures doing their job.
+          if (
+            !/duplicate key|workflow_runs_one_live_uniq|workflow_runs_trigger_event_uniq|workflow_trigger_consumptions/.test(
+              message
+            )
+          ) {
             report.errors.push(`trigger start (${definition.key} → ${evt.entity_id}): ${message}`);
           }
         }

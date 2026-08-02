@@ -377,6 +377,22 @@ Add to this list during build; check items off only at go-live.
       variable, wider scope — note the new mint date). If the existing token
       already carries ads_read, the pull simply works and this line ticks
       itself at the first `meta.spend_pulled` event.
+- [ ] **Apply 0035–0038 + deploy the s23 branch** (introduced Session 23):
+      `npm run db:migrate` — 0035 thread unread (WS1c), 0036 thread
+      last-activity trigger + backfill (WS2), 0037 task cancellation
+      (terminal state + the approval_inbox task_cancellation arm, WS4d),
+      0038 trigger consumption per workflow KEY + the activation frontier
+      (WS6). All forward-only, harness-proven (297 green); no destructive
+      statement — the 0036/0038 backfills only INSERT/UPDATE bookkeeping
+      derived from existing truth.
+- [ ] **Run `npm run chore:cancel-replay-runs --workspace=@rooshni/db`
+      AFTER the 0038 apply** (introduced Session 23, WS6 — the founder-run
+      live step): retires the still-live runs the v3 replay spawned in the
+      116-burst. Try `-- --dry-run` first to see the list; each cancellation
+      goes through the gated cancel_workflow_run pipeline attributed to the
+      business's workflow actor, evented with the stated reason — nothing
+      deleted, the run rows remain history. Legitimate live runs (the ones
+      holding their event's claim) are untouched.
 - [ ] **Re-cut the provisional pricing constants before the first real
       pilot bill conversation** (introduced Session 22, WS2): per-model list
       rates and the USD→GBP rate live in

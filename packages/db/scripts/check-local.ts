@@ -4404,6 +4404,119 @@ async function main() {
     }
   });
 
+  // Session 23 (WS6) — trigger consumption per workflow KEY + the activation
+  // frontier (founder-ruled after the 116-burst; 0038).
+  console.log("\nSession 23 — trigger consumption per workflow key (WS6):");
+
+  // A key with two versions, one consumed trigger, and a bystander lead.
+  const s23EngA = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'WS6 lead A', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s23EngB = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'WS6 lead B', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s23Evt = await db.query<{ id: string }>(
+    `insert into public.events (business_id, actor_id, action, entity_type, entity_id, occurred_at)
+     values ($1, $2, 'engagement.created', 'engagement', $3, '2026-08-01T10:00:00Z') returning id`,
+    [f.business_id, f.agent_id, s23EngA.rows[0]!.id]
+  );
+  const s23EvtId = s23Evt.rows[0]!.id;
+
+  async function s23MakeActiveDefinition(version: number): Promise<string> {
+    const def = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'wf_s23_consumption', $3, $4, '{"action":"engagement.created"}'::jsonb, 'draft',
+               'WS6 consumption smoke definition.') returning id`,
+      [f.business_id, f.human_id, version, f.template_id]
+    );
+    await db.query(
+      `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config)
+       values ($1, $2, $3, 'wait_step', 1, 'wait', '{"wait":{"days":1}}'::jsonb)`,
+      [f.business_id, f.human_id, def.rows[0]!.id]
+    );
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [def.rows[0]!.id, f.human_id]);
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [def.rows[0]!.id, f.human_id]);
+    return def.rows[0]!.id;
+  }
+
+  const s23V1 = await s23MakeActiveDefinition(1);
+  await expectOk("a triggered start CLAIMS its event for the KEY (0038 — the claim rides the run's own transaction)", async () => {
+    await db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [
+      s23V1,
+      s23EngA.rows[0]!.id,
+      f.agent_id,
+      s23EvtId,
+    ]);
+    const claims = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.workflow_trigger_consumptions
+        where business_id = $1 and workflow_key = 'wf_s23_consumption' and trigger_event_id = $2`,
+      [f.business_id, s23EvtId]
+    );
+    if (claims.rows[0]!.n !== 1) throw new Error("the claim row did not land with the run");
+  });
+
+  const s23V2 = await s23MakeActiveDefinition(2);
+
+  await expectError(
+    "a re-issued definition consumes nothing its predecessor consumed",
+    /workflow_trigger_consumptions|duplicate key/,
+    () =>
+      db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [
+        s23V2,
+        s23EngB.rows[0]!.id,
+        f.agent_id,
+        s23EvtId,
+      ])
+  );
+
+  await expectOk("the refused replay left NOTHING behind — no run, no orphan claim (one transaction)", async () => {
+    const runs = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.workflow_runs where definition_id = $1`,
+      [s23V2]
+    );
+    if (runs.rows[0]!.n !== 0) throw new Error("a replay run row survived the refused claim");
+    const claims = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.workflow_trigger_consumptions
+        where business_id = $1 and workflow_key = 'wf_s23_consumption'`,
+      [f.business_id]
+    );
+    if (claims.rows[0]!.n !== 1) throw new Error("the key must hold exactly one claim for the event");
+  });
+
+  await expectOk("activation starts no runs for pre-existing engagements", async () => {
+    // The gated activation stamped the re-issue's frontier at the KEY's
+    // consumption frontier — the predecessor's newest consumed arrival —
+    // so the scan (pinned below) only reads arrivals after it.
+    const frontier = await db.query<{ trigger_frontier_at: string | null }>(
+      `select trigger_frontier_at from public.workflow_definitions where id = $1`,
+      [s23V2]
+    );
+    const at = frontier.rows[0]!.trigger_frontier_at;
+    if (!at) throw new Error("the re-issue's activation stamped no frontier");
+    if (!new Date(at).toISOString().startsWith("2026-08-01T10:00:00")) {
+      throw new Error(`the frontier must be the predecessor's consumption frontier — got ${at}`);
+    }
+    const v1Frontier = await db.query<{ trigger_frontier_at: string | null }>(
+      `select trigger_frontier_at from public.workflow_definitions where id = $1`,
+      [s23V1]
+    );
+    if (v1Frontier.rows[0]!.trigger_frontier_at !== null) {
+      throw new Error("a first version (no predecessor) must keep a null frontier — fresh-tenant behaviour unchanged");
+    }
+    // File tripwire: the scan consumes by KEY and honours the frontier.
+    const workflowSource = readFileSync(resolve(import.meta.dirname, "../src/workflow.ts"), "utf8");
+    if (!workflowSource.includes(`from("workflow_trigger_consumptions")`)) {
+      throw new Error("the tick's consumed lookup no longer reads the key-scoped claims");
+    }
+    if (!workflowSource.includes("trigger_frontier_at")) {
+      throw new Error("the tick's trigger scan no longer honours the activation frontier");
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed.`);
   process.exit(failed > 0 ? 1 : 0);
 }
