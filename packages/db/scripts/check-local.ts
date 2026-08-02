@@ -42,7 +42,7 @@ import {
   renderEmailHtml,
   resolveEmailIdentity,
 } from "../src/email-html";
-import { whatsAppInboundConsent } from "../src/inbound";
+import { whatsAppInboundConsent, mailClaimStaleCutoffIso, MAIL_CLAIM_STALE_AFTER_MS } from "../src/inbound";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
 import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
 import { rankGuideCandidates, storageSlug, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
@@ -4514,6 +4514,56 @@ async function main() {
     }
     if (!workflowSource.includes("trigger_frontier_at")) {
       throw new Error("the tick's trigger scan no longer honours the activation frontier");
+    }
+  });
+
+  // Hotfix (2 Aug 2026) — Graph inbound processing silently dead: the s20
+  // reference match packed jsonb containments into a PostgREST `or=` string
+  // (PGRST100, unparsable — proven against production), the duplicate-claim
+  // branch advanced the cursor past claimed-but-unprocessed rows, and the
+  // poll's errors died in a JSON response nobody reads. PGlite cannot speak
+  // PostgREST, so the syntax class is fenced by file tripwires (the s20/s22
+  // precedent) and the time law by the pure cutoff.
+  console.log("\nHotfix — graph inbound processor (2 Aug 2026):");
+
+  await expectOk("the stale-claim window rides timeScale() — a claim is stale only past the SCALED cutoff", async () => {
+    const now = new Date("2026-08-02T16:00:00.000Z");
+    const expected = new Date(now.getTime() - scaleDurationMs(MAIL_CLAIM_STALE_AFTER_MS)).toISOString();
+    if (mailClaimStaleCutoffIso(now) !== expected) {
+      throw new Error(`cutoff ${mailClaimStaleCutoffIso(now)} does not ride scaleDurationMs (expected ${expected})`);
+    }
+    const justInside = new Date(now.getTime() - scaleDurationMs(MAIL_CLAIM_STALE_AFTER_MS) + 1000).toISOString();
+    if (!(justInside > mailClaimStaleCutoffIso(now))) {
+      throw new Error("a claim younger than the scaled window counted as stale");
+    }
+  });
+
+  await expectOk("the reference match reads jsonb containment, never a PostgREST or= logic tree (the PGRST100 fence)", async () => {
+    // File tripwire (the s20/s22 precedent): embedded JSON can never parse
+    // inside `or=` — PostgREST splits conditions on the commas the JSON is
+    // made of. The defect shipped green because PGlite never parses
+    // PostgREST syntax; this fence is the local guard for that class.
+    const source = readFileSync(resolve(import.meta.dirname, "../src/inbound.ts"), "utf8");
+    if (/\.or\([^)]*external_refs/s.test(source)) {
+      throw new Error("inbound.ts packs external_refs containment into an or= string again — PGRST100 in production");
+    }
+    if (!source.includes(`.contains("external_refs"`)) {
+      throw new Error("the reference match no longer uses the parseable .contains form");
+    }
+  });
+
+  await expectOk("a duplicate claim is not proof of completed work — the branch reads processed_at and the sweep is wired", async () => {
+    // File tripwire: the three legs of the hotfix stay standing — (a) the
+    // duplicate-claim branch distinguishes replay from claimed-but-dead,
+    // (b) claim stamps are error-checked, (c) the fail-closed stale sweep
+    // runs and its visible-failure kind exists in the declared vocabulary.
+    const source = readFileSync(resolve(import.meta.dirname, "../src/inbound.ts"), "utf8");
+    for (const marker of ['"claim read"', '"claim stamp"', "sweepStaleMailClaims(db, binding, reader, cfg, report, now)", '"stale claim stamp"']) {
+      if (!source.includes(marker)) throw new Error(`the hotfix marker ${marker} is gone from inbound.ts`);
+    }
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    if (!kinds.includes(`"inbound.mail_claim_stale"`)) {
+      throw new Error("the stale-claim visible-failure kind left the declared vocabulary");
     }
   });
 

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { scaleDurationMs } from "@rooshni/config";
 import { emitEvent } from "./events";
 import { INBOUND_EVENT_KINDS } from "./event-kinds";
 import { normalisePhone } from "./meta";
@@ -410,6 +411,10 @@ export interface MailPollReport {
   polled: number;
   ingested: number;
   skipped: number;
+  /** Claims still unprocessed past the stale window AFTER this poll's
+   * recovery attempt — each one is an evented, visible failure (hotfix,
+   * 2 Aug 2026). */
+  stale: number;
   errors: string[];
   cursor: string | null;
 }
@@ -430,6 +435,20 @@ const MAIL_POLL_CONFIGS: Record<"graph" | "gmail", MailProviderConfig> = {
   graph: { provider: "graph", claimTable: "graph_mail_events", providerIdColumn: "graph_message_id" },
   gmail: { provider: "gmail", claimTable: "gmail_mail_events", providerIdColumn: "gmail_message_id" },
 };
+
+/**
+ * HOTFIX (2 Aug 2026, founder-ruled): a claimed inbound mail row still
+ * unprocessed after this REAL duration is itself an evented, visible failure
+ * — the silence was the worst part of the defect this hotfix repairs. A
+ * product timer: scaled through timeScale() (law 11).
+ */
+export const MAIL_CLAIM_STALE_AFTER_MS = 15 * 60 * 1000;
+
+/** The moment before which an unprocessed claim counts as stale — PURE, so
+ * the harness proves the window rides timeScale(). */
+export function mailClaimStaleCutoffIso(now: Date): string {
+  return new Date(now.getTime() - scaleDurationMs(MAIL_CLAIM_STALE_AFTER_MS)).toISOString();
+}
 
 /** Read-modify-write of the settings.<provider> cursor (service-role act). */
 async function writeMailCursor(
@@ -468,13 +487,305 @@ async function writeMailCursor(
  * (Mail.Read consent, Gmail scope consent) lands in the report's errors —
  * never a silent no-op, never a crash that blocks the tick.
  */
+/**
+ * Process ONE claimed inbound mail into its communications row (or a recorded
+ * skip). Shared by the live poll loop and the stale-claim recovery sweep —
+ * the caller owns the claim row and stamps the returned outcome.
+ *
+ * Idempotent on the claim key: a communications row already carrying it means
+ * an earlier attempt died between the insert and the claim stamp — the row is
+ * the truth; recover the stamp, never duplicate the mail.
+ */
+async function processOneMailMessage(
+  db: SupabaseClient,
+  binding: InboundBinding,
+  reader: MailboxInboundReader,
+  cfg: MailProviderConfig,
+  head: { id: string; fromAddress: string | null },
+  claimKey: string
+): Promise<{ outcome: string; ingested: boolean }> {
+  const already = await q<{ id: string }[]>(
+    db
+      .from("communications")
+      .select("id")
+      .eq("business_id", binding.business_id)
+      .contains("external_refs", JSON.stringify([{ system: cfg.provider, external_id: claimKey }]))
+      .limit(1),
+    "prior ingest check"
+  );
+  if (already[0]) {
+    return { outcome: `ingested: communication ${already[0].id} (stamp recovered)`, ingested: true };
+  }
+
+  if (head.fromAddress && head.fromAddress === reader.mailbox.toLowerCase()) {
+    return { outcome: "skipped: our own mail", ingested: false };
+  }
+
+  const detail = await reader.getMessage(head.id);
+  if (detail.fromAddress && detail.fromAddress === reader.mailbox.toLowerCase()) {
+    // The recovery path carries no listing head — the check re-runs on the
+    // fetched detail so a recovered claim obeys the same law.
+    return { outcome: "skipped: our own mail", ingested: false };
+  }
+
+  // 1) Reply-header match: any referenced RFC id our rows already carry
+  // (outbound sends record their internetMessageId; inbound rows record
+  // theirs) names the thread.
+  let threadId: string | null = null;
+  let threadEngagementId: string | null = null;
+  let contactId: string | null = null;
+  for (const refId of detail.referenceIds) {
+    // JUDGMENT (Session 20): the reference match reads BOTH mail systems'
+    // refs — an RFC message id is globally unique whichever carrier minted
+    // it, and a thread whose history spans a provider switch must still
+    // match. Business isolation is the check below, never the system string.
+    //
+    // HOTFIX (2 Aug 2026): the s20 shape packed both containments into one
+    // PostgREST `or=` string; embedded JSON can NEVER parse there (PGRST100
+    // "failed to parse logic tree", proven against production with the
+    // founder's own reply), so every reply threw and the claim/cursor march
+    // orphaned the mail. Two `.contains` filters (the meta.ts pattern, in
+    // production since Meta ingest) express the same match parseably; the
+    // check-local tripwire fences the `or=` shape off this column for good.
+    for (const system of ["graph", "gmail"] as const) {
+      const referenced = await q<{ thread_id: string; business_id: string }[]>(
+        db
+          .from("communications")
+          .select("thread_id, business_id")
+          .contains("external_refs", JSON.stringify([{ system, external_id: refId }]))
+          .limit(1),
+        "reference match lookup"
+      );
+      if (referenced[0] && referenced[0].business_id === binding.business_id) {
+        threadId = referenced[0].thread_id;
+        break;
+      }
+    }
+    if (threadId) break;
+  }
+  if (threadId) {
+    const threads = await q<{ engagement_id: string | null; contact_id: string }[]>(
+      db.from("comm_threads").select("engagement_id, contact_id").eq("id", threadId).limit(1),
+      "matched thread read"
+    );
+    threadEngagementId = threads[0]?.engagement_id ?? null;
+    contactId = threads[0]?.contact_id ?? null;
+  }
+
+  // 2) Sender match: the address names the contact; their newest email
+  // thread carries the reply, or a fresh thread opens on the contact.
+  if (!threadId) {
+    if (!detail.fromAddress) {
+      return { outcome: "skipped: no sender address", ingested: false };
+    }
+    const senderChannels = await q<{ contact_id: string }[]>(
+      db
+        .from("contact_channels")
+        .select("contact_id")
+        .eq("business_id", binding.business_id)
+        .eq("channel", "email")
+        .eq("value", detail.fromAddress)
+        .is("archived_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1),
+      "sender lookup"
+    );
+    contactId = senderChannels[0]?.contact_id ?? null;
+    if (!contactId) {
+      // JUDGMENT: unmatched senders are skipped with a recorded outcome,
+      // never turned into contact rows — an open mailbox attracts spam,
+      // and PR-A's "new thread on the contact" presumes a contact.
+      return { outcome: "skipped: no matching contact", ingested: false };
+    }
+    const thread = await ensureThread(db, binding, contactId, "email", detail.subject);
+    threadId = thread.id;
+    threadEngagementId = thread.engagement_id;
+  }
+
+  const comms = await q<{ id: string }[]>(
+    db
+      .from("communications")
+      .insert({
+        business_id: binding.business_id,
+        created_by: binding.integration_actor_id,
+        thread_id: threadId,
+        contact_id: contactId,
+        engagement_id: threadEngagementId,
+        channel: "email",
+        direction: "inbound",
+        status: "received",
+        body: detail.bodyText,
+        body_format: "plain",
+        occurred_at: detail.receivedDateTime,
+        attributes: {
+          ...(detail.subject ? { subject: detail.subject } : {}),
+          ...(detail.fromName ? { from_name: detail.fromName } : {}),
+        },
+        external_refs: [
+          {
+            system: cfg.provider,
+            external_id: detail.internetMessageId ?? claimKey,
+            synced_at: new Date().toISOString(),
+          },
+        ],
+      })
+      .select("id"),
+    "inbound communication insert"
+  );
+  const communicationId = comms[0]!.id;
+
+  await q(
+    db
+      .from("comm_threads")
+      .update({ last_inbound_at: detail.receivedDateTime })
+      .eq("id", threadId)
+      .select("id"),
+    "thread inbound update"
+  );
+
+  // PR-C (decision 133b): the settle timer arms/restarts on each inbound.
+  const settleDueAt = await armSettleTimer(db, threadId);
+
+  await emitEvent(db, {
+    business_id: binding.business_id,
+    actor_id: binding.integration_actor_id,
+    action: INBOUND_EVENT_KINDS.communicationReceived,
+    entity_type: "communication",
+    entity_id: communicationId,
+    payload: {
+      channel: "email",
+      thread_id: threadId,
+      contact_id: contactId,
+      engagement_id: threadEngagementId,
+      internet_message_id: detail.internetMessageId,
+      ...(settleDueAt ? { settle_due_at: settleDueAt } : {}),
+    },
+  });
+
+  return { outcome: `ingested: communication ${communicationId}`, ingested: true };
+}
+
+/**
+ * FAIL-CLOSED TIGHTENING (founder-ruled hotfix, 2 Aug 2026): "a claimed row
+ * still unprocessed after N minutes is itself an evented, visible failure —
+ * silence was the worst part of this bug."
+ *
+ * Every poll sweeps its claim table for rows unprocessed past the stale
+ * window: each one (a) lands `inbound.mail_claim_stale` on The Record — once
+ * per claim, deduped against the ledger (the meta.spend_pulled precedent) —
+ * and (b) is retried through the same processing pipeline until it stamps.
+ * This sweep is also the backlog healer: claims the defect orphaned BEHIND
+ * the cursor are unreachable by the listing loop forever, so only a
+ * cursor-independent scan can recover them.
+ */
+async function sweepStaleMailClaims(
+  db: SupabaseClient,
+  binding: InboundBinding,
+  reader: MailboxInboundReader,
+  cfg: MailProviderConfig,
+  report: MailPollReport,
+  now: Date
+): Promise<void> {
+  type StaleClaim = { id: string; internet_message_id: string; created_at: string } & Record<string, string | null>;
+  let stale: StaleClaim[];
+  try {
+    stale = await q<StaleClaim[]>(
+      db
+        .from(cfg.claimTable)
+        .select(`id, internet_message_id, ${cfg.providerIdColumn}, created_at`)
+        .eq("mailbox", reader.mailbox)
+        .is("processed_at", null)
+        .lt("created_at", mailClaimStaleCutoffIso(now))
+        .order("created_at", { ascending: true })
+        .limit(20), // bounded read (decision 157 5e) — the rest next tick
+      "stale claim scan"
+    );
+  } catch (err) {
+    report.errors.push(`stale claim scan failed: ${err instanceof Error ? err.message : err}`);
+    return;
+  }
+
+  for (const claim of stale) {
+    let recovered = false;
+    let lastError: string | null = null;
+    const providerId = claim[cfg.providerIdColumn];
+    if (!providerId) {
+      lastError = "claim carries no provider message id — cannot re-fetch";
+    } else {
+      try {
+        const result = await processOneMailMessage(
+          db,
+          binding,
+          reader,
+          cfg,
+          { id: providerId, fromAddress: null },
+          claim.internet_message_id
+        );
+        await q(
+          db
+            .from(cfg.claimTable)
+            .update({
+              processed_at: new Date().toISOString(),
+              outcome: `${result.outcome} (recovered by stale sweep)`,
+            })
+            .eq("id", claim.id)
+            .select("id"),
+          "stale claim stamp"
+        );
+        recovered = true;
+        if (result.ingested) report.ingested += 1;
+        else report.skipped += 1;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        report.errors.push(`stale claim ${claim.internet_message_id}: ${lastError}`);
+      }
+    }
+    if (!recovered) report.stale += 1;
+
+    // The visible failure — once per claim on The Record, recovered or not:
+    // the claim DID sit unprocessed past the window, and the ledger carries
+    // what happened and why.
+    try {
+      const seen = await q<{ id: string }[]>(
+        db
+          .from("events")
+          .select("id")
+          .eq("business_id", binding.business_id)
+          .eq("action", INBOUND_EVENT_KINDS.mailClaimStale)
+          .eq("entity_id", claim.id)
+          .limit(1),
+        "stale event dedup"
+      );
+      if (!seen[0]) {
+        await emitEvent(db, {
+          business_id: binding.business_id,
+          actor_id: binding.integration_actor_id,
+          action: INBOUND_EVENT_KINDS.mailClaimStale,
+          entity_type: "mail_claim",
+          entity_id: claim.id,
+          payload: {
+            provider: cfg.provider,
+            mailbox: reader.mailbox,
+            internet_message_id: claim.internet_message_id,
+            claimed_at: claim.created_at,
+            recovered,
+            ...(lastError ? { last_error: lastError } : {}),
+          },
+        });
+      }
+    } catch (err) {
+      report.errors.push(`stale claim event failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
 async function pollMailboxInbound(
   db: SupabaseClient,
   reader: MailboxInboundReader | null,
   cfg: MailProviderConfig,
   options: { now?: Date; top?: number } = {}
 ): Promise<MailPollReport> {
-  const report: MailPollReport = { configured: false, polled: 0, ingested: 0, skipped: 0, errors: [], cursor: null };
+  const report: MailPollReport = { configured: false, polled: 0, ingested: 0, skipped: 0, stale: 0, errors: [], cursor: null };
   if (!reader) return report;
   report.configured = true;
   const now = options.now ?? new Date();
@@ -510,6 +821,12 @@ async function pollMailboxInbound(
     return report;
   }
 
+  // The fail-closed sweep runs BEFORE the listing so a broken reader or a
+  // dead list call can never mute the stale-claim alarm (hotfix, 2 Aug
+  // 2026); it is also what recovers claims the defect orphaned behind the
+  // cursor, which no listing will ever return again.
+  await sweepStaleMailClaims(db, binding, reader, cfg, report, now);
+
   let listed: Awaited<ReturnType<MailboxInboundReader["listNewMessages"]>>;
   try {
     listed = await reader.listNewMessages(cursor, options.top ?? 25);
@@ -523,6 +840,7 @@ async function pollMailboxInbound(
   report.polled = listed.length;
 
   let advancedTo: string | null = null;
+  let halted = false;
   for (const head of listed) {
     const claimKey = head.internetMessageId ?? `${cfg.provider}:${head.id}`;
     try {
@@ -534,170 +852,48 @@ async function pollMailboxInbound(
         mailbox: reader.mailbox,
       });
       if (claimError) {
-        if (claimError.code === "23505") {
+        if (claimError.code !== "23505") throw new Error(`claim failed: ${claimError.message}`);
+        // HOTFIX (2 Aug 2026, the defect's heart): a duplicate claim is NOT
+        // proof of completed work. Processed = a true replay (overlapping
+        // poll / cursor rewind) — skip and advance. UNPROCESSED = an earlier
+        // tick claimed this mail and died before finishing: the row is ours
+        // to finish NOW, and the cursor must never advance past it. The old
+        // branch skipped every duplicate blind, which marched the cursor
+        // over claimed-but-dead rows and orphaned them in silence.
+        const existing = await q<{ processed_at: string | null }[]>(
+          db.from(cfg.claimTable).select("processed_at").eq("internet_message_id", claimKey).limit(1),
+          "claim read"
+        );
+        if (existing[0]?.processed_at) {
           report.skipped += 1;
-          advancedTo = head.receivedDateTime;
+          if (!halted) advancedTo = head.receivedDateTime;
           continue;
         }
-        throw new Error(`claim failed: ${claimError.message}`);
-      }
-      const stamp = async (outcome: string) => {
-        await db
-          .from(cfg.claimTable)
-          .update({ processed_at: new Date().toISOString(), outcome })
-          .eq("internet_message_id", claimKey);
-      };
-
-      if (head.fromAddress && head.fromAddress === reader.mailbox.toLowerCase()) {
-        await stamp("skipped: our own mail");
-        report.skipped += 1;
-        advancedTo = head.receivedDateTime;
-        continue;
       }
 
-      const detail = await reader.getMessage(head.id);
-
-      // 1) Reply-header match: any referenced RFC id our rows already carry
-      // (outbound sends record their internetMessageId; inbound rows record
-      // theirs) names the thread.
-      let threadId: string | null = null;
-      let threadEngagementId: string | null = null;
-      let contactId: string | null = null;
-      for (const refId of detail.referenceIds) {
-        const referenced = await q<{ thread_id: string; business_id: string }[]>(
-          db
-            .from("communications")
-            .select("thread_id, business_id")
-            // JUDGMENT (Session 20): the reference match reads BOTH mail
-            // systems' refs — an RFC message id is globally unique whichever
-            // carrier minted it, and a thread whose history spans a provider
-            // switch must still match. Business isolation is the check below,
-            // never the system string.
-            .or(
-              `external_refs.cs.${JSON.stringify([{ system: "graph", external_id: refId }])},` +
-                `external_refs.cs.${JSON.stringify([{ system: "gmail", external_id: refId }])}`
-            )
-            .limit(1),
-          "reference match lookup"
-        );
-        if (referenced[0] && referenced[0].business_id === binding.business_id) {
-          threadId = referenced[0].thread_id;
-          break;
-        }
-      }
-      if (threadId) {
-        const threads = await q<{ engagement_id: string | null; contact_id: string }[]>(
-          db.from("comm_threads").select("engagement_id, contact_id").eq("id", threadId).limit(1),
-          "matched thread read"
-        );
-        threadEngagementId = threads[0]?.engagement_id ?? null;
-        contactId = threads[0]?.contact_id ?? null;
-      }
-
-      // 2) Sender match: the address names the contact; their newest email
-      // thread carries the reply, or a fresh thread opens on the contact.
-      if (!threadId) {
-        if (!detail.fromAddress) {
-          await stamp("skipped: no sender address");
-          report.skipped += 1;
-          advancedTo = head.receivedDateTime;
-          continue;
-        }
-        const senderChannels = await q<{ contact_id: string }[]>(
-          db
-            .from("contact_channels")
-            .select("contact_id")
-            .eq("business_id", binding.business_id)
-            .eq("channel", "email")
-            .eq("value", detail.fromAddress)
-            .is("archived_at", null)
-            .order("created_at", { ascending: false })
-            .limit(1),
-          "sender lookup"
-        );
-        contactId = senderChannels[0]?.contact_id ?? null;
-        if (!contactId) {
-          // JUDGMENT: unmatched senders are skipped with a recorded outcome,
-          // never turned into contact rows — an open mailbox attracts spam,
-          // and PR-A's "new thread on the contact" presumes a contact.
-          await stamp("skipped: no matching contact");
-          report.skipped += 1;
-          advancedTo = head.receivedDateTime;
-          continue;
-        }
-        const thread = await ensureThread(db, binding, contactId, "email", detail.subject);
-        threadId = thread.id;
-        threadEngagementId = thread.engagement_id;
-      }
-
-      const comms = await q<{ id: string }[]>(
-        db
-          .from("communications")
-          .insert({
-            business_id: binding.business_id,
-            created_by: binding.integration_actor_id,
-            thread_id: threadId,
-            contact_id: contactId,
-            engagement_id: threadEngagementId,
-            channel: "email",
-            direction: "inbound",
-            status: "received",
-            body: detail.bodyText,
-            body_format: "plain",
-            occurred_at: detail.receivedDateTime,
-            attributes: {
-              ...(detail.subject ? { subject: detail.subject } : {}),
-              ...(detail.fromName ? { from_name: detail.fromName } : {}),
-            },
-            external_refs: [
-              {
-                system: cfg.provider,
-                external_id: detail.internetMessageId ?? claimKey,
-                synced_at: new Date().toISOString(),
-              },
-            ],
-          })
-          .select("id"),
-        "inbound communication insert"
-      );
-      const communicationId = comms[0]!.id;
-
+      const result = await processOneMailMessage(db, binding, reader, cfg, head, claimKey);
+      // The stamp is error-checked (it silently ignored failures before) —
+      // a claim that cannot stamp stays unprocessed and trips the stale
+      // sweep's alarm instead of vanishing.
       await q(
         db
-          .from("comm_threads")
-          .update({ last_inbound_at: detail.receivedDateTime })
-          .eq("id", threadId)
+          .from(cfg.claimTable)
+          .update({ processed_at: new Date().toISOString(), outcome: result.outcome })
+          .eq("internet_message_id", claimKey)
           .select("id"),
-        "thread inbound update"
+        "claim stamp"
       );
-
-      // PR-C (decision 133b): the settle timer arms/restarts on each inbound.
-      const settleDueAt = await armSettleTimer(db, threadId);
-
-      await emitEvent(db, {
-        business_id: binding.business_id,
-        actor_id: binding.integration_actor_id,
-        action: INBOUND_EVENT_KINDS.communicationReceived,
-        entity_type: "communication",
-        entity_id: communicationId,
-        payload: {
-          channel: "email",
-          thread_id: threadId,
-          contact_id: contactId,
-          engagement_id: threadEngagementId,
-          internet_message_id: detail.internetMessageId,
-          ...(settleDueAt ? { settle_due_at: settleDueAt } : {}),
-        },
-      });
-
-      await stamp(`ingested: communication ${communicationId}`);
-      report.ingested += 1;
-      advancedTo = head.receivedDateTime;
+      if (result.ingested) report.ingested += 1;
+      else report.skipped += 1;
+      if (!halted) advancedTo = head.receivedDateTime;
     } catch (err) {
-      // Stop advancing at the first hard failure so the next tick retries
-      // from this message — the claim rows keep replays harmless.
+      // JUDGMENT (hotfix): a failed message FREEZES the cursor — the next
+      // tick retries from it, the s16 law — but no longer aborts the rest
+      // of the window: one poison mail must not silence the mailbox. Later
+      // messages process under their own claims (replays harmless) and the
+      // cursor holds until the failure clears or the stale sweep flags it.
       report.errors.push(`message ${claimKey}: ${err instanceof Error ? err.message : err}`);
-      break;
+      halted = true;
     }
   }
 

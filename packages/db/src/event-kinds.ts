@@ -117,6 +117,11 @@ export const INBOUND_EVENT_KINDS = {
   /** PR-D: a per-conversation auto-draft pause was toggled, or the settle
    * override changed — the thread and the new value in the payload. */
   threadDraftingPreferenceChanged: "thread.drafting_preference_changed",
+  /** HOTFIX (2 Aug 2026, founder-ruled): a claimed inbound mail row sat
+   * unprocessed past the stale window — an evented, VISIBLE failure (the
+   * silence was the worst part of the defect). Emitted once per claim; the
+   * recovery sweep keeps retrying and the payload carries the last error. */
+  mailClaimStale: "inbound.mail_claim_stale",
 } as const satisfies Record<string, EventAction>;
 
 /**

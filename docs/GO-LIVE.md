@@ -402,3 +402,13 @@ Add to this list during build; check items off only at go-live.
       against the provider's current pricing page and the day's rate; the
       figures shown are METERED COST, no margin — pilot pricing is a
       separate founder decision.
+- [ ] **Merge + deploy `hotfix-graph-processor`, then watch one tick heal
+      the backlog** (introduced Hotfix 2 Aug 2026 — Graph inbound was
+      silently dead since 1 Aug ~18:00 UTC): after deploy, the poll's
+      stale-claim sweep recovers every claimed-but-unprocessed
+      `graph_mail_events` row (7 at diagnosis, incl. the founder's live
+      test reply 019fc346-8ce3) — verify each row gains `processed_at` +
+      an outcome ending "(recovered by stale sweep)", the reply sits in
+      its Conversation thread, a reply draft follows through settle, and
+      one `inbound.mail_claim_stale` event per orphaned claim stands on
+      The Record. No migration; no manual backlog step.
