@@ -11,6 +11,7 @@ import {
   rejectCommunication,
   withdrawWorkflowDefinition,
   DRAFTING_EVENT_KINDS,
+  SEND_EVENT_KINDS,
 } from "@rooshni/db";
 
 import { getAppContext } from "@/lib/server/context";
@@ -97,6 +98,11 @@ export interface DecisionState {
   /** Session 11: the stamp landed — the card shows its transient
    * "✓ Stamped — on The Record" state before leaving the view. */
   stamped?: boolean;
+  /** Defect-trio hotfix (2 Aug 2026, item 2): the stamp landed INSIDE quiet
+   * hours — the message is held and sends at this instant (ISO). The card
+   * answers the stamp with the hold instead of silence; neutral chrome —
+   * policy, not failure. */
+  heldUntil?: string | null;
 }
 
 /**
@@ -132,11 +138,74 @@ export async function approveAction(
   // quiet hours hold it, and any transient failure leaves it approved for
   // the tick sweep). APPROVED ≠ SENT: a carriage problem never unwinds the
   // approval.
-  await dispatchAfterApproval(communicationId);
+  const dispatchReport = await dispatchAfterApproval(communicationId);
+  // Defect-trio hotfix (2 Aug 2026, item 2): a quiet-hours hold ANSWERS the
+  // stamp instead of meeting it with silence — the dispatch moment comes off
+  // the ROW (scheduled_for, the same truth the tick honours), not recomputed.
+  let heldUntil: string | null = null;
+  if (dispatchReport && dispatchReport.queued_quiet_hours > 0) {
+    const { data: held } = await db
+      .from("communications")
+      .select("scheduled_for")
+      .eq("id", communicationId)
+      .maybeSingle();
+    heldUntil = (held?.scheduled_for as string | null) ?? null;
+  }
   // Session 11 (founder-ruled at the Session 10 close): no redirect — the
   // card shows "✓ Stamped — on The Record" briefly, then the client
   // refreshes and the row leaves the stamps-owed view for History.
-  return { error: null, stamped: true };
+  return { error: null, stamped: true, heldUntil };
+}
+
+export interface SendNowState {
+  error: string | null;
+  sent?: boolean;
+}
+
+/**
+ * Defect-trio hotfix (2 Aug 2026, item 2) — SEND NOW on a quiet-hours hold.
+ * The 0039 door enforces everything structural (human stamp-holder of this
+ * business; an approved row actually held for later; timing only, never
+ * status), the ledger records the human decision with its actor, and the
+ * inline dispatch carries the message immediately — the dispatcher honours
+ * the override marker and will not re-hold it. One act, both faces: the
+ * post-stamp card and the Conversations thread import this same action.
+ */
+export async function sendNowAction(_prev: SendNowState, formData: FormData): Promise<SendNowState> {
+  const communicationId = String(formData.get("communicationId") ?? "");
+  if (!isUuid(communicationId)) return { error: "No communication was selected." };
+
+  const { db, business, actor } = await getAppContext();
+  const { data: comm } = await db
+    .from("communications")
+    .select("id, channel, scheduled_for")
+    .eq("id", communicationId)
+    .eq("business_id", business.id)
+    .maybeSingle();
+  if (!comm) return { error: "That message no longer exists." };
+
+  const { error: rpcError } = await db.rpc("override_quiet_hours_hold", {
+    p_comm: communicationId,
+    p_actor: actor.id,
+  });
+  if (rpcError) return { error: rpcError.message };
+
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: SEND_EVENT_KINDS.communicationQuietHoursOverridden,
+    entity_type: "communication",
+    entity_id: communicationId,
+    payload: {
+      channel: comm.channel,
+      was_held_until: comm.scheduled_for,
+      note: "Send now — the stamp is theirs, the timing now too; recorded, never silent.",
+    },
+  });
+
+  await dispatchAfterApproval(communicationId);
+  revalidatePath("/", "layout");
+  return { error: null, sent: true };
 }
 
 /**

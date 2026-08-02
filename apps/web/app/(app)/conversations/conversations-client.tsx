@@ -32,6 +32,8 @@ import {
   setSettleOverrideAction,
   type ThreadActionState,
 } from "./actions";
+import { sendNowAction, type SendNowState } from "../inbox/actions";
+import { formatSendsAt } from "@/lib/held-until";
 import { DraftStampPanel } from "./draft-stamp-panel";
 
 /*
@@ -116,16 +118,61 @@ function stateChipClass(tone: "gold" | "you" | "done"): string {
  * burst rather than every bubble carrying its own timestamp. */
 const BURST_GAP_MS = 25 * 60 * 1000;
 
+/** Defect-trio hotfix (2 Aug 2026, item 2): the quiet-hours held state —
+ * neutral chrome (policy, not failure: not gold, not red, not green), shown
+ * wherever the message renders until dispatch; Send now for stamp-holders. */
+function HeldByQuietHours({
+  message,
+  viewerCanStamp,
+}: {
+  message: ThreadMessage;
+  viewerCanStamp: boolean;
+}) {
+  const [state, sendNow, sending] = useActionState(sendNowAction, { error: null } as SendNowState);
+  const router = useRouter();
+  useEffect(() => {
+    if (!state.sent) return;
+    const t = window.setTimeout(() => router.refresh(), 800);
+    return () => window.clearTimeout(t);
+  }, [state.sent, router]);
+  return (
+    <div className="mt-1 border-t border-dashed border-rule pt-1">
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[8.5px] tracking-wide text-ink-soft uppercase">
+        <span>
+          ⏸ approved — held by quiet hours · sends{" "}
+          {message.scheduledFor ? formatSendsAt(message.scheduledFor) : "when you open"}
+        </span>
+        {viewerCanStamp && !state.sent ? (
+          <form action={sendNow} className="inline">
+            <input type="hidden" name="communicationId" value={message.id} />
+            <button
+              type="submit"
+              disabled={sending}
+              className="cursor-pointer font-semibold text-accent uppercase hover:underline disabled:opacity-60"
+            >
+              {sending ? "sending…" : "send now"}
+            </button>
+          </form>
+        ) : null}
+        {state.sent ? <span>sent — your recorded call</span> : null}
+      </span>
+      {state.error ? <span className="block text-[11px] text-stamp normal-case">{state.error}</span> : null}
+    </div>
+  );
+}
+
 function Bubble({
   message,
   thread,
   stamp,
   returnTo,
+  viewerCanStamp = false,
 }: {
   message: ThreadMessage;
   thread: { subject: string | null };
   stamp?: ThreadDraftStampData | null;
   returnTo: string;
+  viewerCanStamp?: boolean;
 }) {
   // PR-iii (Session 19): the "as sent" HTML view for dispatched emails.
   const [showSentHtml, setShowSentHtml] = useState(false);
@@ -250,6 +297,15 @@ function Bubble({
         <span className="light-text mt-0.5 block text-right font-mono text-[8.5px] tracking-wide">
           ✦ drafted by Light{message.stampedByName ? ` · stamped by ${message.stampedByName}` : ""}
         </span>
+      ) : null}
+      {/* Defect-trio hotfix (2 Aug 2026, item 2): an approved message the
+          quiet-hours hold is carrying later says so HERE, until dispatch —
+          the state was previously invisible everywhere but The Record. */}
+      {!inbound &&
+      message.status === "approved" &&
+      message.scheduledFor &&
+      new Date(message.scheduledFor).getTime() > Date.now() ? (
+        <HeldByQuietHours message={message} viewerCanStamp={viewerCanStamp} />
       ) : null}
     </div>
   );
@@ -426,6 +482,7 @@ export function ConversationsClient({
   thread,
   explicitThread,
   draftStamps = {},
+  viewerCanStamp = false,
 }: {
   list: ConversationListPage;
   /** The open thread's rail facts + recent tail; null when nothing exists. */
@@ -434,6 +491,10 @@ export function ConversationsClient({
    * shows (and reads) the thread; desktop auto-opens the newest. */
   explicitThread: boolean;
   draftStamps?: Record<string, ThreadDraftStampData>;
+  /** Defect-trio hotfix (2 Aug 2026, item 2): stamp authority gates the
+   * Send now control on held messages (decision 116 — no control that
+   * cannot act; the 0039 door re-enforces regardless). */
+  viewerCanStamp?: boolean;
 }) {
   const router = useRouter();
   const view = useSyncExternalStore(subscribeConvView, readConvViewDefault, () => "standard" as const);
@@ -827,6 +888,7 @@ export function ConversationsClient({
                                 item.m.isPendingDraft ? (draftStamps[item.m.id] ?? null) : null
                               }
                               returnTo={returnTo}
+                              viewerCanStamp={viewerCanStamp}
                             />
                           )
                         )}

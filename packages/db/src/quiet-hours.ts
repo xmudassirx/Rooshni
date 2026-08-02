@@ -40,6 +40,51 @@ function isHHMM(value: unknown): value is string {
   return typeof value === "string" && /^\d{2}:\d{2}$/.test(value);
 }
 
+/*
+ * Business hours — the defect-trio hotfix (2 Aug 2026, item 3). The firm
+ * SETS its business hours (a simple daily send window, open→close, in the
+ * business's timezone); the quiet-hours hold is that window's complement.
+ * ONE SOURCE: businesses.settings.quiet_hours remains the stored truth the
+ * hold has always read — the send window is a PRESENTATION of it, and the
+ * two conversions below are exact inverses so the Settings editor, the
+ * "sends [time]" display and the dispatch_at calculation can never disagree.
+ */
+
+/** A firm's daily send window, local wall-clock "HH:MM" — open is when held
+ * sends dispatch (= quiet end), close is when sends stop (= quiet start). */
+export interface SendWindow {
+  open: string;
+  close: string;
+}
+
+export function sendWindowFromQuietHours(quiet: QuietHours): SendWindow {
+  return { open: quiet.end, close: quiet.start };
+}
+
+export function quietHoursFromSendWindow(window: SendWindow): QuietHours {
+  return { start: window.close, end: window.open };
+}
+
+/** Is settings.quiet_hours a firm-set value (vs the honest default)? The
+ * Settings surface says "default — not yet set by you" until this is true;
+ * null (holds disabled, founder wiring) also counts as deliberately set. */
+export function isQuietHoursSet(settings: Record<string, unknown> | null | undefined): boolean {
+  const raw = settings?.quiet_hours;
+  if (raw === null) return true;
+  if (raw && typeof raw === "object") {
+    const candidate = raw as Partial<QuietHours>;
+    return isHHMM(candidate.start) && isHHMM(candidate.end);
+  }
+  return false;
+}
+
+/** The Settings display string for a send window — also the derived
+ * settings.business_hours value the setter writes (single writer; the
+ * structured window stays the one truth). */
+export function describeSendWindow(window: SendWindow, timezone: string): string {
+  return `${window.open}–${window.close} · ${timezone}`;
+}
+
 function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return (h ?? 0) * 60 + (m ?? 0);

@@ -5,7 +5,16 @@ import { PGlite } from "@electric-sql/pglite";
 import { scaleDurationMs } from "@rooshni/config";
 import { verifyStripeSignature } from "../src/stripe";
 import { verifyMetaSignature } from "../src/meta";
-import { quietHoursHoldUntil, QUIET_HOURS_DEFAULT } from "../src/quiet-hours";
+import {
+  describeSendWindow,
+  isQuietHoursSet,
+  quietHoursFromSendWindow,
+  quietHoursHoldUntil,
+  resolveQuietHours,
+  sendWindowFromQuietHours,
+  QUIET_HOURS_DEFAULT,
+} from "../src/quiet-hours";
+import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
@@ -4567,8 +4576,225 @@ async function main() {
     }
   });
 
+  // Defect trio (2 Aug 2026, founder-observed) — right behaviour, invisible
+  // or unconfigurable: the live inbox's silent-death class, quiet-hours
+  // legibility + the SEND NOW override (0039), and business hours going real
+  // as the ONE config display and enforcement both read.
+  console.log("\nDefect trio — live inbox, quiet-hours legibility, business hours (2 Aug 2026):");
+
+  await expectOk("the live inbox rings for a draft ENTERING pending and for inbound arrivals — and only those", async () => {
+    // The defect's exact row shape: Realtime's old record carries only the
+    // PK (REPLICA IDENTITY default), so prev.status is absent — the arrival
+    // must still ring.
+    if (!classifyCommChange("UPDATE", { status: "pending_approval" }, {}).tone) {
+      throw new Error("a draft entering pending with a PK-only old record did not ring — the badge defect's shape");
+    }
+    if (!classifyCommChange("INSERT", { status: "pending_approval", direction: "outbound" }, null).tone) {
+      throw new Error("a draft born pending did not ring");
+    }
+    if (!classifyCommChange("INSERT", { direction: "inbound" }, null).tone) {
+      throw new Error("an inbound arrival did not ring (WS1c)");
+    }
+    if (classifyCommChange("UPDATE", { status: "pending_approval" }, { status: "pending_approval" }).tone) {
+      throw new Error("an edit to an already-pending draft rang — edits are not arrivals");
+    }
+    if (classifyCommChange("UPDATE", { status: "sent", direction: "outbound" }, {}).tone) {
+      throw new Error("a decision rang the doorbell");
+    }
+  });
+
+  await expectOk("a dead channel is rejoined, never trusted — and the component keeps auth on the socket", async () => {
+    for (const dead of ["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"]) {
+      if (!shouldRejoin(dead)) throw new Error(`${dead} did not demand a rejoin`);
+    }
+    if (shouldRejoin("SUBSCRIBED")) throw new Error("a healthy channel was torn down");
+    if (rejoinDelayMs(0) !== 1000 || rejoinDelayMs(10) !== 30_000) {
+      throw new Error("the rejoin backoff lost its shape (1s start, 30s cap)");
+    }
+    // File tripwire (the live-inbox smoke, founder-ordered): the lifecycle
+    // legs stay standing — auth on the socket BEFORE the join, the join
+    // status WATCHED with the rejoin rules, a reconciling refresh on
+    // (re)join and on returning to the tab, fresh tokens re-armed.
+    const source = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/components/shell/live-inbox.tsx"),
+      "utf8"
+    );
+    for (const marker of [
+      "db.realtime.setAuth",
+      ".subscribe((status)",
+      "shouldRejoin(status)",
+      "classifyCommChange(",
+      "onAuthStateChange",
+      "visibilitychange",
+    ]) {
+      if (!source.includes(marker)) throw new Error(`live-inbox.tsx lost its lifecycle leg: ${marker}`);
+    }
+  });
+
+  await expectOk("business hours are ONE source — the editor's save, the hold and the display cannot disagree", async () => {
+    // The editor saves a send window; the hold reads settings.quiet_hours.
+    // Round-trip both conversions and then prove the hold against the saved
+    // shape — display and dispatch_at derive from the same config.
+    const window = { open: "09:00", close: "17:30" };
+    const quiet = quietHoursFromSendWindow(window);
+    if (quiet.start !== "17:30" || quiet.end !== "09:00") throw new Error("save mapped the window wrongly");
+    const back = sendWindowFromQuietHours(quiet);
+    if (back.open !== window.open || back.close !== window.close) {
+      throw new Error("the conversions are not inverses — display could drift from enforcement");
+    }
+    const saved = { quiet_hours: quiet } as Record<string, unknown>;
+    const resolved = resolveQuietHours(saved);
+    if (!resolved || resolved.start !== "17:30") throw new Error("the hold does not read the saved config");
+    // 22:00 London is inside the held window; dispatch at 09:00 next day.
+    const held = quietHoursHoldUntil(new Date("2026-08-02T21:00:00.000Z"), "Europe/London", resolved);
+    if (!held) throw new Error("a 22:00 stamp was not held by the saved hours");
+    if (minutesOfDayInLondon(held) !== 9 * 60) {
+      throw new Error(`held dispatch is not the window's open — got ${held.toISOString()}`);
+    }
+    if (describeSendWindow(window, "Europe/London") !== "09:00–17:30 · Europe/London") {
+      throw new Error("the derived business_hours display string changed shape");
+    }
+  });
+
+  await expectOk("the default window is stated as a default — 'not yet set by you' until the firm sets it", async () => {
+    if (isQuietHoursSet(undefined) || isQuietHoursSet({}) || isQuietHoursSet({ quiet_hours: "20:00" })) {
+      throw new Error("an unset or malformed config read as firm-set");
+    }
+    if (!isQuietHoursSet({ quiet_hours: { start: "20:00", end: "08:00" } })) {
+      throw new Error("a firm-set window read as default");
+    }
+    if (!isQuietHoursSet({ quiet_hours: null })) {
+      throw new Error("a deliberate disable read as 'not yet set'");
+    }
+    const fallback = resolveQuietHours({});
+    if (fallback?.start !== QUIET_HOURS_DEFAULT.start || fallback?.end !== QUIET_HOURS_DEFAULT.end) {
+      throw new Error("the unset fallback is no longer the shipped default");
+    }
+  });
+
+  // --- 0039: the quiet-hours SEND NOW override -----------------------------
+  const trioContact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name, status)
+     values ($1, $2, 'person', 'Held Client', 'active') returning id`,
+    [activation!.business_id, activation!.owner_actor_id]
+  );
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'held@client.test', true, '{"transactional": true}'::jsonb)`,
+    [activation!.business_id, activation!.owner_actor_id, trioContact.rows[0]!.id]
+  );
+  const trioHeldComm = async (): Promise<string> => {
+    // A HUMAN-authored draft (compliance-exempt, decision 21), submitted and
+    // stamped through the real doors, then held as the dispatcher holds it.
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'email') returning id`,
+      [activation!.business_id, activation!.owner_actor_id, trioContact.rows[0]!.id]
+    );
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body)
+       values ($1, $2, $3, $4, 'email', 'outbound', 'draft', 'A perfectly good answer, stamped at night.') returning id`,
+      [activation!.business_id, activation!.owner_actor_id, t.rows[0]!.id, trioContact.rows[0]!.id]
+    );
+    await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.owner_actor_id]);
+    await db.query(`select public.approve_communication($1, $2)`, [r.rows[0]!.id, activation!.owner_actor_id]);
+    await db.query(`update public.communications set scheduled_for = now() + interval '9 hours' where id = $1`, [
+      r.rows[0]!.id,
+    ]);
+    return r.rows[0]!.id;
+  };
+
+  await expectError(
+    "the SEND NOW override is a HUMAN act — an agent actor is refused by the database",
+    /HUMAN act/,
+    async () => {
+      const id = await trioHeldComm();
+      await db.query(`select public.override_quiet_hours_hold($1, $2)`, [id, activation!.light_actor_id]);
+    }
+  );
+
+  await expectError(
+    "a human WITHOUT stamp authority cannot send now — approvals.comms (execute) or the owner, nobody else",
+    /approvals\.comms/,
+    async () => {
+      const account = await db.query<{ account_id: string }>(
+        `select account_id from public.businesses where id = $1`,
+        [activation!.business_id]
+      );
+      const bystander = await db.query<{ id: string }>(
+        `insert into public.actors (account_id, actor_type, display_name)
+         values ($1, 'human', 'Ungranted Human') returning id`,
+        [account.rows[0]!.account_id]
+      );
+      const id = await trioHeldComm();
+      await db.query(`select public.override_quiet_hours_hold($1, $2)`, [id, bystander.rows[0]!.id]);
+    }
+  );
+
+  await expectError(
+    "only a message actually HELD for later can be sent now — an unheld approved row is refused",
+    /not held/,
+    async () => {
+      const id = await trioHeldComm();
+      await db.query(`update public.communications set scheduled_for = null where id = $1`, [id]);
+      await db.query(`select public.override_quiet_hours_hold($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectOk("the owner's SEND NOW collapses the hold: scheduled_for rewinds, the row carries who and when, status untouched", async () => {
+    const id = await trioHeldComm();
+    await db.query(`select public.override_quiet_hours_hold($1, $2)`, [id, activation!.owner_actor_id]);
+    const after = await db.query<{
+      status: string;
+      due: boolean;
+      by: string | null;
+    }>(
+      `select status, (scheduled_for <= now()) as due,
+              attributes -> 'quiet_hours_override' ->> 'by_actor_id' as by
+       from public.communications where id = $1`,
+      [id]
+    );
+    if (after.rows[0]!.status !== "approved") throw new Error("the override touched STATUS — timing only is the law");
+    if (!after.rows[0]!.due) throw new Error("scheduled_for did not rewind — the row is still held");
+    if (after.rows[0]!.by !== activation!.owner_actor_id) {
+      throw new Error("the row does not carry who collapsed the hold");
+    }
+    // A second SEND NOW finds nothing held — the door refuses, idempotently.
+    let refused = false;
+    try {
+      await db.query(`select public.override_quiet_hours_hold($1, $2)`, [id, activation!.owner_actor_id]);
+    } catch (err) {
+      refused = /not held/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!refused) throw new Error("a second override on an already-collapsed hold was not refused");
+    // File tripwires: the dispatcher honours the marker (never re-holds an
+    // overridden row), and the ledger kind exists in the declared vocabulary.
+    const sendSource = readFileSync(resolve(import.meta.dirname, "../src/send.ts"), "utf8");
+    if (!sendSource.includes("quiet_hours_override")) {
+      throw new Error("the dispatcher no longer honours the override marker — it would re-hold a recorded human decision");
+    }
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    if (!kinds.includes(`"communication.quiet_hours_overridden"`)) {
+      throw new Error("the override's ledger kind left the declared vocabulary");
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed.`);
   process.exit(failed > 0 ? 1 : 0);
+}
+
+/** Minutes past local midnight in Europe/London for an instant — the trio
+ * smoke's window assertion helper. */
+function minutesOfDayInLondon(at: Date): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(at);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return hour * 60 + minute;
 }
 
 main().catch((err) => {

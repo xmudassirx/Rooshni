@@ -1,6 +1,9 @@
+import { isQuietHoursSet, resolveQuietHours, sendWindowFromQuietHours } from "@rooshni/db";
+
 import { HonestButton } from "@/components/ui/honest-button";
 import { getAppContext } from "@/lib/server/context";
 import { getBusinessConfig, getTemplateContent } from "@/lib/server/queries";
+import { BusinessHoursControl } from "./business-hours-control";
 import { DraftingSettings } from "./drafting-settings";
 
 /*
@@ -24,7 +27,7 @@ function Row({
   action,
 }: {
   k: string;
-  v: string;
+  v: React.ReactNode;
   small?: string;
   action?: React.ReactNode;
 }) {
@@ -56,6 +59,7 @@ export async function GeneralTab() {
     getAppContext(),
   ]);
   const s = config.settings;
+  const quiet = resolveQuietHours(s);
 
   const edit = (
     <HonestButton size="sm" variant="ghost" notice={EDIT_NOTICE}>
@@ -95,17 +99,33 @@ export async function GeneralTab() {
           small="Light drafts in the client's language where consented channels support it. Arrives with the settings session."
           action={edit}
         />
+        {/* Defect-trio hotfix (2 Aug 2026, item 3): business hours go real —
+            this control edits settings.quiet_hours, THE config the dispatch
+            hold reads, and the quiet-hours row below renders from the SAME
+            resolver, so display and enforcement cannot disagree. */}
         <Row
           k="Business hours"
-          v={str(s, "business_hours") ?? "Not set"}
-          small={str(s, "business_hours") ? undefined : "Arrives with the settings session"}
-          action={edit}
+          v={
+            <BusinessHoursControl
+              value={{
+                open: quiet ? sendWindowFromQuietHours(quiet).open : "00:00",
+                close: quiet ? sendWindowFromQuietHours(quiet).close : "00:00",
+                timezone: config.timezone,
+                isSet: isQuietHoursSet(s),
+                disabled: quiet === null,
+                isOwner: membershipRole === "owner",
+              }}
+            />
+          }
         />
         <Row
           k="Quiet hours"
-          v={str(s, "quiet_hours") ?? "Not set"}
-          small="Stamped messages that hit quiet hours queue and dispatch when they end — the stamp is yours, the timing is policy. Arrives with the send session."
-          action={edit}
+          v={
+            quiet
+              ? `${quiet.start}–${quiet.end} · outside the business hours above`
+              : "Off — stamped messages send at any hour (founder wiring)"
+          }
+          small="Stamped messages inside quiet hours queue and dispatch when you open — the stamp is yours, the timing is policy, and a held message can be sent now from its thread. One config: this line and the hold read the same source."
         />
       </div>
       <div className="glass rounded-xl px-4 py-1.5">

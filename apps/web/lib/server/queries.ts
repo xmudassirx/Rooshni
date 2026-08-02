@@ -385,6 +385,26 @@ export async function getOpenTaskCount(): Promise<number> {
   return count ?? 0;
 }
 
+/** Defect-trio hotfix (2 Aug 2026, item 2): does the signed-in viewer hold
+ * stamp authority (owner, or approvals.comms execute — the decision 18
+ * principle)? Renders the Send now control on held messages; decision 116:
+ * no control that cannot act. The 0039 door re-enforces regardless. */
+export async function getViewerStampAuthority(): Promise<boolean> {
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole === "owner") return true;
+  const { data: grants } = await db
+    .from("grants")
+    .select("id")
+    .eq("business_id", business.id)
+    .eq("grantee_actor_id", actor.id)
+    .eq("tool", "approvals.comms")
+    .eq("access", "execute")
+    .is("revoked_at", null)
+    .is("archived_at", null)
+    .limit(1);
+  return Boolean(grants?.length);
+}
+
 export async function getInboxCount(): Promise<number> {
   const { db, business } = await getAppContext();
   const { count, error } = await db

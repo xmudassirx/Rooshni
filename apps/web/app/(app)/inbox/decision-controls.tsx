@@ -16,7 +16,14 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { approveAction, rejectAction, type DecisionState } from "./actions";
+import {
+  approveAction,
+  rejectAction,
+  sendNowAction,
+  type DecisionState,
+  type SendNowState,
+} from "./actions";
+import { formatSendsAt } from "@/lib/held-until";
 import { STANDING_REASON } from "./standing-reason";
 
 const initialState: DecisionState = { error: null };
@@ -39,6 +46,9 @@ export function DecisionControls({
   returnTo?: string;
 }) {
   const [approveState, approve, approving] = useActionState(approveAction, initialState);
+  const [sendNowState, sendNow, sendingNow] = useActionState(sendNowAction, {
+    error: null,
+  } as SendNowState);
   const [rejectState, reject, rejecting] = useActionState(rejectAction, initialState);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -46,18 +56,58 @@ export function DecisionControls({
 
   // Session 11 (founder-ruled): a stamped row never disappears instantly —
   // it shows its transient state, then leaves for History on the refresh.
+  // Defect-trio hotfix (2 Aug 2026, item 2): a HELD stamp does not auto-leave
+  // — the hold must be read, and Send now must be reachable, before the card
+  // departs; the refresh is the reader's own act then.
   useEffect(() => {
-    if (!approveState.stamped) return;
+    if (!approveState.stamped || approveState.heldUntil) return;
     const t = window.setTimeout(() => router.refresh(), 2200);
     return () => window.clearTimeout(t);
-  }, [approveState.stamped, router]);
+  }, [approveState.stamped, approveState.heldUntil, router]);
+
+  useEffect(() => {
+    if (!sendNowState.sent) return;
+    const t = window.setTimeout(() => router.refresh(), 1600);
+    return () => window.clearTimeout(t);
+  }, [sendNowState.sent, router]);
+
+  if (approveState.stamped && approveState.heldUntil && !sendNowState.sent) {
+    // Neutral chrome, deliberately: the hold is POLICY working as configured
+    // — not gold (Light did nothing here), not red (nothing is owed), not
+    // green (nothing has sent).
+    return (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rule bg-paper-deep px-3 py-2 text-[13px] text-ink">
+        <Check className="size-4" strokeWidth={3} />
+        <span className="font-semibold">Approved — held by quiet hours</span>
+        <span className="font-mono text-[10px] tracking-wide uppercase opacity-80">
+          sends {formatSendsAt(approveState.heldUntil)} · your stamp, the timing is policy
+        </span>
+        <form action={sendNow}>
+          <input type="hidden" name="communicationId" value={communicationId} />
+          <Button size="sm" variant="ghost" disabled={sendingNow}>
+            {sendingNow ? "Sending…" : "Send now"}
+          </Button>
+        </form>
+        <button
+          type="button"
+          onClick={() => router.refresh()}
+          className="cursor-pointer font-mono text-[9.5px] tracking-wide text-ink-faint uppercase hover:underline"
+        >
+          keep the hold
+        </button>
+        {sendNowState.error ? (
+          <span className="w-full text-[12px] text-stamp">{sendNowState.error}</span>
+        ) : null}
+      </div>
+    );
+  }
 
   if (approveState.stamped) {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-ledger/40 bg-ledger/10 px-3 py-2 text-[13px] font-semibold text-ledger">
         <Check className="size-4" strokeWidth={3} /> Stamped — on The Record
         <span className="font-mono text-[10px] font-normal tracking-wide uppercase opacity-80">
-          dispatching now · find it again under History
+          {sendNowState.sent ? "sent now — your recorded call" : "dispatching now · find it again under History"}
         </span>
       </div>
     );

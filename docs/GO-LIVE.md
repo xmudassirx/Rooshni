@@ -412,3 +412,10 @@ Add to this list during build; check items off only at go-live.
       its Conversation thread, a reply draft follows through settle, and
       one `inbound.mail_claim_stale` event per orphaned claim stands on
       The Record. No migration; no manual backlog step.
+- [ ] **Apply migration 0039 (`override_quiet_hours_hold`) before merging
+      `ui/defect-trio-quiet-hours`** (introduced defect-trio hotfix, 2 Aug
+      2026): the Send now control on held messages calls this door; until
+      the apply, the button returns the database's "function does not
+      exist" error visibly. check-local green at 308 including the door's
+      four refusal/permit smokes. No data touched — one security-definer
+      function + its grant.
