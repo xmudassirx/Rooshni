@@ -52,6 +52,7 @@ import {
   classifyMetaSpendError,
   MAX_CONVERSION_ATTEMPTS,
   resolveConversionsConfig,
+  resolveRuledMoves,
   selectConversionCandidates,
   sha256Hex,
 } from "../src/conversions";
@@ -4261,6 +4262,137 @@ async function main() {
     if (formatMeteredGbp(0.0004) !== "£0.0004") throw new Error(`0.0004 → ${formatMeteredGbp(0.0004)}`);
     if (formatMeteredGbp(12.5) !== "£12.50") throw new Error(`12.5 → ${formatMeteredGbp(12.5)}`);
     if (formatMeteredGbp(150) !== "£150") throw new Error(`150 → ${formatMeteredGbp(150)}`);
+  });
+
+  // Session 23 (WS4d) — task cancellation: terminal in the database, and the
+  // request lands in the approval_inbox as its own arm.
+  console.log("\nSession 23 — task cancellation (WS4d):");
+
+  const cancelTask = await db.query<{ id: string }>(
+    `insert into public.tasks (business_id, created_by, assignee_actor_id, title, status)
+     values ($1, $2, $2, 'Cancellation smoke task', 'open') returning id`,
+    [f.business_id, f.human_id]
+  );
+  const cancelTaskId = cancelTask.rows[0]!.id;
+
+  await expectOk("a cancellation request surfaces in the approval_inbox as its own arm, dated by the request", async () => {
+    await db.query(
+      `update public.tasks
+          set attributes = attributes || '{"cancellation_request": {"requested_by": "${f.human_id}", "requested_at": "2026-08-02T09:00:00Z", "reason": "no longer needed"}}'::jsonb
+        where id = $1`,
+      [cancelTaskId]
+    );
+    const rows = await db.query<{ item_type: string; preview: string; awaiting_since: string }>(
+      `select item_type, preview, awaiting_since from public.approval_inbox where item_id = $1 and item_type = 'task_cancellation'`,
+      [cancelTaskId]
+    );
+    if (rows.rows.length !== 1) throw new Error("the request did not surface as task_cancellation");
+    if (rows.rows[0]!.preview !== "no longer needed") throw new Error("the preview must carry the stated reason");
+    if (!new Date(rows.rows[0]!.awaiting_since).toISOString().startsWith("2026-08-02")) {
+      throw new Error("awaiting_since must be the request's own clock");
+    }
+  });
+
+  await expectError(
+    "a cancelled task is terminal — no write path may reopen it (0037)",
+    /terminal|cannot leave/i,
+    async () => {
+      await db.query(`update public.tasks set status = 'cancelled' where id = $1`, [cancelTaskId]);
+      await db.query(`update public.tasks set status = 'open' where id = $1`, [cancelTaskId]);
+    }
+  );
+
+  await expectOk("a closed task's stale request never haunts the inbox — the arm reads live tasks only", async () => {
+    const rows = await db.query(
+      `select 1 from public.approval_inbox where item_id = $1 and item_type = 'task_cancellation'`,
+      [cancelTaskId]
+    );
+    if (rows.rows.length !== 0) {
+      throw new Error("a cancelled task's request still shows as a stamp owed");
+    }
+  });
+
+  // Session 23 — PRIORITY FIX (founder-ordered, blocks the s22 DoD (1)):
+  // the conversions stage lookup filtered stage_definitions by a business_id
+  // column that DOES NOT EXIST — and the s22 smoke never caught it because
+  // its fixture built a convenient world. These smokes ground the resolution
+  // in the schema's real shape: stages seeded exactly as the v3 installer
+  // writes them (engagement_type-scoped, sort_order), read with the sweep's
+  // own column list, resolved through the engagement's type.
+  console.log("\nSession 23 — the conversions stage resolution (priority fix):");
+
+  await expectOk("the ruled mapping resolves against a v3-installer-shaped seed — engagement_type-scoped stages, sort_order and all", async () => {
+    // Seed EXACTLY the installer's shape (0003 schema: engagement_type_id,
+    // key, label, sort_order; no business_id column exists to lean on).
+    const seeded = await db.query<{ id: string; key: string }>(
+      `insert into public.stage_definitions (engagement_type_id, key, label, sort_order)
+       values ($1, 'consultation_booked', 'Consultation booked', 50),
+              ($1, 'instructed', 'Instructed', 60)
+       returning id, key`,
+      [f.type_id]
+    );
+    const idByKey = new Map(seeded.rows.map((s) => [s.key, s.id]));
+
+    // Read back with the sweep's OWN column list and filters.
+    const stageRows = await db.query<{ id: string; key: string; engagement_type_id: string }>(
+      `select id, key, engagement_type_id from public.stage_definitions
+        where key in ('consultation_booked', 'instructed') and archived_at is null`
+    );
+    const moves = resolveRuledMoves({
+      stageRows: stageRows.rows,
+      engagementTypes: new Map([["eng-a", f.type_id]]),
+      history: [
+        { id: "sh-a", engagement_id: "eng-a", to_stage: idByKey.get("consultation_booked")!, moved_at: "2026-08-02T10:00:00Z" },
+        { id: "sh-b", engagement_id: "eng-a", to_stage: idByKey.get("instructed")!, moved_at: "2026-08-02T11:00:00Z" },
+      ],
+    });
+    const keys = moves.map((m) => `${m.stage_history_id}:${m.to_stage_key}`).sort().join(",");
+    if (keys !== "sh-a:consultation_booked,sh-b:instructed") {
+      throw new Error(`resolution against the real shape failed — got ${keys || "nothing"}`);
+    }
+  });
+
+  await expectOk("a same-key stage on ANOTHER engagement type never resolves for this engagement (type isolation)", async () => {
+    const otherType = await db.query<{ id: string }>(
+      `insert into public.engagement_types (template_id, key, label)
+       values ($1, 'matter_smoke', 'Matter (smoke)') returning id`,
+      [f.template_id]
+    );
+    const foreignStage = await db.query<{ id: string }>(
+      `insert into public.stage_definitions (engagement_type_id, key, label, sort_order)
+       values ($1, 'consultation_booked', 'Consultation booked', 50) returning id`,
+      [otherType.rows[0]!.id]
+    );
+    const stageRows = await db.query<{ id: string; key: string; engagement_type_id: string }>(
+      `select id, key, engagement_type_id from public.stage_definitions
+        where key in ('consultation_booked', 'instructed') and archived_at is null`
+    );
+    const moves = resolveRuledMoves({
+      stageRows: stageRows.rows,
+      engagementTypes: new Map([["eng-a", f.type_id]]),
+      history: [
+        { id: "sh-x", engagement_id: "eng-a", to_stage: foreignStage.rows[0]!.id, moved_at: "2026-08-02T12:00:00Z" },
+      ],
+    });
+    if (moves.length !== 0) {
+      throw new Error("a foreign type's stage resolved — the engagement's own type must decide");
+    }
+  });
+
+  await expectOk("no stage_definitions read anywhere pairs with a business_id filter — the phantom column is fenced off", async () => {
+    // File tripwire (the founder's 'fixtures mirror the installer's real
+    // shapes' order made structural): the wrong lookup cannot quietly return.
+    for (const file of ["../src/conversions.ts", "../scripts/circuit-conversion.ts"]) {
+      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
+      let at = source.indexOf(`from("stage_definitions")`);
+      while (at >= 0) {
+        const slice = source.slice(at, at + 320);
+        if (slice.includes(`.eq("business_id"`)) {
+          throw new Error(`${file}: a stage_definitions read filters by business_id — the column does not exist`);
+        }
+        at = source.indexOf(`from("stage_definitions")`, at + 1);
+      }
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

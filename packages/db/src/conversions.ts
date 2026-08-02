@@ -137,6 +137,45 @@ export interface StageMoveFact {
   moved_at: string;
 }
 
+/** One stage_definitions row as the ground truth actually shapes it
+ * (Session 23 priority fix, founder-ordered): scoped by ENGAGEMENT_TYPE_ID —
+ * there is no business_id and no template_id on the table. */
+export interface RuledStageRow {
+  id: string;
+  key: string;
+  engagement_type_id: string;
+}
+
+/**
+ * Session 23 (priority fix): resolve stage-history moves against the REAL
+ * stage shape — the landed stage's key via the row the FK names, accepted
+ * only when that stage row belongs to the ENGAGEMENT'S OWN engagement type
+ * (engagements.template_type_id), exactly as the founder's fix prescribes.
+ * Pure, so the harness proves it against a v3-installer-shaped seed rather
+ * than a fixture that builds a convenient world.
+ */
+export function resolveRuledMoves(input: {
+  stageRows: RuledStageRow[];
+  /** engagement_id → template_type_id, read from the engagements. */
+  engagementTypes: Map<string, string>;
+  history: { id: string; engagement_id: string; to_stage: string; moved_at: string }[];
+}): StageMoveFact[] {
+  const stageById = new Map(input.stageRows.map((s) => [s.id, s]));
+  return input.history.flatMap((h) => {
+    const stage = stageById.get(h.to_stage);
+    if (!stage) return [];
+    if (input.engagementTypes.get(h.engagement_id) !== stage.engagement_type_id) return [];
+    return [
+      {
+        stage_history_id: h.id,
+        engagement_id: h.engagement_id,
+        to_stage_key: stage.key,
+        moved_at: h.moved_at,
+      },
+    ];
+  });
+}
+
 export interface EngagementConversionFacts {
   engagement_id: string;
   /** attribution.source — only "meta" engagements convert (1e). */
@@ -587,20 +626,31 @@ export async function sweepConversions(
     return report;
   }
 
+  // Session 23 (priority fix, founder-ordered): stage_definitions is scoped
+  // by ENGAGEMENT_TYPE_ID — the old business_id filter matched a column that
+  // does not exist and resolved nothing on live. The ruled stage rows are
+  // read by KEY (the platform vocabulary), the history stays business-scoped
+  // by its own envelope, and each move is accepted only when the landed
+  // stage belongs to the engagement's own type (resolveRuledMoves).
+  let stages: RuledStageRow[];
+  try {
+    stages = await q<RuledStageRow[]>(
+      db
+        .from("stage_definitions")
+        .select("id, key, engagement_type_id")
+        .in("key", Object.keys(CONVERSION_STAGE_EVENTS))
+        .is("archived_at", null),
+      "ruled stage lookup"
+    );
+  } catch (err) {
+    report.errors.push(err instanceof Error ? err.message : String(err));
+    return report;
+  }
+
   for (const business of businesses) {
     report.businesses_scanned += 1;
     try {
-      const stages = await q<{ id: string; key: string }[]>(
-        db
-          .from("stage_definitions")
-          .select("id, key")
-          .eq("business_id", business.id)
-          .in("key", Object.keys(CONVERSION_STAGE_EVENTS))
-          .is("archived_at", null),
-        "ruled stage lookup"
-      );
       if (stages.length === 0) continue;
-      const keyOf = new Map(stages.map((s) => [s.id, s.key]));
 
       const since = new Date(now.getTime() - CONVERSION_LOOKBACK_MS).toISOString();
       const history = await q<{ id: string; engagement_id: string; to_stage: string; moved_at: string }[]>(
@@ -614,12 +664,17 @@ export async function sweepConversions(
           .limit(200),
         "stage history scan"
       );
-      const moves: StageMoveFact[] = history.map((h) => ({
-        stage_history_id: h.id,
-        engagement_id: h.engagement_id,
-        to_stage_key: keyOf.get(h.to_stage) ?? "",
-        moved_at: h.moved_at,
-      }));
+      if (history.length === 0) continue;
+      const engagementIds = [...new Set(history.map((h) => h.engagement_id))];
+      const engagements = await q<{ id: string; template_type_id: string }[]>(
+        db.from("engagements").select("id, template_type_id").in("id", engagementIds),
+        "engagement type lookup"
+      );
+      const moves = resolveRuledMoves({
+        stageRows: stages,
+        engagementTypes: new Map(engagements.map((e) => [e.id, e.template_type_id])),
+        history,
+      });
       await fireOwedConversions(db, business, moves, options, report);
     } catch (err) {
       report.errors.push(`business ${business.id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -679,16 +734,28 @@ export async function fireEngagementConversions(
     workflow_actor_id: actors[0]!.id,
   };
 
-  const stages = await q<{ id: string; key: string }[]>(
+  // Session 23 (priority fix): the ruled stages resolve via THE ENGAGEMENT'S
+  // OWN engagement type (engagements.template_type_id → stage_definitions) —
+  // the table carries no business_id (ground truth from production SQL).
+  const engRows = await q<{ id: string; template_type_id: string }[]>(
+    db
+      .from("engagements")
+      .select("id, template_type_id")
+      .eq("id", input.engagement_id)
+      .eq("business_id", input.business_id)
+      .limit(1),
+    "engagement lookup"
+  );
+  if (!engRows[0]) throw new Error(`Engagement ${input.engagement_id} not found`);
+  const stages = await q<RuledStageRow[]>(
     db
       .from("stage_definitions")
-      .select("id, key")
-      .eq("business_id", business.id)
+      .select("id, key, engagement_type_id")
+      .eq("engagement_type_id", engRows[0].template_type_id)
       .in("key", Object.keys(CONVERSION_STAGE_EVENTS))
       .is("archived_at", null),
     "ruled stage lookup"
   );
-  const keyOf = new Map(stages.map((s) => [s.id, s.key]));
   const history = stages.length
     ? await q<{ id: string; engagement_id: string; to_stage: string; moved_at: string }[]>(
         db
@@ -701,12 +768,11 @@ export async function fireEngagementConversions(
         "stage history lookup"
       )
     : [];
-  const moves: StageMoveFact[] = history.map((h) => ({
-    stage_history_id: h.id,
-    engagement_id: h.engagement_id,
-    to_stage_key: keyOf.get(h.to_stage) ?? "",
-    moved_at: h.moved_at,
-  }));
+  const moves = resolveRuledMoves({
+    stageRows: stages,
+    engagementTypes: new Map([[engRows[0].id, engRows[0].template_type_id]]),
+    history,
+  });
   await fireOwedConversions(db, business, moves, { fetchFn: input.fetchFn, env: input.env, now: input.now }, report);
   return {
     enabled: true,
