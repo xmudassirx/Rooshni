@@ -77,6 +77,27 @@ export function monthWindowUtc(now: Date): { start: string; end: string } {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+/**
+ * Session 23 (WS1d, founder-ruled): display precision that can EXPLAIN a
+ * sub-penny position. The cap comparison itself always runs on RAW metered
+ * amounts (evaluateAiBudget/guardGenerationBudget above — never on rounded
+ * display values); this formatter exists so the display cannot contradict
+ * the comparison: an amount under 1p shows 3 decimal places (falling back to
+ * its first significant digits when even 3dp would read as zero), so a
+ * £0.01 cap sitting beside £0.006 of spend is explicable at a glance rather
+ * than rendering as "£0.01 of £0.01" while nothing has crossed.
+ */
+export function formatMeteredGbp(amount: number): string {
+  if (!Number.isFinite(amount)) return "£0.00";
+  const abs = Math.abs(amount);
+  if (abs > 0 && abs < 0.01) {
+    const threeDp = amount.toFixed(3);
+    if (Number(threeDp) !== 0) return `£${threeDp}`;
+    return `£${amount.toFixed(6).replace(/0+$/, "")}`;
+  }
+  return `£${amount.toFixed(abs >= 100 ? 0 : 2)}`;
+}
+
 /** A priced line's GBP amount, or null for a pre-s22 (unpriced) cost block —
  * an old line is shown as tokens, never retro-priced. */
 export function pricedAmountGbp(cost: Record<string, unknown> | null | undefined): number | null {

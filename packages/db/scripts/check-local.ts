@@ -45,18 +45,20 @@ import {
 import { whatsAppInboundConsent } from "../src/inbound";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
 import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
-import { rankGuideCandidates, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
+import { rankGuideCandidates, storageSlug, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
 import {
   buildConversionPayload,
   buildConversionUserData,
   classifyMetaSpendError,
   MAX_CONVERSION_ATTEMPTS,
   resolveConversionsConfig,
+  resolveRuledMoves,
   selectConversionCandidates,
   sha256Hex,
 } from "../src/conversions";
 import {
   evaluateAiBudget,
+  formatMeteredGbp,
   guardGenerationBudget,
   pricedAmountGbp,
   resolveAiBudget,
@@ -4152,6 +4154,366 @@ async function main() {
       if (!body.includes(`count: "exact", head: true`)) {
         throw new Error(`${fn} must count with a head COUNT aggregate`);
       }
+    }
+  });
+
+  // Session 23 (WS1) — the approval gate's information integrity: thread
+  // unread derives in the database (0035), and cap semantics are proven RAW
+  // (1d — the founder's failed DoD was display rounding, not the comparison).
+  console.log("\nSession 23 — approval gate information integrity (WS1):");
+
+  await expectOk("thread unread derives in the database: inbound sets it, opening clears it, a newer inbound sets it again (0035)", async () => {
+    const c = await db.query<{ id: string }>(
+      `insert into public.contacts (business_id, created_by, type, display_name)
+       values ($1, $2, 'person', 'Unread Smoke Contact') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'email') returning id`,
+      [f.business_id, f.agent_id, c.rows[0]!.id]
+    );
+    const threadId = t.rows[0]!.id;
+    const unread = async () =>
+      (
+        await db.query<{ is_unread: boolean }>(
+          `select is_unread from public.comm_threads where id = $1`,
+          [threadId]
+        )
+      ).rows[0]!.is_unread;
+    if (await unread()) throw new Error("a thread with no inbound must not be unread");
+    await db.query(
+      `update public.comm_threads set last_inbound_at = '2026-08-01T10:00:00Z' where id = $1`,
+      [threadId]
+    );
+    if (!(await unread())) throw new Error("an inbound must set unread");
+    await db.query(
+      `update public.comm_threads set last_opened_at = '2026-08-01T10:05:00Z' where id = $1`,
+      [threadId]
+    );
+    if (await unread()) throw new Error("opening the thread must clear unread");
+    await db.query(
+      `update public.comm_threads set last_inbound_at = '2026-08-01T10:10:00Z' where id = $1`,
+      [threadId]
+    );
+    if (!(await unread())) throw new Error("a newer inbound must set unread again");
+  });
+
+  await expectOk("cap crossings compare RAW metered amounts — £0.006 against a £0.01 cap crosses nothing (1d)", async () => {
+    const budget = { soft_cap_gbp: null, hard_cap_gbp: 0.01 };
+    const under = evaluateAiBudget(0.006, budget);
+    if (under.hard_crossed) {
+      throw new Error("0.006 must not cross a 0.01 cap — the comparison is raw, never display-rounded");
+    }
+    guardGenerationBudget(0.006, budget); // must not throw
+    if (!evaluateAiBudget(0.01, budget).hard_crossed) {
+      throw new Error("reaching the cap exactly must cross");
+    }
+    let refused = false;
+    try {
+      guardGenerationBudget(0.0101, budget);
+    } catch {
+      refused = true;
+    }
+    if (!refused) throw new Error("no refusal at 0.0101 against a 0.01 cap");
+  });
+
+  await expectOk("the Conversations reads are windowed (5c) — the thread list pages, the tail is bounded, the unbounded read is gone", async () => {
+    // File tripwire (the s20/s22 precedent): the 5c ruling's shape is pinned
+    // so a later edit cannot quietly return to fetch-everything.
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    if (/export async function getConversations\(\)/.test(queriesSource)) {
+      throw new Error("the unbounded getConversations() read has returned — 5c forbids it");
+    }
+    const listStart = queriesSource.indexOf("export async function getConversationList");
+    if (listStart < 0) throw new Error("getConversationList is missing");
+    const listBody = queriesSource.slice(listStart, listStart + 3000);
+    if (!listBody.includes(".range(range.from, range.to)")) {
+      throw new Error("the thread list no longer windows its read");
+    }
+    if (!listBody.includes(`count: "exact"`)) {
+      throw new Error("the thread list total must be a COUNT aggregate (5e)");
+    }
+    const windowStart = queriesSource.indexOf("async function readThreadWindow");
+    if (windowStart < 0) throw new Error("readThreadWindow is missing");
+    const windowBody = queriesSource.slice(windowStart, windowStart + 2200);
+    if (!windowBody.includes(".limit(THREAD_TAIL_WINDOW + 1)")) {
+      throw new Error("the thread tail no longer limits by THREAD_TAIL_WINDOW — the 5c bound is broken");
+    }
+  });
+
+  await expectOk("The Record reads day-anchored bounded windows (5b) — the 300-row block is gone and the cursor window is pinned", async () => {
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    const start = queriesSource.indexOf("export async function getRecordEvents");
+    if (start < 0) throw new Error("getRecordEvents is missing");
+    const body = queriesSource.slice(start, start + 3000);
+    if (!body.includes(".limit(RECORD_WINDOW + 1)")) {
+      throw new Error("getRecordEvents no longer windows by RECORD_WINDOW — the 5b bound is broken");
+    }
+    if (/\.limit\(300\)/.test(body)) {
+      throw new Error("the 300-row block has returned — 5b replaced it with cursor windows");
+    }
+  });
+
+  await expectOk("sub-penny display shows real precision — the display can never contradict the comparison (1d)", async () => {
+    if (formatMeteredGbp(0.006) !== "£0.006") throw new Error(`0.006 → ${formatMeteredGbp(0.006)}`);
+    if (formatMeteredGbp(0.01) !== "£0.01") throw new Error(`0.01 → ${formatMeteredGbp(0.01)}`);
+    if (formatMeteredGbp(0) !== "£0.00") throw new Error(`0 → ${formatMeteredGbp(0)}`);
+    if (formatMeteredGbp(0.0004) !== "£0.0004") throw new Error(`0.0004 → ${formatMeteredGbp(0.0004)}`);
+    if (formatMeteredGbp(12.5) !== "£12.50") throw new Error(`12.5 → ${formatMeteredGbp(12.5)}`);
+    if (formatMeteredGbp(150) !== "£150") throw new Error(`150 → ${formatMeteredGbp(150)}`);
+  });
+
+  // Session 23 (WS4d) — task cancellation: terminal in the database, and the
+  // request lands in the approval_inbox as its own arm.
+  console.log("\nSession 23 — task cancellation (WS4d):");
+
+  const cancelTask = await db.query<{ id: string }>(
+    `insert into public.tasks (business_id, created_by, assignee_actor_id, title, status)
+     values ($1, $2, $2, 'Cancellation smoke task', 'open') returning id`,
+    [f.business_id, f.human_id]
+  );
+  const cancelTaskId = cancelTask.rows[0]!.id;
+
+  await expectOk("a cancellation request surfaces in the approval_inbox as its own arm, dated by the request", async () => {
+    await db.query(
+      `update public.tasks
+          set attributes = attributes || '{"cancellation_request": {"requested_by": "${f.human_id}", "requested_at": "2026-08-02T09:00:00Z", "reason": "no longer needed"}}'::jsonb
+        where id = $1`,
+      [cancelTaskId]
+    );
+    const rows = await db.query<{ item_type: string; preview: string; awaiting_since: string }>(
+      `select item_type, preview, awaiting_since from public.approval_inbox where item_id = $1 and item_type = 'task_cancellation'`,
+      [cancelTaskId]
+    );
+    if (rows.rows.length !== 1) throw new Error("the request did not surface as task_cancellation");
+    if (rows.rows[0]!.preview !== "no longer needed") throw new Error("the preview must carry the stated reason");
+    if (!new Date(rows.rows[0]!.awaiting_since).toISOString().startsWith("2026-08-02")) {
+      throw new Error("awaiting_since must be the request's own clock");
+    }
+  });
+
+  await expectError(
+    "a cancelled task is terminal — no write path may reopen it (0037)",
+    /terminal|cannot leave/i,
+    async () => {
+      await db.query(`update public.tasks set status = 'cancelled' where id = $1`, [cancelTaskId]);
+      await db.query(`update public.tasks set status = 'open' where id = $1`, [cancelTaskId]);
+    }
+  );
+
+  await expectOk("a closed task's stale request never haunts the inbox — the arm reads live tasks only", async () => {
+    const rows = await db.query(
+      `select 1 from public.approval_inbox where item_id = $1 and item_type = 'task_cancellation'`,
+      [cancelTaskId]
+    );
+    if (rows.rows.length !== 0) {
+      throw new Error("a cancelled task's request still shows as a stamp owed");
+    }
+  });
+
+  // Session 23 (WS5c) — stored object names carry a human slug prefix.
+  await expectOk("storage object names are eye-findable — a human slug prefixes the uuid (5c)", async () => {
+    if (storageSlug("Spouse Visa Guide (v2).pdf") !== "spouse-visa-guide-v2") {
+      throw new Error(`slug: ${storageSlug("Spouse Visa Guide (v2).pdf")}`);
+    }
+    if (storageSlug("....pdf") !== "file") throw new Error("a nameless file must still slug to something");
+    if (storageSlug(`${"a".repeat(90)}.pdf`).length > 60) throw new Error("slugs are bounded");
+  });
+
+  // Session 23 — PRIORITY FIX (founder-ordered, blocks the s22 DoD (1)):
+  // the conversions stage lookup filtered stage_definitions by a business_id
+  // column that DOES NOT EXIST — and the s22 smoke never caught it because
+  // its fixture built a convenient world. These smokes ground the resolution
+  // in the schema's real shape: stages seeded exactly as the v3 installer
+  // writes them (engagement_type-scoped, sort_order), read with the sweep's
+  // own column list, resolved through the engagement's type.
+  console.log("\nSession 23 — the conversions stage resolution (priority fix):");
+
+  await expectOk("the ruled mapping resolves against a v3-installer-shaped seed — engagement_type-scoped stages, sort_order and all", async () => {
+    // Seed EXACTLY the installer's shape (0003 schema: engagement_type_id,
+    // key, label, sort_order; no business_id column exists to lean on).
+    const seeded = await db.query<{ id: string; key: string }>(
+      `insert into public.stage_definitions (engagement_type_id, key, label, sort_order)
+       values ($1, 'consultation_booked', 'Consultation booked', 50),
+              ($1, 'instructed', 'Instructed', 60)
+       returning id, key`,
+      [f.type_id]
+    );
+    const idByKey = new Map(seeded.rows.map((s) => [s.key, s.id]));
+
+    // Read back with the sweep's OWN column list and filters.
+    const stageRows = await db.query<{ id: string; key: string; engagement_type_id: string }>(
+      `select id, key, engagement_type_id from public.stage_definitions
+        where key in ('consultation_booked', 'instructed') and archived_at is null`
+    );
+    const moves = resolveRuledMoves({
+      stageRows: stageRows.rows,
+      engagementTypes: new Map([["eng-a", f.type_id]]),
+      history: [
+        { id: "sh-a", engagement_id: "eng-a", to_stage: idByKey.get("consultation_booked")!, moved_at: "2026-08-02T10:00:00Z" },
+        { id: "sh-b", engagement_id: "eng-a", to_stage: idByKey.get("instructed")!, moved_at: "2026-08-02T11:00:00Z" },
+      ],
+    });
+    const keys = moves.map((m) => `${m.stage_history_id}:${m.to_stage_key}`).sort().join(",");
+    if (keys !== "sh-a:consultation_booked,sh-b:instructed") {
+      throw new Error(`resolution against the real shape failed — got ${keys || "nothing"}`);
+    }
+  });
+
+  await expectOk("a same-key stage on ANOTHER engagement type never resolves for this engagement (type isolation)", async () => {
+    const otherType = await db.query<{ id: string }>(
+      `insert into public.engagement_types (template_id, key, label)
+       values ($1, 'matter_smoke', 'Matter (smoke)') returning id`,
+      [f.template_id]
+    );
+    const foreignStage = await db.query<{ id: string }>(
+      `insert into public.stage_definitions (engagement_type_id, key, label, sort_order)
+       values ($1, 'consultation_booked', 'Consultation booked', 50) returning id`,
+      [otherType.rows[0]!.id]
+    );
+    const stageRows = await db.query<{ id: string; key: string; engagement_type_id: string }>(
+      `select id, key, engagement_type_id from public.stage_definitions
+        where key in ('consultation_booked', 'instructed') and archived_at is null`
+    );
+    const moves = resolveRuledMoves({
+      stageRows: stageRows.rows,
+      engagementTypes: new Map([["eng-a", f.type_id]]),
+      history: [
+        { id: "sh-x", engagement_id: "eng-a", to_stage: foreignStage.rows[0]!.id, moved_at: "2026-08-02T12:00:00Z" },
+      ],
+    });
+    if (moves.length !== 0) {
+      throw new Error("a foreign type's stage resolved — the engagement's own type must decide");
+    }
+  });
+
+  await expectOk("no stage_definitions read anywhere pairs with a business_id filter — the phantom column is fenced off", async () => {
+    // File tripwire (the founder's 'fixtures mirror the installer's real
+    // shapes' order made structural): the wrong lookup cannot quietly return.
+    for (const file of ["../src/conversions.ts", "../scripts/circuit-conversion.ts"]) {
+      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
+      let at = source.indexOf(`from("stage_definitions")`);
+      while (at >= 0) {
+        const slice = source.slice(at, at + 320);
+        if (slice.includes(`.eq("business_id"`)) {
+          throw new Error(`${file}: a stage_definitions read filters by business_id — the column does not exist`);
+        }
+        at = source.indexOf(`from("stage_definitions")`, at + 1);
+      }
+    }
+  });
+
+  // Session 23 (WS6) — trigger consumption per workflow KEY + the activation
+  // frontier (founder-ruled after the 116-burst; 0038).
+  console.log("\nSession 23 — trigger consumption per workflow key (WS6):");
+
+  // A key with two versions, one consumed trigger, and a bystander lead.
+  const s23EngA = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'WS6 lead A', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s23EngB = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'WS6 lead B', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s23Evt = await db.query<{ id: string }>(
+    `insert into public.events (business_id, actor_id, action, entity_type, entity_id, occurred_at)
+     values ($1, $2, 'engagement.created', 'engagement', $3, '2026-08-01T10:00:00Z') returning id`,
+    [f.business_id, f.agent_id, s23EngA.rows[0]!.id]
+  );
+  const s23EvtId = s23Evt.rows[0]!.id;
+
+  async function s23MakeActiveDefinition(version: number): Promise<string> {
+    const def = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'wf_s23_consumption', $3, $4, '{"action":"engagement.created"}'::jsonb, 'draft',
+               'WS6 consumption smoke definition.') returning id`,
+      [f.business_id, f.human_id, version, f.template_id]
+    );
+    await db.query(
+      `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config)
+       values ($1, $2, $3, 'wait_step', 1, 'wait', '{"wait":{"days":1}}'::jsonb)`,
+      [f.business_id, f.human_id, def.rows[0]!.id]
+    );
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [def.rows[0]!.id, f.human_id]);
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [def.rows[0]!.id, f.human_id]);
+    return def.rows[0]!.id;
+  }
+
+  const s23V1 = await s23MakeActiveDefinition(1);
+  await expectOk("a triggered start CLAIMS its event for the KEY (0038 — the claim rides the run's own transaction)", async () => {
+    await db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [
+      s23V1,
+      s23EngA.rows[0]!.id,
+      f.agent_id,
+      s23EvtId,
+    ]);
+    const claims = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.workflow_trigger_consumptions
+        where business_id = $1 and workflow_key = 'wf_s23_consumption' and trigger_event_id = $2`,
+      [f.business_id, s23EvtId]
+    );
+    if (claims.rows[0]!.n !== 1) throw new Error("the claim row did not land with the run");
+  });
+
+  const s23V2 = await s23MakeActiveDefinition(2);
+
+  await expectError(
+    "a re-issued definition consumes nothing its predecessor consumed",
+    /workflow_trigger_consumptions|duplicate key/,
+    () =>
+      db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [
+        s23V2,
+        s23EngB.rows[0]!.id,
+        f.agent_id,
+        s23EvtId,
+      ])
+  );
+
+  await expectOk("the refused replay left NOTHING behind — no run, no orphan claim (one transaction)", async () => {
+    const runs = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.workflow_runs where definition_id = $1`,
+      [s23V2]
+    );
+    if (runs.rows[0]!.n !== 0) throw new Error("a replay run row survived the refused claim");
+    const claims = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.workflow_trigger_consumptions
+        where business_id = $1 and workflow_key = 'wf_s23_consumption'`,
+      [f.business_id]
+    );
+    if (claims.rows[0]!.n !== 1) throw new Error("the key must hold exactly one claim for the event");
+  });
+
+  await expectOk("activation starts no runs for pre-existing engagements", async () => {
+    // The gated activation stamped the re-issue's frontier at the KEY's
+    // consumption frontier — the predecessor's newest consumed arrival —
+    // so the scan (pinned below) only reads arrivals after it.
+    const frontier = await db.query<{ trigger_frontier_at: string | null }>(
+      `select trigger_frontier_at from public.workflow_definitions where id = $1`,
+      [s23V2]
+    );
+    const at = frontier.rows[0]!.trigger_frontier_at;
+    if (!at) throw new Error("the re-issue's activation stamped no frontier");
+    if (!new Date(at).toISOString().startsWith("2026-08-01T10:00:00")) {
+      throw new Error(`the frontier must be the predecessor's consumption frontier — got ${at}`);
+    }
+    const v1Frontier = await db.query<{ trigger_frontier_at: string | null }>(
+      `select trigger_frontier_at from public.workflow_definitions where id = $1`,
+      [s23V1]
+    );
+    if (v1Frontier.rows[0]!.trigger_frontier_at !== null) {
+      throw new Error("a first version (no predecessor) must keep a null frontier — fresh-tenant behaviour unchanged");
+    }
+    // File tripwire: the scan consumes by KEY and honours the frontier.
+    const workflowSource = readFileSync(resolve(import.meta.dirname, "../src/workflow.ts"), "utf8");
+    if (!workflowSource.includes(`from("workflow_trigger_consumptions")`)) {
+      throw new Error("the tick's consumed lookup no longer reads the key-scoped claims");
+    }
+    if (!workflowSource.includes("trigger_frontier_at")) {
+      throw new Error("the tick's trigger scan no longer honours the activation frontier");
     }
   });
 

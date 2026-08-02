@@ -78,14 +78,21 @@ async function main() {
   const ownerActor = owners?.[0]?.id;
   if (!ownerActor) throw new Error("No owner actor found for this business.");
 
+  // Session 23 (priority fix, founder-ordered): stage_definitions is scoped
+  // by ENGAGEMENT_TYPE_ID (no business_id exists on the table) — resolve via
+  // the engagement's own type, the shape the v3 installer actually writes.
   const { data: stages, error: stageError } = await db
     .from("stage_definitions")
     .select("id, key, label")
-    .eq("business_id", engagement.business_id)
+    .eq("engagement_type_id", engagement.template_type_id)
     .eq("key", "consultation_booked")
     .is("archived_at", null)
     .limit(1);
-  if (stageError || !stages?.[0]) throw new Error("No consultation_booked stage on this business.");
+  if (stageError || !stages?.[0]) {
+    throw new Error(
+      `No consultation_booked stage for this enquiry's engagement type (${engagement.template_type_id}).`
+    );
+  }
 
   if (engagement.stage_id === stages[0].id) {
     console.log("The enquiry already sits at Consultation booked — skipping the move; the sweep will still fire anything owed.");

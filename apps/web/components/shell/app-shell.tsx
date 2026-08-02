@@ -72,6 +72,7 @@ interface NavSection {
 function navSections(
   inboxCount: number,
   taskCount: number,
+  unreadCount: number,
   showFeedback: boolean
 ): NavSection[] {
   return [
@@ -88,7 +89,9 @@ function navSections(
           badgeStamp: true,
         },
         { href: "/tasks", label: "Tasks", icon: SquareCheck, badge: taskCount },
-        { href: "/conversations", label: "Conversations", icon: Mail },
+        // Session 23 (WS1c): unread conversations — accent badge (the stamp's
+        // red stays the Approval Inbox's alone; unread is not a stamp owed).
+        { href: "/conversations", label: "Conversations", icon: Mail, badge: unreadCount },
         {
           href: "/website",
           label: "Website",
@@ -296,6 +299,7 @@ export function AppShell({
   userRole,
   inboxCount,
   taskCount,
+  unreadCount = 0,
   showFeedback,
   firstLight,
   children,
@@ -305,6 +309,8 @@ export function AppShell({
   userRole: string;
   inboxCount: number;
   taskCount: number;
+  /** Session 23 (WS1c): unread conversations — a COUNT aggregate (5e). */
+  unreadCount?: number;
   showFeedback: boolean;
   /** The First Light pill + panel (decision 81: top-bar, beside Ask Light,
    * never a nav item). Null once retired. */
@@ -313,7 +319,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const sections = navSections(inboxCount, taskCount, showFeedback);
+  const sections = navSections(inboxCount, taskCount, unreadCount, showFeedback);
   const crumb =
     Object.entries(crumbLabels).find(([href]) => pathname.startsWith(href))?.[1] ??
     "Enquiries";
@@ -396,7 +402,9 @@ export function AppShell({
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="glass sticky top-0 z-30 flex items-center gap-3 rounded-none border-x-0 border-t-0 px-5 py-2.5">
+        {/* WS4a: app-topbar goes SOLID below the drawer breakpoint — content
+            must never ghost through the sticky chrome on a phone. */}
+        <header className="glass app-topbar sticky top-0 z-30 flex items-center gap-3 rounded-none border-x-0 border-t-0 px-5 py-2.5">
           <button
             type="button"
             className="hidden max-[880px]:block"

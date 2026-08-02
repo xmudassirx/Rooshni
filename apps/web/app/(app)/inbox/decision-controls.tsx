@@ -26,6 +26,7 @@ export function DecisionControls({
   preflightPass,
   blockedDetails,
   onEdit,
+  returnTo,
 }: {
   communicationId: string;
   preflightPass: boolean;
@@ -33,6 +34,9 @@ export function DecisionControls({
   /** Session 15 (signed amendment 2): edit-before-stamp — a stamp-authority
    * act; saving re-runs the pre-flight on the edited words. */
   onEdit?: () => void;
+  /** Session 23 (WS1b): where a rejection returns the viewer — the thread
+   * view passes its own path; the inbox omits it. Same act either way. */
+  returnTo?: string;
 }) {
   const [approveState, approve, approving] = useActionState(approveAction, initialState);
   const [rejectState, reject, rejecting] = useActionState(rejectAction, initialState);
@@ -119,6 +123,7 @@ export function DecisionControls({
               }}
             >
               <input type="hidden" name="communicationId" value={communicationId} />
+              {returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null}
               {/* JUDGMENT: the Session 12 standing chip also serves single
                   rejection — the scope names the chip without confining it
                   to the bulk dialog, and the reason is the same act. */}

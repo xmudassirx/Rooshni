@@ -32,6 +32,23 @@ export const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
  * files.storage_key. Private — bytes leave only as mail attachments. */
 export const FILES_BUCKET = "files";
 
+/**
+ * Session 23 (WS5c, founder-reported): stored object names carry a HUMAN
+ * slug prefix — collision-proof stays the uuid's job, eye-findable becomes
+ * the slug's. "Spouse Visa Guide (v2).pdf" → "spouse-visa-guide-v2".
+ * Pure; the harness pins the shape.
+ */
+export function storageSlug(filename: string): string {
+  const base = filename.replace(/\.[a-z0-9]+$/i, "");
+  const slug = base
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/g, "");
+  return slug || "file";
+}
+
 export interface RouteGuideFile {
   id: string;
   storage_key: string;

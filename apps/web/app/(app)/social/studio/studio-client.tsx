@@ -88,9 +88,18 @@ export function StudioClient() {
               ◈ Brand tokens: on
             </button>
           </div>
+          {/* WS4h (Session 23): the prompt box auto-grows with its content —
+              field-sizing keeps the full placeholder visible (it sizes an
+              empty field to its placeholder), and the onInput fallback grows
+              it where the property is not yet supported. */}
           <textarea
             placeholder="Describe it — “warm photo-style image: reunited family at Manchester airport, no faces identifiable, space for headline top-left…”"
-            className="min-h-19 w-full resize-none rounded-xl border-[1.5px] border-rule bg-paper px-4 py-3 text-[14px] leading-relaxed text-ink outline-none focus:border-accent"
+            onInput={(e) => {
+              const el = e.currentTarget;
+              el.style.height = "auto";
+              el.style.height = `${el.scrollHeight}px`;
+            }}
+            className="field-sizing-content min-h-19 w-full resize-none rounded-xl border-[1.5px] border-rule bg-paper px-4 py-3 text-[14px] leading-relaxed text-ink outline-none focus:border-accent"
           />
           <div className="mt-2.5 flex items-center gap-2.5">
             <span className="font-mono text-[9px] tracking-wide text-ink-faint uppercase">

@@ -4,7 +4,11 @@ import {
   clampPage,
   clampPageSize,
   computeLightPerformance,
+  createServiceClient,
   DEFAULT_LIST_WINDOW,
+  FILES_BUCKET,
+  RECORD_WINDOW,
+  THREAD_TAIL_WINDOW,
   evaluateAiBudget,
   pageRange,
   MONTH_SPEND_ROW_BOUND,
@@ -56,8 +60,54 @@ export interface PipelineStage {
   cards: PipelineCard[];
 }
 
-export async function getPipeline(): Promise<PipelineStage[]> {
+/** WS4f (Session 23): the pipeline search's bounded candidate read — name or
+ * contact match, server-side, each leg capped. */
+const PIPELINE_SEARCH_BOUND = 50;
+
+export async function getPipeline(search = ""): Promise<PipelineStage[]> {
   const { db, business } = await getAppContext();
+
+  // WS4f: server-side search — engagement titles and contact names, bounded
+  // legs, resolved to an id set the per-stage windows then filter by.
+  const query = search.trim().replace(/[%_\\]/g, "").slice(0, 80);
+  let searchIds: string[] | null = null;
+  if (query) {
+    const [titleHits, contactHits] = await Promise.all([
+      db
+        .from("engagements")
+        .select("id")
+        .eq("business_id", business.id)
+        .ilike("title", `%${query}%`)
+        .is("archived_at", null)
+        .limit(PIPELINE_SEARCH_BOUND),
+      db
+        .from("contacts")
+        .select("id")
+        .eq("business_id", business.id)
+        .ilike("display_name", `%${query}%`)
+        .is("archived_at", null)
+        .limit(PIPELINE_SEARCH_BOUND),
+    ]);
+    if (titleHits.error) throw new Error(`pipeline search (titles) failed: ${titleHits.error.message}`);
+    if (contactHits.error) throw new Error(`pipeline search (contacts) failed: ${contactHits.error.message}`);
+    const contactIds = (contactHits.data ?? []).map((c) => c.id);
+    const participantHits = contactIds.length
+      ? await db
+          .from("engagement_participants")
+          .select("engagement_id")
+          .in("contact_id", contactIds)
+          .limit(PIPELINE_SEARCH_BOUND * 2)
+      : { data: [], error: null };
+    if (participantHits.error) {
+      throw new Error(`pipeline search (participants) failed: ${participantHits.error.message}`);
+    }
+    searchIds = [
+      ...new Set([
+        ...(titleHits.data ?? []).map((e) => e.id as string),
+        ...(participantHits.data ?? []).map((p) => p.engagement_id as string),
+      ]),
+    ];
+  }
 
   const { data: types, error: typesError } = await db
     .from("engagement_types")
@@ -78,25 +128,41 @@ export async function getPipeline(): Promise<PipelineStage[]> {
   // and its TOTAL comes from a COUNT aggregate (5e) — the demo-era read
   // fetched every engagement plus the entire approval_inbox on every render.
   const stageList = stages ?? [];
+  // With an active search whose candidate set is empty, every column is
+  // honestly empty — no queries fire against an impossible filter.
+  if (searchIds !== null && searchIds.length === 0) {
+    return stageList.map((stage) => ({
+      id: stage.id,
+      key: stage.key,
+      label: stage.label,
+      isTerminal: stage.is_terminal,
+      total: 0,
+      cards: [],
+    }));
+  }
   const perStage = await Promise.all(
-    stageList.map((stage) =>
-      Promise.all([
-        db
-          .from("engagements")
-          .select("id, title, stage_id, stage_entered_at, attributes, attribution")
-          .eq("business_id", business.id)
-          .eq("stage_id", stage.id)
-          .is("archived_at", null)
-          .order("stage_entered_at", { ascending: true })
-          .limit(DEFAULT_LIST_WINDOW),
-        db
-          .from("engagements")
-          .select("id", { count: "exact", head: true })
-          .eq("business_id", business.id)
-          .eq("stage_id", stage.id)
-          .is("archived_at", null),
-      ])
-    )
+    stageList.map((stage) => {
+      let windowQuery = db
+        .from("engagements")
+        .select("id, title, stage_id, stage_entered_at, attributes, attribution")
+        .eq("business_id", business.id)
+        .eq("stage_id", stage.id)
+        .is("archived_at", null);
+      let countQuery = db
+        .from("engagements")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", business.id)
+        .eq("stage_id", stage.id)
+        .is("archived_at", null);
+      if (searchIds !== null) {
+        windowQuery = windowQuery.in("id", searchIds);
+        countQuery = countQuery.in("id", searchIds);
+      }
+      return Promise.all([
+        windowQuery.order("stage_entered_at", { ascending: true }).limit(DEFAULT_LIST_WINDOW),
+        countQuery,
+      ]);
+    })
   );
   const engagements = perStage.flatMap(([rows], i) => {
     if (rows.error) throw new Error(`engagements query (${stageList[i]!.key}) failed: ${rows.error.message}`);
@@ -329,6 +395,20 @@ export async function getInboxCount(): Promise<number> {
   return count ?? 0;
 }
 
+/** Session 23 (WS1c): unread conversations for the sidebar badge — a COUNT
+ * aggregate over the 0035 generated column (5e law), never a row fetch. */
+export async function getUnreadThreadCount(): Promise<number> {
+  const { db, business } = await getAppContext();
+  const { count, error } = await db
+    .from("comm_threads")
+    .select("*", { count: "exact", head: true })
+    .eq("business_id", business.id)
+    .eq("is_unread", true)
+    .is("archived_at", null);
+  if (error) throw new Error(`unread thread count failed: ${error.message}`);
+  return count ?? 0;
+}
+
 export interface CommunicationContext {
   engagementId: string | null;
   engagementTitle: string | null;
@@ -389,7 +469,16 @@ export interface CommunicationDetail {
   /** PR-i (Session 19) — the declared attachments the pre-flight verifies
    * and the dispatch will carry. */
   attachments: { filename: string; sizeBytes: number }[];
+  /** Session 23 (WS1a, founder-ruled) — the question above the answer: every
+   * inbound received on the thread since the last outbound that reached the
+   * client. A lawyer must never stamp an answer without the question. Null
+   * when the thread has no such inbound (an intro, not a reply). */
+  theySaid: { messages: { body: string; occurredAt: string }[]; total: number } | null;
 }
+
+/** WS1a — bounded read: the card shows at most this many inbound messages;
+ * the total is a COUNT aggregate and the remainder is stated honestly. */
+const THEY_SAID_BOUND = 20;
 
 /** Full draft for the inbox detail panel — the view carries only a preview. */
 export async function getCommunicationDetail(
@@ -399,7 +488,7 @@ export async function getCommunicationDetail(
   const { data, error } = await db
     .from("communications")
     .select(
-      "id, body, channel, scheduled_for, engagement_id, contact_id, attributes, compliance_required, comm_threads(subject, contact_id), contacts(display_name)"
+      "id, body, channel, scheduled_for, engagement_id, contact_id, thread_id, attributes, compliance_required, comm_threads(subject, contact_id), contacts(display_name)"
     )
     .eq("id", id)
     .eq("business_id", business.id)
@@ -618,6 +707,47 @@ export async function getCommunicationDetail(
     }
   }
 
+  // Session 23 (WS1a): the inbound message(s) this draft answers — everything
+  // received on the thread since the last outbound that actually reached the
+  // client (sent/delivered/read). Slim columns, bounded, total by aggregate.
+  let theySaid: CommunicationDetail["theySaid"] = null;
+  if (data.thread_id) {
+    const { data: lastOut } = await db
+      .from("communications")
+      .select("occurred_at")
+      .eq("thread_id", data.thread_id)
+      .eq("direction", "outbound")
+      .in("status", ["sent", "delivered", "read"])
+      .order("occurred_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    let inboundQuery = db
+      .from("communications")
+      .select("body, body_format, plain_body:attributes->>plain_body, occurred_at", {
+        count: "exact",
+      })
+      .eq("thread_id", data.thread_id)
+      .eq("direction", "inbound")
+      .is("archived_at", null)
+      .order("occurred_at", { ascending: true })
+      .limit(THEY_SAID_BOUND);
+    if (lastOut?.occurred_at) inboundQuery = inboundQuery.gt("occurred_at", lastOut.occurred_at);
+    const { data: inbound, count } = await inboundQuery;
+    if (inbound && inbound.length > 0) {
+      theySaid = {
+        messages: inbound.map((m) => ({
+          body:
+            (m as { body_format?: string }).body_format === "html"
+              ? ((m as { plain_body?: string | null }).plain_body ??
+                plainTextOfBody(m.body, "html"))
+              : m.body,
+          occurredAt: m.occurred_at,
+        })),
+        total: count ?? inbound.length,
+      };
+    }
+  }
+
   return {
     id: data.id,
     body,
@@ -644,6 +774,7 @@ export async function getCommunicationDetail(
           sizeBytes: Number(a.size_bytes ?? 0),
         }))
       : [],
+    theySaid,
   };
 }
 
@@ -1034,19 +1165,36 @@ interface ActorEmbed {
   actor_type: ActorType;
 }
 
+/** A stable position in the ledger: occurred_at with the UUIDv7 id as
+ * tie-break, so no entry is skipped or doubled across window edges. */
+export interface RecordCursor {
+  occurredAt: string;
+  id: string;
+}
+
+export interface RecordWindow {
+  events: RecordEvent[];
+  hasMore: boolean;
+  /** Cursor of the OLDEST returned entry — the next window's `before`. */
+  nextCursor: RecordCursor | null;
+}
+
 /**
- * The most recent slice of the ledger, newest first. When `filter` is given,
- * only entries about that entity — matched on the entity columns or on the
- * payload's `<entity>_id` reference — are returned.
- *
- * JUDGMENT: capped at the most recent 300 entries — search and pagination are
- * their own session; an uncapped query over an append-only table only gets
- * slower forever.
+ * Session 23 (WS3 — the s22 5b deferral, decision 157): The Record reads
+ * reverse-chronological WINDOWS (RECORD_WINDOW per fetch, +1 sentinel for an
+ * honest hasMore), cursor-keyed, no page numbers — infinite scroll fetches
+ * the next bounded query; the day sections anchor in the renderer, merging
+ * across window edges. When `filter` is given, only entries about that
+ * entity — matched on the entity columns or on the payload's `<entity>_id`
+ * reference — are returned.
  */
-export async function getRecordEvents(filter?: {
-  entityType: RecordEntityType;
-  entityId: string;
-}): Promise<RecordEvent[]> {
+export async function getRecordEvents(
+  filter?: {
+    entityType: RecordEntityType;
+    entityId: string;
+  },
+  before?: RecordCursor
+): Promise<RecordWindow> {
   const { db, business } = await getAppContext();
 
   let query = db
@@ -1054,21 +1202,31 @@ export async function getRecordEvents(filter?: {
     .select("id, action, entity_type, entity_id, payload, cost, occurred_at, actors(display_name, actor_type)")
     .eq("business_id", business.id)
     .order("occurred_at", { ascending: false })
-    .limit(300);
+    .order("id", { ascending: false })
+    .limit(RECORD_WINDOW + 1);
 
   if (filter) {
     // isUuid-validated by the caller; belt to those braces before string-building.
-    if (!isUuid(filter.entityId)) return [];
+    if (!isUuid(filter.entityId)) return { events: [], hasMore: false, nextCursor: null };
     query = query.or(
       `and(entity_type.eq.${filter.entityType},entity_id.eq.${filter.entityId}),` +
         `payload->>${filter.entityType}_id.eq.${filter.entityId}`
+    );
+  }
+  if (before) {
+    if (!isUuid(before.id)) return { events: [], hasMore: false, nextCursor: null };
+    // A second .or() ANDs with the filter above — the cursor window.
+    query = query.or(
+      `occurred_at.lt."${before.occurredAt}",and(occurred_at.eq."${before.occurredAt}",id.lt."${before.id}")`
     );
   }
 
   const { data, error } = await query;
   if (error) throw new Error(`events query failed: ${error.message}`);
 
-  return (data ?? []).map((row) => {
+  const rows = data ?? [];
+  const hasMore = rows.length > RECORD_WINDOW;
+  const events = rows.slice(0, RECORD_WINDOW).map((row) => {
     const actor = row.actors as unknown as ActorEmbed | null;
     return {
       id: row.id,
@@ -1082,6 +1240,12 @@ export async function getRecordEvents(filter?: {
       actorType: actor?.actor_type ?? "integration",
     };
   });
+  const oldest = events[events.length - 1] ?? null;
+  return {
+    events,
+    hasMore,
+    nextCursor: oldest ? { occurredAt: oldest.occurredAt, id: oldest.id } : null,
+  };
 }
 
 // --- Conversations -----------------------------------------------------------
@@ -1112,9 +1276,18 @@ export interface ThreadConsent {
   note: string;
 }
 
-export interface ConversationThread {
+/*
+ * Session 23 (WS2, founder directive: the Messenger shape) — the s22 5c
+ * deferral lands here. The old getConversations read EVERY thread and EVERY
+ * communication each render; the surface now reads:
+ *   - a WINDOWED thread list (DEFAULT_LIST_WINDOW, ordered by the 0036
+ *     trigger-maintained last_activity_at, total a COUNT aggregate),
+ *   - ONE open thread with its recent TAIL (THREAD_TAIL_WINDOW), older
+ *     messages arriving in further bounded windows on upward scroll.
+ */
+
+export interface ConversationListItem {
   id: string;
-  contactId: string;
   contactName: string;
   channel: string;
   subject: string | null;
@@ -1125,6 +1298,30 @@ export interface ConversationThread {
   lightHandling: boolean;
   awaitingYou: boolean;
   hasPendingDraft: boolean;
+  /** Session 23 (WS1c): derived in the database (0035 generated column). */
+  unread: boolean;
+}
+
+export interface ConversationListPage {
+  rows: ConversationListItem[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
+
+/** A stable position in a thread's history: occurred_at with the UUIDv7 id
+ * as tie-break, so no message is skipped or doubled across window edges. */
+export interface ThreadCursor {
+  occurredAt: string;
+  id: string;
+}
+
+export interface OpenThread {
+  id: string;
+  contactId: string;
+  contactName: string;
+  channel: string;
+  subject: string | null;
   enquiry: { id: string; title: string; stageLabel: string | null } | null;
   /** Session 16 (PR-C/D): the drafting preferences and settle state, straight
    * off the thread row — durable server-side truth, never client state. */
@@ -1133,6 +1330,7 @@ export interface ConversationThread {
   settleDueAt: string | null;
   /** Session 16 (PR-A): Meta's 24h service window as recorded on the thread. */
   waServiceWindowExpiresAt: string | null;
+  unread: boolean;
   contact: {
     type: "person" | "organisation";
     status: string;
@@ -1142,7 +1340,12 @@ export interface ConversationThread {
     source: string | null;
     consents: ThreadConsent[];
   };
+  /** The recent tail, ascending — the thread opens at its latest message. */
   messages: ThreadMessage[];
+  /** More history exists above the tail — the scroll fetches it windowed. */
+  hasOlder: boolean;
+  /** Cursor of the OLDEST loaded message (the next older window's `before`). */
+  oldestCursor: ThreadCursor | null;
 }
 
 function consentNote(consent: Record<string, unknown>): { ok: boolean; note: string } {
@@ -1152,61 +1355,117 @@ function consentNote(consent: Record<string, unknown>): { ok: boolean; note: str
   return { ok: true, note: kinds.join(" · ") + source };
 }
 
-export async function getConversations(): Promise<ConversationThread[]> {
-  const { db, business } = await getAppContext();
+/** One communications row, as the read layer selects it. */
+interface CommWindowRow {
+  id: string;
+  thread_id: string;
+  channel: string;
+  direction: string;
+  status: string;
+  body: string;
+  body_format?: string;
+  plain_body?: string | null;
+  scheduled_for: string | null;
+  occurred_at: string;
+  duration_seconds: number | null;
+  drafted_by_actor_id: string | null;
+  approved_by_actor_id: string | null;
+}
 
-  const [threads, comms] = await Promise.all([
-    db
-      .from("comm_threads")
-      .select(
-        "id, subject, channel, contact_id, engagement_id, auto_draft_paused, settle_override_seconds, draft_settle_due_at, wa_service_window_expires_at"
-      )
-      .eq("business_id", business.id)
-      .is("archived_at", null),
-    db
-      .from("communications")
-      .select(
-        "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id"
-      )
-      .eq("business_id", business.id)
-      .is("archived_at", null)
-      .order("occurred_at", { ascending: true }),
-  ]);
-  if (threads.error) throw new Error(`comm_threads query failed: ${threads.error.message}`);
-  if (comms.error) throw new Error(`communications query failed: ${comms.error.message}`);
+const COMM_WINDOW_COLUMNS =
+  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id";
 
-  const contactIds = [...new Set((threads.data ?? []).map((t) => t.contact_id))];
-  const engagementIds = [
-    ...new Set((threads.data ?? []).flatMap((t) => (t.engagement_id ? [t.engagement_id] : []))),
-  ];
+function mapCommRow(
+  c: CommWindowRow,
+  actorById: Map<string, { name: string; type: ActorType }>
+): ThreadMessage {
+  // PR-iii (Session 19): a dispatched email row stores its sent HTML — the
+  // bubble reads the WORDS (the preserved plain source, else the
+  // deterministic extraction); the exact document rides for "as sent".
+  const isHtml = c.body_format === "html";
+  const draftedBy = c.drafted_by_actor_id ? actorById.get(c.drafted_by_actor_id) : null;
+  const approvedBy = c.approved_by_actor_id ? actorById.get(c.approved_by_actor_id) : null;
+  return {
+    id: c.id,
+    channel: c.channel,
+    direction: c.direction as ThreadMessage["direction"],
+    status: c.status,
+    body: isHtml ? (c.plain_body ?? plainTextOfBody(c.body, "html")) : c.body,
+    subject: null,
+    occurredAt: c.occurred_at,
+    scheduledFor: c.scheduled_for,
+    durationSeconds: c.duration_seconds,
+    draftedByLight: draftedBy?.type === "agent",
+    stampedByName: approvedBy?.name ?? null,
+    isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
+    sentHtml: isHtml ? c.body : null,
+  };
+}
+
+async function hydrateActors(
+  db: Awaited<ReturnType<typeof getAppContext>>["db"],
+  rows: CommWindowRow[]
+): Promise<Map<string, { name: string; type: ActorType }>> {
   const actorIds = [
     ...new Set(
-      (comms.data ?? []).flatMap((c) => [
+      rows.flatMap((c) => [
         ...(c.drafted_by_actor_id ? [c.drafted_by_actor_id] : []),
         ...(c.approved_by_actor_id ? [c.approved_by_actor_id] : []),
       ])
     ),
   ];
+  if (!actorIds.length) return new Map();
+  const { data, error } = await db
+    .from("actors")
+    .select("id, display_name, actor_type")
+    .in("id", actorIds);
+  if (error) throw new Error(`actors query failed: ${error.message}`);
+  return new Map(
+    (data ?? []).map((a) => [
+      a.id as string,
+      { name: a.display_name as string, type: a.actor_type as ActorType },
+    ])
+  );
+}
 
-  const [contacts, channels, engagements, runs, actors] = await Promise.all([
+/** The windowed thread list (5c): DEFAULT_LIST_WINDOW per page, ordered by
+ * the 0036 trigger-maintained last_activity_at, total a COUNT aggregate.
+ * Hydration (contact names, last message, pending drafts, live runs) is
+ * scoped to the PAGE's threads — the last message is one single-row read per
+ * page thread (the s22 contacts precedent: exact and bounded). */
+export async function getConversationList(page = 1): Promise<ConversationListPage> {
+  const { db, business } = await getAppContext();
+  const range = pageRange(clampPage(page), DEFAULT_LIST_WINDOW);
+  const {
+    data: threads,
+    error,
+    count,
+  } = await db
+    .from("comm_threads")
+    .select("id, subject, channel, contact_id, engagement_id, is_unread, last_activity_at", {
+      count: "exact",
+    })
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .not("last_activity_at", "is", null)
+    .order("last_activity_at", { ascending: false })
+    .range(range.from, range.to);
+  if (error) throw new Error(`comm_threads window failed: ${error.message}`);
+
+  const pageThreads = threads ?? [];
+  const total = count ?? pageThreads.length;
+  const contactIds = [...new Set(pageThreads.map((t) => t.contact_id))];
+  const engagementIds = [
+    ...new Set(pageThreads.flatMap((t) => (t.engagement_id ? [t.engagement_id] : []))),
+  ];
+  const threadIds = pageThreads.map((t) => t.id);
+
+  const [contacts, engagements, runs, pending, lastMessages] = await Promise.all([
     contactIds.length
-      ? db
-          .from("contacts")
-          .select("id, display_name, type, status, first_touch")
-          .in("id", contactIds)
-      : Promise.resolve({ data: [], error: null }),
-    contactIds.length
-      ? db
-          .from("contact_channels")
-          .select("contact_id, channel, value, is_primary, consent")
-          .in("contact_id", contactIds)
-          .is("archived_at", null)
+      ? db.from("contacts").select("id, display_name").in("id", contactIds)
       : Promise.resolve({ data: [], error: null }),
     engagementIds.length
-      ? db
-          .from("engagements")
-          .select("id, title, outcome, stage_definitions(label)")
-          .in("id", engagementIds)
+      ? db.from("engagements").select("id, stage_definitions(label)").in("id", engagementIds)
       : Promise.resolve({ data: [], error: null }),
     engagementIds.length
       ? db
@@ -1215,144 +1474,303 @@ export async function getConversations(): Promise<ConversationThread[]> {
           .in("engagement_id", engagementIds)
           .in("status", ["running", "waiting", "blocked"])
       : Promise.resolve({ data: [], error: null }),
-    actorIds.length
-      ? db.from("actors").select("id, display_name, actor_type").in("id", actorIds)
+    threadIds.length
+      ? db
+          .from("communications")
+          .select("thread_id")
+          .in("thread_id", threadIds)
+          .eq("direction", "outbound")
+          .eq("status", "pending_approval")
+          .is("archived_at", null)
       : Promise.resolve({ data: [], error: null }),
+    Promise.all(
+      pageThreads.map((t) =>
+        db
+          .from("communications")
+          .select("body, body_format, plain_body:attributes->>plain_body, direction, occurred_at")
+          .eq("thread_id", t.id)
+          .is("archived_at", null)
+          .order("occurred_at", { ascending: false })
+          .order("id", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      )
+    ),
   ]);
   for (const [label, result] of [
     ["contacts", contacts],
-    ["contact_channels", channels],
     ["engagements", engagements],
     ["workflow_runs", runs],
-    ["actors", actors],
+    ["pending drafts", pending],
   ] as const) {
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
 
-  const contactById = new Map((contacts.data ?? []).map((c) => [c.id, c]));
-  const channelsByContact = new Map<string, typeof channels.data>();
-  for (const ch of channels.data ?? []) {
-    const list = channelsByContact.get(ch.contact_id) ?? [];
-    list!.push(ch);
-    channelsByContact.set(ch.contact_id, list!);
-  }
-  const engagementById = new Map((engagements.data ?? []).map((e) => [e.id, e]));
-  const liveRunEngagements = new Set((runs.data ?? []).map((r) => r.engagement_id));
-  const actorById = new Map(
-    (actors.data ?? []).map((a) => [
-      a.id,
-      { name: a.display_name as string, type: a.actor_type as ActorType },
-    ])
+  const contactById = new Map((contacts.data ?? []).map((c) => [c.id, c.display_name as string]));
+  const stageByEngagement = new Map(
+    (engagements.data ?? []).map((e) => {
+      const stage = e.stage_definitions as unknown as
+        | { label: string }
+        | { label: string }[]
+        | null;
+      return [e.id, Array.isArray(stage) ? (stage[0]?.label ?? null) : (stage?.label ?? null)];
+    })
   );
+  const liveRunEngagements = new Set((runs.data ?? []).map((r) => r.engagement_id));
+  const pendingThreads = new Set((pending.data ?? []).map((r) => r.thread_id as string));
 
-  const commsByThread = new Map<string, NonNullable<typeof comms.data>>();
-  for (const c of comms.data ?? []) {
-    const list = commsByThread.get(c.thread_id) ?? [];
-    list.push(c);
-    commsByThread.set(c.thread_id, list);
-  }
-
-  const result: ConversationThread[] = (threads.data ?? []).flatMap((t) => {
-    const contact = contactById.get(t.contact_id);
-    if (!contact) return [];
-    const list = commsByThread.get(t.id) ?? [];
-    if (!list.length) return [];
-
-    const messages: ThreadMessage[] = list.map((c) => {
-      const draftedBy = c.drafted_by_actor_id ? actorById.get(c.drafted_by_actor_id) : null;
-      const approvedBy = c.approved_by_actor_id ? actorById.get(c.approved_by_actor_id) : null;
-      // PR-iii (Session 19): a dispatched email row stores its sent HTML —
-      // the bubble reads the WORDS (the preserved plain source, else the
-      // deterministic extraction), and the exact document rides along for
-      // the "as sent" view.
-      const isHtml = (c as { body_format?: string }).body_format === "html";
-      const plainBody = (c as { plain_body?: string | null }).plain_body;
-      return {
-        id: c.id,
-        channel: c.channel,
-        direction: c.direction as ThreadMessage["direction"],
-        status: c.status,
-        body: isHtml ? (plainBody ?? plainTextOfBody(c.body, "html")) : c.body,
-        subject: null,
-        occurredAt: c.occurred_at,
-        scheduledFor: c.scheduled_for,
-        durationSeconds: c.duration_seconds,
-        draftedByLight: draftedBy?.type === "agent",
-        stampedByName: approvedBy?.name ?? null,
-        isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
-        sentHtml: isHtml ? c.body : null,
-      };
-    });
-
-    const last = messages[messages.length - 1];
+  const rows: ConversationListItem[] = pageThreads.flatMap((t, i) => {
+    const last = lastMessages[i]?.data as {
+      body: string;
+      body_format?: string;
+      plain_body?: string | null;
+      direction: string;
+      occurred_at: string;
+    } | null;
     if (!last) return [];
-    const hasPendingDraft = messages.some((m) => m.isPendingDraft);
-    const engagement = t.engagement_id ? engagementById.get(t.engagement_id) : null;
-    const stage = engagement?.stage_definitions as unknown as { label: string } | null;
+    const lastBody =
+      last.body_format === "html"
+        ? (last.plain_body ?? plainTextOfBody(last.body, "html"))
+        : last.body;
+    const hasPendingDraft = pendingThreads.has(t.id);
     const lightHandling = t.engagement_id ? liveRunEngagements.has(t.engagement_id) : false;
     const awaitingYou = !hasPendingDraft && last.direction === "inbound";
-
-    const state: ConversationThread["state"] = hasPendingDraft
-      ? { tone: "gold", label: "✦ draft awaiting stamp" }
-      : lightHandling
-        ? { tone: "gold", label: "Light handling" }
-        : awaitingYou
-          ? { tone: "you", label: "awaiting you" }
-          : { tone: "done", label: stage?.label.toLowerCase() ?? "up to date" };
-
-    const contactChannels = channelsByContact.get(t.contact_id) ?? [];
-    const primary = (kind: string) =>
-      contactChannels.find((c) => c.channel === kind && c.is_primary) ??
-      contactChannels.find((c) => c.channel === kind);
-    const firstTouch = (contact.first_touch ?? {}) as Record<string, unknown>;
-
+    const stageLabel = t.engagement_id ? (stageByEngagement.get(t.engagement_id) ?? null) : null;
     return [
       {
         id: t.id,
-        contactId: t.contact_id,
-        contactName: contact.display_name,
+        contactName: contactById.get(t.contact_id) ?? "Unknown contact",
         channel: t.channel,
         subject: t.subject,
-        lastAt: last.occurredAt,
+        lastAt: t.last_activity_at as string,
         snippet: hasPendingDraft
           ? "✦ Light's draft — awaiting your stamp"
-          : last.body.length > 80
-            ? `${last.body.slice(0, 80)}…`
-            : last.body,
-        state,
+          : lastBody.length > 80
+            ? `${lastBody.slice(0, 80)}…`
+            : lastBody,
+        state: hasPendingDraft
+          ? ({ tone: "gold", label: "✦ draft awaiting stamp" } as const)
+          : lightHandling
+            ? ({ tone: "gold", label: "Light handling" } as const)
+            : awaitingYou
+              ? ({ tone: "you", label: "awaiting you" } as const)
+              : ({ tone: "done", label: stageLabel?.toLowerCase() ?? "up to date" } as const),
         lightHandling,
         awaitingYou,
         hasPendingDraft,
-        enquiry: engagement
-          ? {
-              id: engagement.id,
-              title: engagement.title,
-              stageLabel: stage?.label ?? null,
-            }
-          : null,
-        autoDraftPaused: Boolean(t.auto_draft_paused),
-        settleOverrideSeconds:
-          typeof t.settle_override_seconds === "number" ? t.settle_override_seconds : null,
-        settleDueAt: t.draft_settle_due_at ?? null,
-        waServiceWindowExpiresAt: t.wa_service_window_expires_at ?? null,
-        contact: {
-          type: contact.type as "person" | "organisation",
-          status: contact.status,
-          isClient: engagement?.outcome === "won",
-          phone: primary("phone")?.value ?? primary("whatsapp")?.value ?? null,
-          email: primary("email")?.value ?? null,
-          source: typeof firstTouch.source === "string" ? firstTouch.source : null,
-          consents: contactChannels.map((c) => {
-            const { ok, note } = consentNote((c.consent ?? {}) as Record<string, unknown>);
-            return { channel: c.channel, ok, note };
-          }),
-        },
-        messages,
+        unread: Boolean(t.is_unread),
       },
     ];
   });
 
-  return result.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  return {
+    rows,
+    total,
+    page: clampPage(page),
+    pageCount: Math.max(1, Math.ceil(total / DEFAULT_LIST_WINDOW)),
+  };
+}
+
+/** A bounded window of a thread's history, newest-first from `before` (or
+ * the very tail when null), returned ASCENDING with an honest hasOlder. */
+async function readThreadWindow(
+  db: Awaited<ReturnType<typeof getAppContext>>["db"],
+  businessId: string,
+  threadId: string,
+  before: ThreadCursor | null
+): Promise<{ messages: ThreadMessage[]; hasOlder: boolean }> {
+  let query = db
+    .from("communications")
+    .select(COMM_WINDOW_COLUMNS)
+    .eq("business_id", businessId)
+    .eq("thread_id", threadId)
+    .is("archived_at", null)
+    .order("occurred_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(THREAD_TAIL_WINDOW + 1);
+  if (before) {
+    query = query.or(
+      `occurred_at.lt."${before.occurredAt}",and(occurred_at.eq."${before.occurredAt}",id.lt."${before.id}")`
+    );
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(`thread window failed: ${error.message}`);
+  const rows = (data ?? []) as unknown as CommWindowRow[];
+  const hasOlder = rows.length > THREAD_TAIL_WINDOW;
+  const windowRows = rows.slice(0, THREAD_TAIL_WINDOW).reverse();
+  const actorById = await hydrateActors(db, windowRows);
+  return { messages: windowRows.map((c) => mapCommRow(c, actorById)), hasOlder };
+}
+
+/** The open thread: rail facts + the recent tail (5c). */
+export async function getOpenThread(threadId: string): Promise<OpenThread | null> {
+  if (!isUuid(threadId)) return null;
+  const { db, business } = await getAppContext();
+  const { data: t, error } = await db
+    .from("comm_threads")
+    .select(
+      "id, subject, channel, contact_id, engagement_id, auto_draft_paused, settle_override_seconds, draft_settle_due_at, wa_service_window_expires_at, is_unread"
+    )
+    .eq("id", threadId)
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (error) throw new Error(`thread lookup failed: ${error.message}`);
+  if (!t) return null;
+
+  const [contactRes, channelsRes, engagementRes, window] = await Promise.all([
+    db
+      .from("contacts")
+      .select("id, display_name, type, status, first_touch")
+      .eq("id", t.contact_id)
+      .maybeSingle(),
+    db
+      .from("contact_channels")
+      .select("channel, value, is_primary, consent")
+      .eq("contact_id", t.contact_id)
+      .is("archived_at", null),
+    t.engagement_id
+      ? db
+          .from("engagements")
+          .select("id, title, outcome, stage_definitions(label)")
+          .eq("id", t.engagement_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    readThreadWindow(db, business.id, threadId, null),
+  ]);
+  const contact = contactRes.data as {
+    id: string;
+    display_name: string;
+    type: string;
+    status: string;
+    first_touch: Record<string, unknown> | null;
+  } | null;
+  if (!contact) return null;
+  const engagement = engagementRes.data as {
+    id: string;
+    title: string;
+    outcome: string | null;
+    stage_definitions: { label: string } | { label: string }[] | null;
+  } | null;
+  const stageRel = engagement?.stage_definitions;
+  const stageLabel = Array.isArray(stageRel)
+    ? (stageRel[0]?.label ?? null)
+    : (stageRel?.label ?? null);
+  const contactChannels = (channelsRes.data ?? []) as {
+    channel: string;
+    value: string;
+    is_primary: boolean;
+    consent: Record<string, unknown> | null;
+  }[];
+  const primary = (kind: string) =>
+    contactChannels.find((c) => c.channel === kind && c.is_primary) ??
+    contactChannels.find((c) => c.channel === kind);
+  const firstTouch = (contact.first_touch ?? {}) as Record<string, unknown>;
+  const oldest = window.messages[0] ?? null;
+
+  return {
+    id: t.id,
+    contactId: t.contact_id,
+    contactName: contact.display_name,
+    channel: t.channel,
+    subject: t.subject,
+    enquiry: engagement
+      ? { id: engagement.id, title: engagement.title, stageLabel }
+      : null,
+    autoDraftPaused: Boolean(t.auto_draft_paused),
+    settleOverrideSeconds:
+      typeof t.settle_override_seconds === "number" ? t.settle_override_seconds : null,
+    settleDueAt: t.draft_settle_due_at ?? null,
+    waServiceWindowExpiresAt: t.wa_service_window_expires_at ?? null,
+    unread: Boolean(t.is_unread),
+    contact: {
+      type: contact.type as "person" | "organisation",
+      status: contact.status,
+      isClient: engagement?.outcome === "won",
+      phone: primary("phone")?.value ?? primary("whatsapp")?.value ?? null,
+      email: primary("email")?.value ?? null,
+      source: typeof firstTouch.source === "string" ? firstTouch.source : null,
+      consents: contactChannels.map((c) => {
+        const { ok, note } = consentNote((c.consent ?? {}) as Record<string, unknown>);
+        return { channel: c.channel, ok, note };
+      }),
+    },
+    messages: window.messages,
+    hasOlder: window.hasOlder,
+    oldestCursor: oldest ? { occurredAt: oldest.occurredAt, id: oldest.id } : null,
+  };
+}
+
+/** Older history, one bounded window at a time (5c — the upward scroll). */
+export async function getOlderThreadMessages(
+  threadId: string,
+  before: ThreadCursor
+): Promise<{ messages: ThreadMessage[]; hasOlder: boolean; oldestCursor: ThreadCursor | null }> {
+  if (!isUuid(threadId)) return { messages: [], hasOlder: false, oldestCursor: null };
+  const { db, business } = await getAppContext();
+  const window = await readThreadWindow(db, business.id, threadId, before);
+  const oldest = window.messages[0] ?? null;
+  return {
+    messages: window.messages,
+    hasOlder: window.hasOlder,
+    oldestCursor: oldest ? { occurredAt: oldest.occurredAt, id: oldest.id } : null,
+  };
+}
+
+/** Session 23 (WS1b) — the thread view of the same stamp: for each pending
+ * draft in the visible threads, the pre-flight state (from the approval_inbox
+ * view — the gate's own truth) and the render-resolved WYSIWYS body (from
+ * getCommunicationDetail — the same resolution the inbox card shows).
+ * Bounded: the guard indexes (0029) allow at most one pending draft per
+ * engagement per channel, so this set is small by construction. */
+export interface ThreadDraftStampData {
+  communicationId: string;
+  checks: { key: string; label: string; pass: boolean; detail: string | null; state?: string }[];
+  preflightPass: boolean;
+  body: string;
+  signOffResolvedTo: string | null;
+  signOffMode: boolean;
+  creditNote: string | null;
+}
+
+const THREAD_STAMP_BOUND = 20;
+
+export async function getThreadDraftStamps(
+  communicationIds: string[]
+): Promise<Record<string, ThreadDraftStampData>> {
+  if (communicationIds.length === 0) return {};
+  const ids = communicationIds.slice(0, THREAD_STAMP_BOUND);
+  const { db, business } = await getAppContext();
+  const { data: rows, error } = await db
+    .from("approval_inbox")
+    .select("item_id, preflight, preflight_pass")
+    .eq("business_id", business.id)
+    .eq("item_type", "communication")
+    .in("item_id", ids);
+  if (error) throw new Error(`thread stamp preflight read failed: ${error.message}`);
+
+  const out: Record<string, ThreadDraftStampData> = {};
+  for (const row of rows ?? []) {
+    const detail = await getCommunicationDetail(row.item_id as string);
+    if (!detail) continue;
+    const preflight = (row.preflight ?? {}) as {
+      checks?: ThreadDraftStampData["checks"];
+    };
+    out[row.item_id as string] = {
+      communicationId: row.item_id as string,
+      checks: preflight.checks ?? [],
+      preflightPass: row.preflight_pass === true,
+      body: detail.body,
+      signOffResolvedTo: detail.signOff?.resolvedTo ?? null,
+      signOffMode: detail.signOff !== null,
+      creditNote: detail.creditLine
+        ? `✦ Light · ${detail.creditLine.tier} · ${
+            detail.creditLine.reason === "floor" ? "floor" : `escalated: ${detail.creditLine.reason}`
+          }`
+        : null,
+    };
+  }
+  return out;
 }
 
 // --- Tasks ---------------------------------------------------------------------
@@ -1370,6 +1788,8 @@ export interface TaskRow {
   assigneeIsAgent: boolean;
   createdByAgent: boolean;
   enquiry: { id: string; title: string } | null;
+  /** Session 23 (WS4d): a member's cancellation request awaits the manager. */
+  cancellationRequested: boolean;
 }
 
 export interface EnquiryOption {
@@ -1426,8 +1846,28 @@ export async function getTasks(): Promise<TaskRow[]> {
       assigneeIsAgent: assignee?.type === "agent",
       createdByAgent: creator?.type === "agent",
       enquiry: engagement ? { id: engagement.id, title: engagement.title } : null,
+      // Session 23 (WS4d): a pending cancellation request shows on the row.
+      cancellationRequested: Boolean(attributes.cancellation_request),
     };
   });
+}
+
+/** Session 23 (WS4d): the manager gate for task cancellation — the owner,
+ * or a human holding settings.team at execute (see 0037's JUDGMENT note). */
+export async function getIsManager(): Promise<boolean> {
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole === "owner") return true;
+  const { data } = await db
+    .from("grants")
+    .select("id")
+    .eq("business_id", business.id)
+    .eq("grantee_actor_id", actor.id)
+    .eq("tool", "settings.team")
+    .eq("access", "execute")
+    .is("revoked_at", null)
+    .is("archived_at", null)
+    .limit(1);
+  return Boolean(data?.length);
 }
 
 /** Open (non-terminal) enquiries for the task modal's link search. */
@@ -1826,14 +2266,20 @@ export interface WebsitePageRow {
   draftedByLight: boolean;
 }
 
-/** Everything published or teachable that is NOT a note — the site's pages. */
+/** WS4i (Session 23, founder-reported): the site's pages are a POSITIVE
+ * whitelist of genuine page/post types from the 0009 template vocabulary —
+ * the old not-a-note filter let knowledge_entry rows (D126: knowledge is
+ * content) list as PUBLISHED pages. Knowledge lives in Settings → Knowledge;
+ * it must never appear here. */
+export const WEBSITE_PAGE_TYPES = ["page", "blog_post", "funnel_page"] as const;
+
 export async function getWebsitePages(): Promise<WebsitePageRow[]> {
   const { db, business } = await getAppContext();
   const { data, error } = await db
     .from("content_items")
     .select("id, title, slug, content_type, state, version, updated_at, created_by, actors!content_items_created_by_fkey(actor_type)")
     .eq("business_id", business.id)
-    .neq("content_type", "note")
+    .in("content_type", [...WEBSITE_PAGE_TYPES])
     .is("archived_at", null)
     .order("updated_at", { ascending: false });
   if (error) throw new Error(`content_items query failed: ${error.message}`);
@@ -1857,7 +2303,14 @@ export interface WebsitePageDetail extends WebsitePageRow {
   visibility: string;
   publishedAt: string | null;
   publishedByName: string | null;
+  /** WS4j (Session 23): the newest live featured image, previewable. */
+  featuredImage: { fileId: string; filename: string; url: string | null; alt: string } | null;
+  /** WS4j: the business's live images, for attach-from-library (bounded). */
+  libraryImages: { id: string; filename: string }[];
 }
+
+const LIBRARY_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const LIBRARY_IMAGE_BOUND = 24;
 
 export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetail | null> {
   if (!isUuid(id)) return null;
@@ -1865,7 +2318,7 @@ export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetai
   const { data: r, error } = await db
     .from("content_items")
     .select(
-      "id, title, slug, content_type, state, version, updated_at, visibility, body, published_at, published_by_actor_id, created_by, actors!content_items_created_by_fkey(actor_type)"
+      "id, title, slug, content_type, state, version, updated_at, visibility, body, attributes, published_at, published_by_actor_id, created_by, actors!content_items_created_by_fkey(actor_type)"
     )
     .eq("id", id)
     .eq("business_id", business.id)
@@ -1877,6 +2330,50 @@ export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetai
   const { data: publisher } = r.published_by_actor_id
     ? await db.from("actors").select("display_name").eq("id", r.published_by_actor_id).maybeSingle()
     : { data: null };
+
+  // WS4j: the newest LIVE featured file (the s19 resolve shape) with a
+  // signed preview URL, plus the bounded library for attach-from-library.
+  const [featLinks, libraryFiles] = await Promise.all([
+    db
+      .from("file_links")
+      .select("file_id, created_at")
+      .eq("entity_type", "content_item")
+      .eq("entity_id", id)
+      .eq("role", "featured_image")
+      .order("created_at", { ascending: false })
+      .limit(5),
+    db
+      .from("files")
+      .select("id, filename, mime_type")
+      .eq("business_id", business.id)
+      .in("mime_type", LIBRARY_IMAGE_TYPES)
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .limit(LIBRARY_IMAGE_BOUND),
+  ]);
+  const pageAttrs = (r.attributes ?? {}) as Record<string, unknown>;
+  const featMeta = pageAttrs.featured_image as { file_id?: unknown; alt?: unknown } | undefined;
+  let featuredImage: WebsitePageDetail["featuredImage"] = null;
+  for (const link of featLinks.data ?? []) {
+    const { data: fileRow } = await db
+      .from("files")
+      .select("id, filename, storage_key")
+      .eq("id", link.file_id)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (!fileRow) continue;
+    const service = createServiceClient();
+    const { data: signed } = await service.storage
+      .from(FILES_BUCKET)
+      .createSignedUrl(fileRow.storage_key as string, 3600);
+    featuredImage = {
+      fileId: fileRow.id as string,
+      filename: fileRow.filename as string,
+      url: signed?.signedUrl ?? null,
+      alt: typeof featMeta?.alt === "string" ? featMeta.alt : "",
+    };
+    break;
+  }
 
   const creator = r.actors as unknown as { actor_type: ActorType } | null;
   const raw = Array.isArray(r.body) ? (r.body as unknown[]) : [];
@@ -1897,6 +2394,11 @@ export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetai
       if (typeof block.text === "string") return [{ type: "paragraph", text: block.text }];
       return [];
     }),
+    featuredImage,
+    libraryImages: (libraryFiles.data ?? []).map((f) => ({
+      id: f.id as string,
+      filename: f.filename as string,
+    })),
   };
 }
 
@@ -3166,8 +3668,9 @@ export interface KnowledgeEntryRow {
   bodyText: string;
   /** PR-i (Session 19): a route_guide entry's live linked document —
    * "documents are entries with a file". Null on text entries and on a
-   * guide whose file was never uploaded (a visibly incomplete guide). */
-  file: { filename: string; sizeBytes: number } | null;
+   * guide whose file was never uploaded (a visibly incomplete guide).
+   * Session 23 (WS5b): the id rides along so the read view can open it. */
+  file: { id: string; filename: string; sizeBytes: number } | null;
 }
 
 /** Every live pack entry, for the Settings → Knowledge editor (the one door). */
@@ -3184,7 +3687,7 @@ export async function getKnowledgeEntries(): Promise<KnowledgeEntryRow[]> {
 
   // PR-i: resolve each entry's newest live linked file in one pass.
   const entryIds = (data ?? []).map((r) => r.id as string);
-  const fileByEntry = new Map<string, { filename: string; sizeBytes: number }>();
+  const fileByEntry = new Map<string, { id: string; filename: string; sizeBytes: number }>();
   if (entryIds.length) {
     const { data: links } = await db
       .from("file_links")
@@ -3206,6 +3709,7 @@ export async function getKnowledgeEntries(): Promise<KnowledgeEntryRow[]> {
         const file = liveFiles.get(link.file_id as string);
         if (file) {
           fileByEntry.set(link.entity_id as string, {
+            id: file.id as string,
             filename: file.filename as string,
             sizeBytes: Number(file.size_bytes),
           });

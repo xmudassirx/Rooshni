@@ -36,7 +36,10 @@ export default async function RecordPage({
     typeof params.entity_id === "string" && isUuid(params.entity_id) ? params.entity_id : null;
   const filter = entityType && entityId ? { entityType, entityId } : undefined;
 
-  const events = await getRecordEvents(filter);
+  // WS3 (Session 23, decision 157 5b): the first window of the infinite
+  // scroll — further windows arrive through the server action as the reader
+  // scrolls, each one bounded.
+  const window = await getRecordEvents(filter);
 
   return (
     <>
@@ -60,7 +63,12 @@ export default async function RecordPage({
         </div>
       ) : null}
 
-      <RecordList events={events} />
+      <RecordList
+        initialEvents={window.events}
+        initialHasMore={window.hasMore}
+        initialCursor={window.nextCursor}
+        filter={filter ?? null}
+      />
 
       <p className="mt-3 font-mono text-xs text-ink-faint">
         RENDERED AS PLAIN ENGLISH FOR HUMANS; STORED AS STRUCTURE FOR MACHINES. HARD DELETES DO

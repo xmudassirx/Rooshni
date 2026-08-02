@@ -84,17 +84,30 @@ export function LiveInbox({ businessId }: { businessId: string }) {
           filter: `business_id=eq.${businessId}`,
         },
         (payload) => {
-          const next = payload.new as { status?: string } | null;
+          const next = payload.new as { status?: string; direction?: string } | null;
           const prev = payload.old as { status?: string } | null;
           // The single subtle tone: a draft ARRIVING at pending (a stamp
-          // newly owed) — not edits, not decisions, not inbound.
-          if (
-            next?.status === "pending_approval" &&
-            prev?.status !== "pending_approval" &&
-            soundEnabled()
-          ) {
+          // newly owed) — not edits, not decisions. Session 23 (WS1c,
+          // founder-ruled): an INBOUND client message rings the same tone,
+          // governed by the same Appearance toggle.
+          const draftArrived =
+            next?.status === "pending_approval" && prev?.status !== "pending_approval";
+          const inboundArrived =
+            payload.eventType === "INSERT" && next?.direction === "inbound";
+          if ((draftArrived || inboundArrived) && soundEnabled()) {
             playArrivalTone();
           }
+          // Session 23 (WS2, 5c): the open Conversations thread appends the
+          // arriving row WITHOUT a refetch — the payload carries the row.
+          // The debounced server refresh below stays as reconciliation
+          // (every read it triggers is windowed since s22/s23; JUDGMENT:
+          // append-first + bounded reconcile is the honest reading of
+          // "Realtime appends without refetch").
+          window.dispatchEvent(
+            new CustomEvent("rooshni:comm-change", {
+              detail: { eventType: payload.eventType, row: payload.new },
+            })
+          );
           scheduleRefresh();
         }
       )

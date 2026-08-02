@@ -14,7 +14,12 @@ import {
 
 import { getAppContext } from "@/lib/server/context";
 import { dispatchAfterApproval } from "@/lib/server/outbound";
-import { isUuid } from "@/lib/server/queries";
+import {
+  getOlderThreadMessages,
+  isUuid,
+  type ThreadCursor,
+  type ThreadMessage,
+} from "@/lib/server/queries";
 
 /**
  * Session 16 — Conversations becomes a drafting AND sending surface
@@ -215,6 +220,40 @@ export async function setAutoDraftPausedAction(
 
   revalidatePath("/conversations");
   return { error: null, done: true };
+}
+
+/**
+ * Session 23 (WS2, 5c) — the upward scroll: one bounded older window per
+ * call, cursor-keyed. A read, not an act; RLS scopes it, nothing is evented.
+ */
+export async function loadOlderMessagesAction(
+  threadId: string,
+  before: ThreadCursor
+): Promise<{ messages: ThreadMessage[]; hasOlder: boolean; oldestCursor: ThreadCursor | null }> {
+  if (!isUuid(threadId)) return { messages: [], hasOlder: false, oldestCursor: null };
+  return getOlderThreadMessages(threadId, before);
+}
+
+/**
+ * Session 23 (WS1c) — opening a thread clears its unread state: stamp
+ * last_opened_at; the 0035 generated column derives unread from it in the
+ * database. JUDGMENT (0035): reading correspondence is not an act on the
+ * world — no ledger event; the write rides the existing member-RLS UPDATE
+ * policy on comm_threads.
+ */
+export async function markThreadOpenedAction(threadId: string): Promise<void> {
+  if (!isUuid(threadId)) return;
+  try {
+    const { db, business } = await getAppContext();
+    await db
+      .from("comm_threads")
+      .update({ last_opened_at: new Date().toISOString() })
+      .eq("id", threadId)
+      .eq("business_id", business.id);
+  } catch {
+    // Unread clearing is bookkeeping — a miss self-heals on the next open.
+  }
+  revalidatePath("/", "layout");
 }
 
 /** PR-C: the per-conversation settle override — instant/1/3/5 minutes, or

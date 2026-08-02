@@ -10,14 +10,21 @@ import {
   getInboxCount,
   getOpenTaskCount,
   getTemplateContent,
+  getUnreadThreadCount,
 } from "@/lib/server/queries";
 
 // Everything in the shell renders against the live database on every request.
 export const dynamic = "force-dynamic";
 
 export default async function ShellLayout({ children }: { children: ReactNode }) {
-  const [{ business, actor, membershipRole }, inboxCount, taskCount, firstLight] =
-    await Promise.all([getAppContext(), getInboxCount(), getOpenTaskCount(), getFirstLight()]);
+  const [{ business, actor, membershipRole }, inboxCount, taskCount, unreadCount, firstLight] =
+    await Promise.all([
+      getAppContext(),
+      getInboxCount(),
+      getOpenTaskCount(),
+      getUnreadThreadCount(),
+      getFirstLight(),
+    ]);
 
   // JUDGMENT: Feedback is a grant-gated surface, but no `feedback` tool row
   // exists in the registry yet and registering one is a migration (out of
@@ -90,6 +97,7 @@ export default async function ShellLayout({ children }: { children: ReactNode })
       userRole={membershipRole}
       inboxCount={inboxCount}
       taskCount={taskCount}
+      unreadCount={unreadCount}
       showFeedback={showFeedback}
       firstLight={firstLightSlot}
     >

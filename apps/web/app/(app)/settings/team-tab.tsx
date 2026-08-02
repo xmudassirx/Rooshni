@@ -43,15 +43,17 @@ export async function TeamTab() {
           >
             {member.kind === "agent" ? "✦" : member.name.charAt(0).toUpperCase()}
           </span>
-          <span className="min-w-[150px]">
-            <span className="block text-sm font-bold">{member.name}</span>
+          <span className="min-w-0 max-[560px]:flex-1">
+            <span className="block truncate text-sm font-bold">{member.name}</span>
             <span className="block font-mono text-[10px] tracking-wide text-ink-faint uppercase">
               {member.kind === "agent"
                 ? "Agent · roles are routing rules"
                 : (member.role ?? "member")}
             </span>
           </span>
-          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          {/* WS4g (Session 23): on a phone the grant chips take their own
+              full row and wrap — never a horizontal scroll. */}
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 max-[560px]:w-full max-[560px]:flex-none">
             {member.grantChips.map((chip) => (
               <span
                 key={chip}

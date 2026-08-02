@@ -25,6 +25,7 @@
     "backfill:form-answers": "tsx scripts/backfill-form-answers.ts",
     "backfill:wa-consent": "tsx scripts/backfill-wa-consent.ts",
     "chore:install-multitouch-intro": "tsx scripts/install-multitouch-intro.ts",
+    "chore:cancel-replay-runs": "tsx scripts/chore-cancel-replay-runs.ts",
     "circuit:drafting": "tsx scripts/circuit-drafting.ts",
     "circuit:conversion": "tsx scripts/circuit-conversion.ts",
     "typecheck": "tsc --noEmit"

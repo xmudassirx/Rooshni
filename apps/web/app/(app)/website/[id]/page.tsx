@@ -3,7 +3,9 @@ import { notFound } from "next/navigation";
 
 import { HonestButton } from "@/components/ui/honest-button";
 import { formatWhen } from "@/lib/format";
-import { getWebsitePageDetail } from "@/lib/server/queries";
+import { getWebsitePageDetail, WEBSITE_PAGE_TYPES } from "@/lib/server/queries";
+
+import { FeaturedImageCard } from "./featured-image-card";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +43,9 @@ export default async function WebsitePageDetail({
 }) {
   const { id } = await params;
   const page = await getWebsitePageDetail(id);
-  if (!page || page.contentType === "note") notFound();
+  // WS4i (Session 23): the detail door matches the list's positive whitelist
+  // — a knowledge entry or note is never a website page, by type.
+  if (!page || !(WEBSITE_PAGE_TYPES as readonly string[]).includes(page.contentType)) notFound();
 
   return (
     <>
@@ -114,6 +118,21 @@ export default async function WebsitePageDetail({
                 v={`${formatWhen(page.publishedAt)}${page.publishedByName ? ` · ${page.publishedByName}` : ""}`}
               />
             ) : null}
+            {/* WS4j (Session 23): the SOFT pre-publish warning — recommended
+                items only, a warning and never a block, until the
+                website-content session defines the real gate. */}
+            {(() => {
+              const missing = [
+                ...(page.featuredImage ? [] : ["featured image"]),
+                "schema", // no archetype/schema store exists yet — honestly always missing
+              ];
+              return missing.length ? (
+                <p className="mt-2.5 rounded-lg border border-amber/40 bg-amber/10 px-2.5 py-2 text-[12px] leading-normal text-amber">
+                  <b>Recommended before publishing:</b> {missing.join(" · ")}. A warning, not a
+                  block — the real publish gate arrives with the website-content session.
+                </p>
+              ) : null;
+            })()}
             <HonestButton
               variant="primary"
               className="mt-2.5 block [&>button]:w-full"
@@ -132,11 +151,13 @@ export default async function WebsitePageDetail({
           </RailCard>
 
           <RailCard title="Featured image">
-            <p className="text-[12.5px] text-ink-soft">
-              None yet — upload, library, or ✦ generate to the brand tokens; alt
-              text is written in the same act, and a missing alt blocks the
-              stamp.
-            </p>
+            {/* WS4j: working Upload + attach-from-library; generate honestly
+                disabled until a media provider is connected. */}
+            <FeaturedImageCard
+              pageId={page.id}
+              featured={page.featuredImage}
+              library={page.libraryImages}
+            />
           </RailCard>
 
           <RailCard title="Organisation">
