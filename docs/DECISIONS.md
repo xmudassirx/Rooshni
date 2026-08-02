@@ -1589,3 +1589,35 @@ and are NOT recorded here.
      server-side full-set scope). 5b and 5c were NOT built — closed honestly
      at the last complete piece per the same ruling; their pre-ruled shapes
      stand for their own session.
+
+## Session 23 close (2 August 2026) — deferred ruling recorded on founder authority
+
+Entry 158 quotes the founder's post-close message verbatim ("RECORD AS
+DEFERRED RULING (next product session's opening workstream; found live by
+founder test)") — the decision 133 shape: recorded so the repo carries the
+fence; NOT built in Session 23. The session's own Lane B calls remain in the
+close report awaiting sign-off and are not recorded here.
+
+158. **DEFERRED RULING — RETURNING LEADS (the next product session's opening
+     workstream; found live by founder test).** Current behaviour: a lead
+     submission resolving to an existing contact whose trigger was already
+     consumed produces nothing visible — correct as replay protection (the
+     0038 consumption law), wrong as product: a resubmission is the
+     highest-intent signal in the funnel and must never be silent. Quoted
+     from the founder's ruling (2 August 2026):
+     "(a) A form submission resolving to an existing contact posts a system
+     marker message into that contact's existing thread (neutral chrome — it
+     is a fact): form name, date, submitted details, changed fields
+     highlighted; thread to top, unread badge, arrival sound.
+     (b) The consumption frontier's unit is refined: consumption blocks
+     RE-PROCESSING OF THE SAME SUBMISSION (same leadgen id), never a NEW
+     submission by a known contact — a new leadgen id on a known contact is
+     a returning-lead event, always processed.
+     (c) Light drafts a returning-lead reply on the existing thread (settle
+     window + stamp as ever) with returning context in the prompt:
+     acknowledge prior contact, reference their route, no cold-intro
+     re-send, no duplicate booklet.
+     (d) Enquiry linkage: open enquiry → resubmission events onto it;
+     closed/unresponsive enquiry → new enquiry created and linked to the
+     predecessor, visible on both timelines.
+     No auto-send anywhere; the marker is internal, the reply is stamped."
