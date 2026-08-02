@@ -51,13 +51,22 @@ function Card({ card }: { card: PipelineCard }) {
   );
 }
 
-export default async function EnquiriesPage() {
-  const stages = await getPipeline();
+export default async function EnquiriesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  // WS4f (Session 23): server-side search — name or contact match, bounded
+  // candidate reads, the per-stage windows filtered by the resolved set.
+  const params = await searchParams;
+  const q = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
+  const stages = await getPipeline(q);
 
   // Day one, before the first enquiry: the true empty state (Session 11
   // mockup). The stage line renders FROM the installed template's own
-  // stage set — never a hardcoded vocabulary.
-  if (stages.every((s) => s.total === 0)) {
+  // stage set — never a hardcoded vocabulary. A fruitless SEARCH is not
+  // that state — the board renders with its honest empty columns.
+  if (!q && stages.every((s) => s.total === 0)) {
     const stageLine = [
       ...stages.filter((s) => !s.isTerminal).map((s) => s.label),
       "Closed",
@@ -101,6 +110,31 @@ export default async function EnquiriesPage() {
         title="Enquiries"
         sub="Lead-to-consultation pipeline · tap any card for the enquiry's full story — stage moves arrive with their controls"
       />
+      {/* WS4f: the search — a GET form, so the read stays server-side and
+          shareable; bounded in the query layer. */}
+      <form action="/enquiries" className="mb-1 flex flex-wrap items-center gap-2">
+        <input
+          type="search"
+          name="q"
+          defaultValue={q}
+          placeholder="Search by name or contact…"
+          className="w-[min(320px,100%)] rounded-lg border border-rule bg-paper px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-faint focus:outline-2 focus:-outline-offset-1 focus:outline-accent"
+        />
+        <button
+          type="submit"
+          className="min-h-9 rounded-lg border border-rule bg-panel px-3 py-1.5 font-mono text-[11px] font-semibold tracking-wide text-ink-soft uppercase hover:border-accent"
+        >
+          Search
+        </button>
+        {q ? (
+          <Link
+            href="/enquiries"
+            className="min-h-9 content-center font-mono text-[11px] font-semibold tracking-wide text-accent uppercase hover:underline"
+          >
+            Clear — matching &ldquo;{q}&rdquo; ({stages.reduce((n, s) => n + s.total, 0)})
+          </Link>
+        ) : null}
+      </form>
       <div className="flex snap-x snap-proximity gap-3 overflow-x-auto px-0.5 pt-2 pb-4">
         {/* Fluid shell: columns keep their minimum but grow into wide
             viewports — containers stretch, prose doesn't. */}

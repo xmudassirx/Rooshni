@@ -402,7 +402,9 @@ export function AppShell({
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="glass sticky top-0 z-30 flex items-center gap-3 rounded-none border-x-0 border-t-0 px-5 py-2.5">
+        {/* WS4a: app-topbar goes SOLID below the drawer breakpoint — content
+            must never ghost through the sticky chrome on a phone. */}
+        <header className="glass app-topbar sticky top-0 z-30 flex items-center gap-3 rounded-none border-x-0 border-t-0 px-5 py-2.5">
           <button
             type="button"
             className="hidden max-[880px]:block"

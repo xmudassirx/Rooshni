@@ -29,11 +29,13 @@ function Row({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-baseline gap-3 border-b border-dashed border-paper-deep py-2.5 text-[13px] last:border-b-0">
-      <span className="w-43 shrink-0 font-mono text-[9.5px] font-semibold tracking-[.08em] text-ink-faint uppercase">
+    // WS4g (Session 23): on a phone the row stacks label-over-value — the
+    // fixed label column would otherwise crush the value into overflow.
+    <div className="flex items-baseline gap-3 border-b border-dashed border-paper-deep py-2.5 text-[13px] last:border-b-0 max-[560px]:flex-wrap max-[560px]:gap-y-1">
+      <span className="w-43 shrink-0 font-mono text-[9.5px] font-semibold tracking-[.08em] text-ink-faint uppercase max-[560px]:w-full">
         {k}
       </span>
-      <span className="flex-1 text-ink">
+      <span className="min-w-0 flex-1 break-words text-ink">
         {v}
         {small ? <small className="mt-0.5 block text-[11px] text-ink-faint">{small}</small> : null}
       </span>

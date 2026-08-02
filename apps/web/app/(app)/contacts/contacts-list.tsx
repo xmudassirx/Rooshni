@@ -147,16 +147,21 @@ export function ContactsList({ contacts }: { contacts: ContactListRow[] }) {
                 c.status === "junk" && "opacity-55"
               )}
             >
-              <span className="flex size-8.5 shrink-0 items-center justify-center rounded-full border border-rule bg-paper-deep text-xs font-bold text-ink-soft">
-                {initials(c)}
-              </span>
-              <span>
-                <span className="block text-sm font-bold">{c.name}</span>
-                <span className="block font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
-                  {c.type} · {c.status.replace(/_/g, " ")} · {c.locale}
+              {/* WS4e (Session 23): avatar and name share ONE line whatever
+                  the name's length (truncate, never wrap apart); the chips
+                  wrap below on narrow widths. */}
+              <span className="flex min-w-0 flex-1 items-center gap-3">
+                <span className="flex size-8.5 shrink-0 items-center justify-center rounded-full border border-rule bg-paper-deep text-xs font-bold text-ink-soft">
+                  {initials(c)}
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-bold">{c.name}</span>
+                  <span className="block truncate font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+                    {c.type} · {c.status.replace(/_/g, " ")} · {c.locale}
+                  </span>
                 </span>
               </span>
-              <span className="ml-auto flex flex-wrap justify-end gap-1.5">
+              <span className="ml-auto flex flex-wrap justify-end gap-1.5 max-[640px]:ml-0 max-[640px]:w-full max-[640px]:justify-start max-[640px]:pl-[46px]">
                 {consented(c).map((label) => (
                   <span
                     key={label}

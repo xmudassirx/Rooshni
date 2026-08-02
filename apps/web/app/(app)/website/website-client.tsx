@@ -143,7 +143,9 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
         <h2 className="border-b border-rule bg-paper px-4 py-3 font-mono text-[10.5px] font-semibold tracking-[.14em] text-ink-soft uppercase">
           Pages · views over content_items · scorecards cached, history on The Record
         </h2>
-        <div className="grid grid-cols-[1fr_130px_210px_120px] gap-3 border-b border-rule bg-accent-tint px-4 py-2.5 font-mono text-[9.5px] font-semibold tracking-[.14em] text-accent uppercase max-[760px]:grid-cols-[1fr_110px]">
+        {/* WS4i responsive pass: on narrow widths the table is Page | State,
+            the state cell sized to its badge — no fixed column overflowing. */}
+        <div className="grid grid-cols-[1fr_130px_210px_120px] gap-3 border-b border-rule bg-accent-tint px-4 py-2.5 font-mono text-[9.5px] font-semibold tracking-[.14em] text-accent uppercase max-[760px]:grid-cols-[minmax(0,1fr)_auto]">
           <span>Page</span>
           <span>State</span>
           <span className="max-[760px]:hidden">Scorecard</span>
@@ -154,10 +156,10 @@ export function WebsiteClient({ pages }: { pages: WebsitePageRow[] }) {
             <Link
               key={p.id}
               href={`/website/${p.id}`}
-              className="grid grid-cols-[1fr_130px_210px_120px] items-center gap-3 border-b border-rule px-4 py-3 text-[13px] last:border-b-0 hover:bg-paper-deep max-[760px]:grid-cols-[1fr_110px]"
+              className="grid grid-cols-[1fr_130px_210px_120px] items-center gap-3 border-b border-rule px-4 py-3 text-[13px] last:border-b-0 hover:bg-paper-deep max-[760px]:grid-cols-[minmax(0,1fr)_auto]"
             >
-              <span>
-                <span className="block text-[13.5px] font-bold">{p.title}</span>
+              <span className="min-w-0">
+                <span className="block text-[13.5px] font-bold break-words">{p.title}</span>
                 <small className="mt-px block font-mono text-[10px] text-ink-faint uppercase">
                   /{p.slug} · {p.contentType.replace(/_/g, " ")}
                   {p.draftedByLight ? " · ✦ Light" : ""} · v{p.version}

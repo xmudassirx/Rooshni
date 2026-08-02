@@ -618,7 +618,7 @@ function TaskModal({
               <Search className="pointer-events-none absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 text-ink-faint" />
               {pop === "enq" && editing ? (
                 <div
-                  className="glass absolute top-[calc(100%+4px)] right-0 left-0 z-95 max-h-45 overflow-auto rounded-xl p-1"
+                  className="popover-surface absolute top-[calc(100%+4px)] right-0 left-0 z-95 max-h-45 overflow-auto rounded-xl p-1"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {enqHits.length ? (
@@ -661,7 +661,7 @@ function TaskModal({
 
             {pop === "cal" ? (
               <div
-                className="glass absolute top-[calc(100%+4px)] left-0 z-95 w-[270px] rounded-xl p-2.5"
+                className="popover-surface absolute top-[calc(100%+4px)] left-0 z-95 w-[270px] rounded-xl p-2.5"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between px-0.5 pb-1.5 font-display text-[13px] font-extrabold">
@@ -726,7 +726,7 @@ function TaskModal({
 
             {pop === "clock" ? (
               <div
-                className="glass absolute top-[calc(100%+4px)] left-27 z-95 rounded-xl p-2.5"
+                className="popover-surface absolute top-[calc(100%+4px)] left-27 z-95 rounded-xl p-2.5"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center gap-2 p-0.5">

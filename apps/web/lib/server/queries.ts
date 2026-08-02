@@ -4,7 +4,9 @@ import {
   clampPage,
   clampPageSize,
   computeLightPerformance,
+  createServiceClient,
   DEFAULT_LIST_WINDOW,
+  FILES_BUCKET,
   RECORD_WINDOW,
   THREAD_TAIL_WINDOW,
   evaluateAiBudget,
@@ -58,8 +60,54 @@ export interface PipelineStage {
   cards: PipelineCard[];
 }
 
-export async function getPipeline(): Promise<PipelineStage[]> {
+/** WS4f (Session 23): the pipeline search's bounded candidate read — name or
+ * contact match, server-side, each leg capped. */
+const PIPELINE_SEARCH_BOUND = 50;
+
+export async function getPipeline(search = ""): Promise<PipelineStage[]> {
   const { db, business } = await getAppContext();
+
+  // WS4f: server-side search — engagement titles and contact names, bounded
+  // legs, resolved to an id set the per-stage windows then filter by.
+  const query = search.trim().replace(/[%_\\]/g, "").slice(0, 80);
+  let searchIds: string[] | null = null;
+  if (query) {
+    const [titleHits, contactHits] = await Promise.all([
+      db
+        .from("engagements")
+        .select("id")
+        .eq("business_id", business.id)
+        .ilike("title", `%${query}%`)
+        .is("archived_at", null)
+        .limit(PIPELINE_SEARCH_BOUND),
+      db
+        .from("contacts")
+        .select("id")
+        .eq("business_id", business.id)
+        .ilike("display_name", `%${query}%`)
+        .is("archived_at", null)
+        .limit(PIPELINE_SEARCH_BOUND),
+    ]);
+    if (titleHits.error) throw new Error(`pipeline search (titles) failed: ${titleHits.error.message}`);
+    if (contactHits.error) throw new Error(`pipeline search (contacts) failed: ${contactHits.error.message}`);
+    const contactIds = (contactHits.data ?? []).map((c) => c.id);
+    const participantHits = contactIds.length
+      ? await db
+          .from("engagement_participants")
+          .select("engagement_id")
+          .in("contact_id", contactIds)
+          .limit(PIPELINE_SEARCH_BOUND * 2)
+      : { data: [], error: null };
+    if (participantHits.error) {
+      throw new Error(`pipeline search (participants) failed: ${participantHits.error.message}`);
+    }
+    searchIds = [
+      ...new Set([
+        ...(titleHits.data ?? []).map((e) => e.id as string),
+        ...(participantHits.data ?? []).map((p) => p.engagement_id as string),
+      ]),
+    ];
+  }
 
   const { data: types, error: typesError } = await db
     .from("engagement_types")
@@ -80,25 +128,41 @@ export async function getPipeline(): Promise<PipelineStage[]> {
   // and its TOTAL comes from a COUNT aggregate (5e) — the demo-era read
   // fetched every engagement plus the entire approval_inbox on every render.
   const stageList = stages ?? [];
+  // With an active search whose candidate set is empty, every column is
+  // honestly empty — no queries fire against an impossible filter.
+  if (searchIds !== null && searchIds.length === 0) {
+    return stageList.map((stage) => ({
+      id: stage.id,
+      key: stage.key,
+      label: stage.label,
+      isTerminal: stage.is_terminal,
+      total: 0,
+      cards: [],
+    }));
+  }
   const perStage = await Promise.all(
-    stageList.map((stage) =>
-      Promise.all([
-        db
-          .from("engagements")
-          .select("id, title, stage_id, stage_entered_at, attributes, attribution")
-          .eq("business_id", business.id)
-          .eq("stage_id", stage.id)
-          .is("archived_at", null)
-          .order("stage_entered_at", { ascending: true })
-          .limit(DEFAULT_LIST_WINDOW),
-        db
-          .from("engagements")
-          .select("id", { count: "exact", head: true })
-          .eq("business_id", business.id)
-          .eq("stage_id", stage.id)
-          .is("archived_at", null),
-      ])
-    )
+    stageList.map((stage) => {
+      let windowQuery = db
+        .from("engagements")
+        .select("id, title, stage_id, stage_entered_at, attributes, attribution")
+        .eq("business_id", business.id)
+        .eq("stage_id", stage.id)
+        .is("archived_at", null);
+      let countQuery = db
+        .from("engagements")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", business.id)
+        .eq("stage_id", stage.id)
+        .is("archived_at", null);
+      if (searchIds !== null) {
+        windowQuery = windowQuery.in("id", searchIds);
+        countQuery = countQuery.in("id", searchIds);
+      }
+      return Promise.all([
+        windowQuery.order("stage_entered_at", { ascending: true }).limit(DEFAULT_LIST_WINDOW),
+        countQuery,
+      ]);
+    })
   );
   const engagements = perStage.flatMap(([rows], i) => {
     if (rows.error) throw new Error(`engagements query (${stageList[i]!.key}) failed: ${rows.error.message}`);
@@ -2202,14 +2266,20 @@ export interface WebsitePageRow {
   draftedByLight: boolean;
 }
 
-/** Everything published or teachable that is NOT a note — the site's pages. */
+/** WS4i (Session 23, founder-reported): the site's pages are a POSITIVE
+ * whitelist of genuine page/post types from the 0009 template vocabulary —
+ * the old not-a-note filter let knowledge_entry rows (D126: knowledge is
+ * content) list as PUBLISHED pages. Knowledge lives in Settings → Knowledge;
+ * it must never appear here. */
+export const WEBSITE_PAGE_TYPES = ["page", "blog_post", "funnel_page"] as const;
+
 export async function getWebsitePages(): Promise<WebsitePageRow[]> {
   const { db, business } = await getAppContext();
   const { data, error } = await db
     .from("content_items")
     .select("id, title, slug, content_type, state, version, updated_at, created_by, actors!content_items_created_by_fkey(actor_type)")
     .eq("business_id", business.id)
-    .neq("content_type", "note")
+    .in("content_type", [...WEBSITE_PAGE_TYPES])
     .is("archived_at", null)
     .order("updated_at", { ascending: false });
   if (error) throw new Error(`content_items query failed: ${error.message}`);
@@ -2233,7 +2303,14 @@ export interface WebsitePageDetail extends WebsitePageRow {
   visibility: string;
   publishedAt: string | null;
   publishedByName: string | null;
+  /** WS4j (Session 23): the newest live featured image, previewable. */
+  featuredImage: { fileId: string; filename: string; url: string | null; alt: string } | null;
+  /** WS4j: the business's live images, for attach-from-library (bounded). */
+  libraryImages: { id: string; filename: string }[];
 }
+
+const LIBRARY_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const LIBRARY_IMAGE_BOUND = 24;
 
 export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetail | null> {
   if (!isUuid(id)) return null;
@@ -2241,7 +2318,7 @@ export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetai
   const { data: r, error } = await db
     .from("content_items")
     .select(
-      "id, title, slug, content_type, state, version, updated_at, visibility, body, published_at, published_by_actor_id, created_by, actors!content_items_created_by_fkey(actor_type)"
+      "id, title, slug, content_type, state, version, updated_at, visibility, body, attributes, published_at, published_by_actor_id, created_by, actors!content_items_created_by_fkey(actor_type)"
     )
     .eq("id", id)
     .eq("business_id", business.id)
@@ -2253,6 +2330,50 @@ export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetai
   const { data: publisher } = r.published_by_actor_id
     ? await db.from("actors").select("display_name").eq("id", r.published_by_actor_id).maybeSingle()
     : { data: null };
+
+  // WS4j: the newest LIVE featured file (the s19 resolve shape) with a
+  // signed preview URL, plus the bounded library for attach-from-library.
+  const [featLinks, libraryFiles] = await Promise.all([
+    db
+      .from("file_links")
+      .select("file_id, created_at")
+      .eq("entity_type", "content_item")
+      .eq("entity_id", id)
+      .eq("role", "featured_image")
+      .order("created_at", { ascending: false })
+      .limit(5),
+    db
+      .from("files")
+      .select("id, filename, mime_type")
+      .eq("business_id", business.id)
+      .in("mime_type", LIBRARY_IMAGE_TYPES)
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .limit(LIBRARY_IMAGE_BOUND),
+  ]);
+  const pageAttrs = (r.attributes ?? {}) as Record<string, unknown>;
+  const featMeta = pageAttrs.featured_image as { file_id?: unknown; alt?: unknown } | undefined;
+  let featuredImage: WebsitePageDetail["featuredImage"] = null;
+  for (const link of featLinks.data ?? []) {
+    const { data: fileRow } = await db
+      .from("files")
+      .select("id, filename, storage_key")
+      .eq("id", link.file_id)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (!fileRow) continue;
+    const service = createServiceClient();
+    const { data: signed } = await service.storage
+      .from(FILES_BUCKET)
+      .createSignedUrl(fileRow.storage_key as string, 3600);
+    featuredImage = {
+      fileId: fileRow.id as string,
+      filename: fileRow.filename as string,
+      url: signed?.signedUrl ?? null,
+      alt: typeof featMeta?.alt === "string" ? featMeta.alt : "",
+    };
+    break;
+  }
 
   const creator = r.actors as unknown as { actor_type: ActorType } | null;
   const raw = Array.isArray(r.body) ? (r.body as unknown[]) : [];
@@ -2273,6 +2394,11 @@ export async function getWebsitePageDetail(id: string): Promise<WebsitePageDetai
       if (typeof block.text === "string") return [{ type: "paragraph", text: block.text }];
       return [];
     }),
+    featuredImage,
+    libraryImages: (libraryFiles.data ?? []).map((f) => ({
+      id: f.id as string,
+      filename: f.filename as string,
+    })),
   };
 }
 

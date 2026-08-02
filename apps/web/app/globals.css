@@ -46,6 +46,12 @@
 
   /* Surfaces the shell components consume; themed below. */
   --sidebar: rgba(255, 255, 255, 0.55);
+  /* Session 23 (WS4a): the OPAQUE stand-in for any floating chrome — the
+   * mobile nav drawer and the sticky topbar render over content, so their
+   * surface must not let it bleed through. Frost's solid tone; the solid
+   * themes map it to their own solid sidebar/paper below. */
+  --sidebar-solid: #f2f3f8;
+  --topbar-solid: #f4f5f9;
   --sidebar-fg: rgba(37, 48, 62, 0.85);
   --sidebar-fg-strong: #1e2530;
   --panel-border: rgba(255, 255, 255, 0.75);
@@ -61,6 +67,8 @@
   --paper-deep: #f2eee2;
   --rule: #ddd6c4;
   --sidebar: var(--ink);
+  --sidebar-solid: var(--ink);
+  --topbar-solid: #ffffff;
   --sidebar-fg: #edeae0;
   --sidebar-fg-strong: #fbf9f3;
   --panel-border: var(--rule);
@@ -82,6 +90,8 @@
   --ink-faint: #9c9c9c;
   --rule: #eaeaea;
   --sidebar: #ffffff;
+  --sidebar-solid: #ffffff;
+  --topbar-solid: #ffffff;
   --sidebar-fg: #4a4a4a;
   --sidebar-fg-strong: #141414;
   --panel-border: #ededed;
@@ -203,6 +213,36 @@ html:not([data-theme]) .sidebar-glass {
   backdrop-filter: blur(26px) saturate(1.5);
   -webkit-backdrop-filter: blur(26px) saturate(1.5);
   border-right: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+/*
+ * Session 23 (WS4a, founder-reported with screenshots): anything that
+ * FLOATS OVER content is opaque — no text bleed-through, any theme.
+ *   - .popover-surface: dropdowns and popovers (the task-edit calendar,
+ *     clock and enquiry-search dropdowns were the reported offenders) — the
+ *     modal-surface law extended to popovers: solid paper, never glass.
+ *   - the mobile nav drawer and the sticky topbar: below the drawer
+ *     breakpoint their translucency reads as defect, so both go solid.
+ */
+.popover-surface {
+  background: var(--paper) !important;
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+@media (max-width: 880px) {
+  aside.sidebar-glass {
+    background: var(--sidebar-solid) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  header.app-topbar {
+    background: var(--topbar-solid) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }
 
 [data-theme="mono"] .sidebar-glass {
