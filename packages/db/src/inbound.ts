@@ -441,6 +441,10 @@ const MAIL_POLL_CONFIGS: Record<"graph" | "gmail", MailProviderConfig> = {
  * unprocessed after this REAL duration is itself an evented, visible failure
  * — the silence was the worst part of the defect this hotfix repairs. A
  * product timer: scaled through timeScale() (law 11).
+ *
+ * JUDGMENT: (hotfix, Lane B) the ruling names "N minutes" without fixing N —
+ * 15 real minutes (three ticks) distinguishes a genuinely dead claim from
+ * one mid-retry without letting silence run longer than a coffee.
  */
 export const MAIL_CLAIM_STALE_AFTER_MS = 15 * 60 * 1000;
 
@@ -742,9 +746,10 @@ async function sweepStaleMailClaims(
     }
     if (!recovered) report.stale += 1;
 
-    // The visible failure — once per claim on The Record, recovered or not:
-    // the claim DID sit unprocessed past the window, and the ledger carries
-    // what happened and why.
+    // JUDGMENT: (hotfix, Lane B) the visible failure lands once per claim on
+    // The Record, recovered or not — the claim DID sit unprocessed past the
+    // window, and the ledger carries what happened and why; a same-pass
+    // recovery is recorded in the payload, never used to suppress the event.
     try {
       const seen = await q<{ id: string }[]>(
         db
@@ -887,11 +892,11 @@ async function pollMailboxInbound(
       else report.skipped += 1;
       if (!halted) advancedTo = head.receivedDateTime;
     } catch (err) {
-      // JUDGMENT (hotfix): a failed message FREEZES the cursor — the next
-      // tick retries from it, the s16 law — but no longer aborts the rest
-      // of the window: one poison mail must not silence the mailbox. Later
-      // messages process under their own claims (replays harmless) and the
-      // cursor holds until the failure clears or the stale sweep flags it.
+      // JUDGMENT: (hotfix, Lane B) a failed message FREEZES the cursor — the
+      // next tick retries from it, the s16 law — but no longer aborts the
+      // rest of the window: one poison mail must not silence the mailbox.
+      // Later messages process under their own claims (replays harmless) and
+      // the cursor holds until the failure clears or the stale sweep flags it.
       report.errors.push(`message ${claimKey}: ${err instanceof Error ? err.message : err}`);
       halted = true;
     }
