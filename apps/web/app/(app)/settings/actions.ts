@@ -10,6 +10,7 @@ import {
   FILES_BUCKET,
   FIRST_LIGHT_EVENT_KINDS,
   SETTLE_WINDOW_MINUTES_OPTIONS,
+  storageSlug,
 } from "@rooshni/db";
 import { getAppContext } from "@/lib/server/context";
 
@@ -296,7 +297,9 @@ async function attachGuideFile(
   }
 
   const bytes = Buffer.from(await guideFile.arrayBuffer());
-  const storageKey = `route-guides/${businessId}/${randomUUID()}.pdf`;
+  // WS5c (Session 23): a human slug prefix — collision-proof (uuid) AND
+  // eye-findable in the bucket.
+  const storageKey = `route-guides/${businessId}/${storageSlug(guideFile.name)}-${randomUUID()}.pdf`;
   const { error: uploadError } = await service.storage
     .from(FILES_BUCKET)
     .upload(storageKey, bytes, { contentType: "application/pdf" });
@@ -543,6 +546,76 @@ export async function publishKnowledgeEntryAction(
   });
   revalidatePath("/settings");
   return { error: null, saved: true };
+}
+
+/**
+ * Session 23 (WS5b) — the read view's version history: content_versions rows
+ * for one entry, newest first, bounded. A read under the caller's own RLS.
+ */
+export async function knowledgeEntryVersionsAction(
+  entryId: string
+): Promise<{ versions: { version: number; savedAt: string; preview: string }[]; error: string | null }> {
+  if (!isUuid(entryId)) return { versions: [], error: "That entry id is not valid." };
+  try {
+    const { db, business } = await getAppContext();
+    const { data, error } = await db
+      .from("content_versions")
+      .select("version, saved_at, body")
+      .eq("business_id", business.id)
+      .eq("content_id", entryId)
+      .order("version", { ascending: false })
+      .limit(20);
+    if (error) throw new Error(error.message);
+    return {
+      versions: (data ?? []).map((v) => {
+        const body = v.body;
+        const text = Array.isArray(body)
+          ? body
+              .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text ?? "") : ""))
+              .join(" ")
+          : "";
+        return {
+          version: v.version as number,
+          savedAt: v.saved_at as string,
+          preview: text.slice(0, 160),
+        };
+      }),
+      error: null,
+    };
+  } catch (err) {
+    return { versions: [], error: err instanceof Error ? err.message : "Version history failed." };
+  }
+}
+
+/**
+ * Session 23 (WS5b) — open/download an entry's attachment: ownership checked
+ * under the caller's RLS, then a short-lived signed URL (the bytes stay in
+ * the private bucket; the URL is the door, not the address).
+ */
+export async function knowledgeAttachmentUrlAction(
+  fileId: string
+): Promise<{ url: string | null; error: string | null }> {
+  if (!isUuid(fileId)) return { url: null, error: "That file id is not valid." };
+  try {
+    const { db, business } = await getAppContext();
+    const { data: file, error } = await db
+      .from("files")
+      .select("id, storage_key")
+      .eq("id", fileId)
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!file) return { url: null, error: "That file no longer exists." };
+    const service = createServiceClient();
+    const { data: signed, error: signError } = await service.storage
+      .from(FILES_BUCKET)
+      .createSignedUrl(file.storage_key as string, 600);
+    if (signError) throw new Error(signError.message);
+    return { url: signed?.signedUrl ?? null, error: signed?.signedUrl ? null : "Signing failed." };
+  } catch (err) {
+    return { url: null, error: err instanceof Error ? err.message : "The download failed." };
+  }
 }
 
 export async function archiveKnowledgeEntryAction(

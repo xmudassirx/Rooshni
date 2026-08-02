@@ -45,7 +45,7 @@ import {
 import { whatsAppInboundConsent } from "../src/inbound";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
 import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
-import { rankGuideCandidates, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
+import { rankGuideCandidates, storageSlug, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
 import {
   buildConversionPayload,
   buildConversionUserData,
@@ -4310,6 +4310,15 @@ async function main() {
     if (rows.rows.length !== 0) {
       throw new Error("a cancelled task's request still shows as a stamp owed");
     }
+  });
+
+  // Session 23 (WS5c) — stored object names carry a human slug prefix.
+  await expectOk("storage object names are eye-findable — a human slug prefixes the uuid (5c)", async () => {
+    if (storageSlug("Spouse Visa Guide (v2).pdf") !== "spouse-visa-guide-v2") {
+      throw new Error(`slug: ${storageSlug("Spouse Visa Guide (v2).pdf")}`);
+    }
+    if (storageSlug("....pdf") !== "file") throw new Error("a nameless file must still slug to something");
+    if (storageSlug(`${"a".repeat(90)}.pdf`).length > 60) throw new Error("slugs are bounded");
   });
 
   // Session 23 — PRIORITY FIX (founder-ordered, blocks the s22 DoD (1)):

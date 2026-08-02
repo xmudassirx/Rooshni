@@ -1,5 +1,5 @@
 import { getKnowledgeEntries, getKnowledgeVocab } from "@/lib/server/queries";
-import { KnowledgeEntryControls, NewEntryButton } from "./knowledge-editor";
+import { EntryTitle, KnowledgeEntryControls, NewEntryButton } from "./knowledge-editor";
 import { Badge } from "@/components/ui/badge";
 
 /*
@@ -77,7 +77,9 @@ export async function KnowledgeTab() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[13px] font-medium text-ink">{entry.title}</span>
+                        {/* WS5b (Session 23): the title opens the READ view —
+                            editing is no longer the only door. */}
+                        <EntryTitle entry={entry} vocab={vocab} />
                         {entry.visaRoute ? (
                           <Badge variant="source">{routeLabel.get(entry.visaRoute) ?? entry.visaRoute}</Badge>
                         ) : null}
@@ -86,16 +88,15 @@ export async function KnowledgeTab() {
                         ) : (
                           <Badge variant="pending">Draft — invisible to Light</Badge>
                         )}
-                        {/* PR-i: the document ON the entry — a guide without
-                            a file is visibly incomplete, never attached. */}
-                        {entry.category === "route_guide" ? (
-                          entry.file ? (
-                            <Badge variant="source">
-                              ⎘ {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
-                            </Badge>
-                          ) : (
-                            <Badge variant="pending">no document — nothing will attach</Badge>
-                          )
+                        {/* WS5a (Session 23): ANY entry carrying a file wears
+                            its attachment chip; a route_guide without one
+                            stays visibly incomplete (PR-i). */}
+                        {entry.file ? (
+                          <Badge variant="source">
+                            ⎘ {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
+                          </Badge>
+                        ) : entry.category === "route_guide" ? (
+                          <Badge variant="pending">no document — nothing will attach</Badge>
                         ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 text-[12px] whitespace-pre-wrap text-ink-soft">

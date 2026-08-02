@@ -3668,8 +3668,9 @@ export interface KnowledgeEntryRow {
   bodyText: string;
   /** PR-i (Session 19): a route_guide entry's live linked document —
    * "documents are entries with a file". Null on text entries and on a
-   * guide whose file was never uploaded (a visibly incomplete guide). */
-  file: { filename: string; sizeBytes: number } | null;
+   * guide whose file was never uploaded (a visibly incomplete guide).
+   * Session 23 (WS5b): the id rides along so the read view can open it. */
+  file: { id: string; filename: string; sizeBytes: number } | null;
 }
 
 /** Every live pack entry, for the Settings → Knowledge editor (the one door). */
@@ -3686,7 +3687,7 @@ export async function getKnowledgeEntries(): Promise<KnowledgeEntryRow[]> {
 
   // PR-i: resolve each entry's newest live linked file in one pass.
   const entryIds = (data ?? []).map((r) => r.id as string);
-  const fileByEntry = new Map<string, { filename: string; sizeBytes: number }>();
+  const fileByEntry = new Map<string, { id: string; filename: string; sizeBytes: number }>();
   if (entryIds.length) {
     const { data: links } = await db
       .from("file_links")
@@ -3708,6 +3709,7 @@ export async function getKnowledgeEntries(): Promise<KnowledgeEntryRow[]> {
         const file = liveFiles.get(link.file_id as string);
         if (file) {
           fileByEntry.set(link.entity_id as string, {
+            id: file.id as string,
             filename: file.filename as string,
             sizeBytes: Number(file.size_bytes),
           });

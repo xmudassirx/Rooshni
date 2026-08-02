@@ -2,7 +2,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { createServiceClient, emitEvent, FILES_BUCKET } from "@rooshni/db";
+import { createServiceClient, emitEvent, FILES_BUCKET, storageSlug } from "@rooshni/db";
 
 import { getAppContext } from "@/lib/server/context";
 import { isUuid } from "@/lib/server/queries";
@@ -129,7 +129,8 @@ export async function uploadFeaturedImageAction(
     return { error: `Storage bucket unavailable: ${bucketError.message}` };
   }
   const bytes = Buffer.from(await raw.arrayBuffer());
-  const storageKey = `featured-images/${business.id}/${randomUUID()}.${ext}`;
+  // WS5c (Session 23): human slug prefix + uuid — eye-findable, collision-proof.
+  const storageKey = `featured-images/${business.id}/${storageSlug(raw.name)}-${randomUUID()}.${ext}`;
   const { error: uploadError } = await service.storage
     .from(FILES_BUCKET)
     .upload(storageKey, bytes, { contentType: raw.type });

@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   archiveKnowledgeEntryAction,
+  knowledgeAttachmentUrlAction,
+  knowledgeEntryVersionsAction,
   publishKnowledgeEntryAction,
   saveKnowledgeEntryAction,
   type KnowledgeActionState,
@@ -144,6 +146,170 @@ function EntryDialog({
           </div>
         </form>
       </div>
+    </>
+  );
+}
+
+/**
+ * Session 23 (WS5b, founder-reported) — the READ view: clicking the title
+ * opens the entry read-only (full text, the attachment with open/download,
+ * version history), with Edit as an ACTION from there. Editing is no longer
+ * the only door into an entry.
+ */
+export function EntryTitle({ entry, vocab }: { entry: KnowledgeEntryRow; vocab: KnowledgeVocab }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [versions, setVersions] = useState<
+    { version: number; savedAt: string; preview: string }[] | null
+  >(null);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const routeLabel = entry.visaRoute
+    ? (vocab.routes.find((r) => r.key === entry.visaRoute)?.label ?? entry.visaRoute)
+    : null;
+
+  useEffect(() => {
+    if (!open || versions !== null) return;
+    void knowledgeEntryVersionsAction(entry.id).then((res) => {
+      setVersions(res.versions);
+      setVersionsError(res.error);
+    });
+  }, [open, versions, entry.id]);
+
+  async function openAttachment() {
+    if (!entry.file) return;
+    setFileError(null);
+    const res = await knowledgeAttachmentUrlAction(entry.file.id);
+    if (res.url) window.open(res.url, "_blank", "noopener");
+    else setFileError(res.error ?? "The download failed.");
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="cursor-pointer text-left text-[13px] font-medium text-ink hover:text-accent hover:underline"
+      >
+        {entry.title}
+      </button>
+      {open && !editing ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close"
+            className="modal-scrim fixed inset-0 z-90"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-label={`Knowledge entry: ${entry.title}`}
+            className="modal-surface fixed top-1/2 left-1/2 z-91 flex max-h-[86vh] w-[min(620px,93vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[28px] shadow-[0_24px_80px_rgba(32,43,56,.22)]"
+          >
+            <div className="px-6 pt-4 pb-2">
+              <div className="font-mono text-[9.5px] font-bold tracking-[.16em] text-ink-faint uppercase">
+                Knowledge entry · read-only · v{entry.version}
+              </div>
+              <h2 className="mt-1 font-display text-lg font-extrabold">{entry.title}</h2>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[10px] tracking-wide uppercase">
+                {routeLabel ? (
+                  <span className="rounded border border-rule bg-paper-deep px-1.5 py-px text-ink-soft">
+                    {routeLabel}
+                  </span>
+                ) : null}
+                {entry.state === "published" ? (
+                  <span className="rounded border border-ledger-line bg-ledger-tint px-1.5 py-px text-ledger">
+                    Published — Light reads this
+                  </span>
+                ) : (
+                  <span className="rounded border border-rule bg-paper-deep px-1.5 py-px text-ink-soft">
+                    Draft — invisible to Light
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto border-t border-dashed border-rule px-6 py-3">
+              {entry.bodyText ? (
+                <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">
+                  {entry.bodyText}
+                </p>
+              ) : (
+                <p className="text-[12.5px] text-ink-faint">
+                  No text — this entry is its document.
+                </p>
+              )}
+              {entry.file ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-rule bg-paper-deep px-3 py-2">
+                  <span className="font-mono text-[11px] text-ink-soft">
+                    ⎘ {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
+                  </span>
+                  <Button size="sm" className="ml-auto" onClick={() => void openAttachment()}>
+                    Open / download
+                  </Button>
+                  {fileError ? <span className="w-full text-[11px] text-stamp">{fileError}</span> : null}
+                </div>
+              ) : null}
+              <div className="mt-4">
+                <div className="mb-1.5 font-mono text-[9.5px] font-semibold tracking-[.14em] text-ink-faint uppercase">
+                  Version history — every version retained, every change on The Record
+                </div>
+                {versions === null ? (
+                  <p className="text-[11.5px] text-ink-faint">Reading the history…</p>
+                ) : versionsError ? (
+                  <p className="text-[11.5px] text-stamp">{versionsError}</p>
+                ) : versions.length === 0 ? (
+                  <p className="text-[11.5px] text-ink-faint">
+                    No earlier versions — v{entry.version} is the first.
+                  </p>
+                ) : (
+                  versions.map((v) => (
+                    <div
+                      key={v.version}
+                      className="border-b border-dashed border-paper-deep py-1.5 last:border-b-0"
+                    >
+                      <span className="font-mono text-[10.5px] font-semibold text-ink-soft">
+                        v{v.version} ·{" "}
+                        {new Date(v.savedAt).toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </span>
+                      {v.preview ? (
+                        <p className="mt-0.5 line-clamp-1 text-[11.5px] text-ink-faint">{v.preview}</p>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 border-t border-rule px-6 py-3">
+              <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+                Close
+              </Button>
+              <Button
+                size="sm"
+                variant="primary"
+                className="ml-auto"
+                onClick={() => setEditing(true)}
+              >
+                Edit — a new version
+              </Button>
+            </div>
+          </div>
+        </>
+      ) : null}
+      {editing ? (
+        <EntryDialog
+          vocab={vocab}
+          entry={entry}
+          onClose={() => {
+            setEditing(false);
+            setOpen(false);
+            setVersions(null);
+          }}
+        />
+      ) : null}
     </>
   );
 }
