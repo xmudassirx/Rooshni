@@ -7,6 +7,7 @@ import { Check, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { formatWhen } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DecisionControls } from "./decision-controls";
 import { WithdrawControl } from "./withdraw-control";
@@ -45,6 +46,12 @@ export interface CardContext {
   channels: { channel: string; value: string; consented: boolean }[];
 }
 
+/** Session 23 (WS1a) — the question above the answer. */
+export interface CardTheySaid {
+  messages: { body: string; occurredAt: string }[];
+  total: number;
+}
+
 export interface InboxCardProps {
   itemType: "communication" | "content" | "task" | "workflow_definition";
   itemId: string;
@@ -68,6 +75,11 @@ export interface InboxCardProps {
   preflightPass: boolean | null;
   /** Session 11 — the lead's context, expandable above the draft. */
   context: CardContext | null;
+  /** Session 23 (WS1a, founder-ruled): the inbound message(s) a reply draft
+   * answers — everything received on the thread since the last outbound —
+   * rendered ABOVE the draft body. A lawyer must never stamp an answer
+   * without the question. Null on non-reply drafts (intros). */
+  theySaid: CardTheySaid | null;
   /** Session 15 — the credit line, present on generated drafts only. */
   creditLine: CardCreditLine | null;
   /** Session 15 fix round — "edited by <name> · <time>", pre-formatted on
@@ -107,7 +119,9 @@ const CHECK_NAMES: Record<string, string> = {
  * pre-migration) still show it here as pending, honestly unchecked. */
 const NOT_YET_RUN = ["LINKS", "COMPLIANCE"];
 
-function PreflightLine({
+/** Exported (Session 23, WS1b): the Conversations draft bubble renders the
+ * same pre-flight facts line — one gate, two views. */
+export function PreflightLine({
   checks,
   wired,
 }: {
@@ -243,6 +257,51 @@ function ContextSection({ context }: { context: CardContext }) {
   );
 }
 
+/** Session 23 (WS1a): the inbound message(s) the draft answers, above the
+ * draft body and clearly labelled — visible by default, each long message
+ * clamped with its own expand. Exported for the Conversations thread card
+ * parity (same data, two views). */
+export function TheySaidSection({ theySaid }: { theySaid: CardTheySaid }) {
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  return (
+    <div className="mt-2 rounded-lg border border-rule bg-paper-deep px-3 py-2">
+      <div className="mb-1.5 font-mono text-[9.5px] font-semibold tracking-[.1em] text-ink-soft uppercase">
+        They said · {theySaid.total} message{theySaid.total === 1 ? "" : "s"} since your last reply
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {theySaid.messages.map((m, i) => {
+          const long = m.body.length > 280;
+          const open = Boolean(expanded[i]);
+          return (
+            <div key={`${m.occurredAt}-${i}`} className="text-[12.5px] leading-normal text-ink">
+              <span className={cn("whitespace-pre-wrap", long && !open && "line-clamp-3")}>
+                {m.body}
+              </span>
+              <span className="mt-0.5 flex items-baseline gap-2 font-mono text-[9px] tracking-wide text-ink-faint">
+                {formatWhen(m.occurredAt)}
+                {long ? (
+                  <button
+                    type="button"
+                    onClick={() => setExpanded((v) => ({ ...v, [i]: !v[i] }))}
+                    className="cursor-pointer text-accent uppercase hover:underline"
+                  >
+                    {open ? "− collapse" : "+ read in full"}
+                  </button>
+                ) : null}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {theySaid.total > theySaid.messages.length ? (
+        <p className="mt-1.5 font-mono text-[9px] tracking-wide text-ink-faint uppercase">
+          showing {theySaid.messages.length} of {theySaid.total} — the full thread lives in Conversations
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 const EDIT_INITIAL: EditDraftState = { error: null };
 
 export function InboxCard(props: InboxCardProps) {
@@ -321,6 +380,10 @@ export function InboxCard(props: InboxCardProps) {
       {/* The lead's form answers and consent, above the draft (Session 11 —
           glance and stamp without leaving the inbox). */}
       {props.context ? <ContextSection context={props.context} /> : null}
+
+      {/* Session 23 (WS1a): the question above the answer — what the client
+          said since the firm's last reply, before the draft that answers it. */}
+      {props.theySaid ? <TheySaidSection theySaid={props.theySaid} /> : null}
 
       {/* The message: readable in place, or editable before the stamp
           (Session 15, signed amendment 2 — WYSIWYS: the stamp approves the

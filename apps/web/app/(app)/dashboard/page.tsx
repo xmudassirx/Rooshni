@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { formatMeteredGbp } from "@rooshni/db";
 
 import { BudgetBanner } from "@/components/shell/budget-banner";
 import { EmptyState } from "@/components/shell/empty-state";
@@ -314,7 +315,7 @@ export default async function DashboardPage() {
           </div>
           <div className="mt-1.5 text-xs leading-relaxed text-ink-soft">
             {perf.drafts_generated
-              ? `${perf.drafts_generated} draft${perf.drafts_generated === 1 ? "" : "s"} generated · ${perf.stamped} stamped · ${perf.rejected} rejected · ${perf.compliance_refusals} compliance refusal${perf.compliance_refusals === 1 ? "" : "s"} · ${perf.mean_tokens !== null ? `${perf.mean_tokens.toLocaleString("en-GB")} mean tokens` : "no token data"} · £${perf.spend_gbp.toFixed(2)} spend`
+              ? `${perf.drafts_generated} draft${perf.drafts_generated === 1 ? "" : "s"} generated · ${perf.stamped} stamped · ${perf.rejected} rejected · ${perf.compliance_refusals} compliance refusal${perf.compliance_refusals === 1 ? "" : "s"} · ${perf.mean_tokens !== null ? `${perf.mean_tokens.toLocaleString("en-GB")} mean tokens` : "no token data"} · ${formatMeteredGbp(perf.spend_gbp)} spend`
               : "No drafts generated this week — the tile fills itself from The Record, never invention."}
             {perf.approval_rate_pct === null && perf.drafts_generated > 0
               ? " No stamps or rejections yet this week, so no rate is claimed."
@@ -323,8 +324,10 @@ export default async function DashboardPage() {
         </Tile>
 
         <Tile href="/billing" head="Metered cost · this month">
+          {/* Session 23 (WS1d): precision-aware — a sub-penny month shows
+              its real figure, never a rounded-up penny. */}
           <div className="font-display text-[22px] leading-none font-black">
-            £{dash.meteredCostGbpThisMonth.toFixed(2)}
+            {formatMeteredGbp(dash.meteredCostGbpThisMonth)}
           </div>
           <div className="mt-1.5 text-xs text-ink-soft">
             {dash.meteredEventsThisMonth

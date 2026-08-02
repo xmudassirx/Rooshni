@@ -57,6 +57,7 @@ import {
 } from "../src/conversions";
 import {
   evaluateAiBudget,
+  formatMeteredGbp,
   guardGenerationBudget,
   pricedAmountGbp,
   resolveAiBudget,
@@ -4153,6 +4154,76 @@ async function main() {
         throw new Error(`${fn} must count with a head COUNT aggregate`);
       }
     }
+  });
+
+  // Session 23 (WS1) — the approval gate's information integrity: thread
+  // unread derives in the database (0035), and cap semantics are proven RAW
+  // (1d — the founder's failed DoD was display rounding, not the comparison).
+  console.log("\nSession 23 — approval gate information integrity (WS1):");
+
+  await expectOk("thread unread derives in the database: inbound sets it, opening clears it, a newer inbound sets it again (0035)", async () => {
+    const c = await db.query<{ id: string }>(
+      `insert into public.contacts (business_id, created_by, type, display_name)
+       values ($1, $2, 'person', 'Unread Smoke Contact') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'email') returning id`,
+      [f.business_id, f.agent_id, c.rows[0]!.id]
+    );
+    const threadId = t.rows[0]!.id;
+    const unread = async () =>
+      (
+        await db.query<{ is_unread: boolean }>(
+          `select is_unread from public.comm_threads where id = $1`,
+          [threadId]
+        )
+      ).rows[0]!.is_unread;
+    if (await unread()) throw new Error("a thread with no inbound must not be unread");
+    await db.query(
+      `update public.comm_threads set last_inbound_at = '2026-08-01T10:00:00Z' where id = $1`,
+      [threadId]
+    );
+    if (!(await unread())) throw new Error("an inbound must set unread");
+    await db.query(
+      `update public.comm_threads set last_opened_at = '2026-08-01T10:05:00Z' where id = $1`,
+      [threadId]
+    );
+    if (await unread()) throw new Error("opening the thread must clear unread");
+    await db.query(
+      `update public.comm_threads set last_inbound_at = '2026-08-01T10:10:00Z' where id = $1`,
+      [threadId]
+    );
+    if (!(await unread())) throw new Error("a newer inbound must set unread again");
+  });
+
+  await expectOk("cap crossings compare RAW metered amounts — £0.006 against a £0.01 cap crosses nothing (1d)", async () => {
+    const budget = { soft_cap_gbp: null, hard_cap_gbp: 0.01 };
+    const under = evaluateAiBudget(0.006, budget);
+    if (under.hard_crossed) {
+      throw new Error("0.006 must not cross a 0.01 cap — the comparison is raw, never display-rounded");
+    }
+    guardGenerationBudget(0.006, budget); // must not throw
+    if (!evaluateAiBudget(0.01, budget).hard_crossed) {
+      throw new Error("reaching the cap exactly must cross");
+    }
+    let refused = false;
+    try {
+      guardGenerationBudget(0.0101, budget);
+    } catch {
+      refused = true;
+    }
+    if (!refused) throw new Error("no refusal at 0.0101 against a 0.01 cap");
+  });
+
+  await expectOk("sub-penny display shows real precision — the display can never contradict the comparison (1d)", async () => {
+    if (formatMeteredGbp(0.006) !== "£0.006") throw new Error(`0.006 → ${formatMeteredGbp(0.006)}`);
+    if (formatMeteredGbp(0.01) !== "£0.01") throw new Error(`0.01 → ${formatMeteredGbp(0.01)}`);
+    if (formatMeteredGbp(0) !== "£0.00") throw new Error(`0 → ${formatMeteredGbp(0)}`);
+    if (formatMeteredGbp(0.0004) !== "£0.0004") throw new Error(`0.0004 → ${formatMeteredGbp(0.0004)}`);
+    if (formatMeteredGbp(12.5) !== "£12.50") throw new Error(`12.5 → ${formatMeteredGbp(12.5)}`);
+    if (formatMeteredGbp(150) !== "£150") throw new Error(`150 → ${formatMeteredGbp(150)}`);
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

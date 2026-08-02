@@ -6,15 +6,21 @@ import { useRouter } from "next/navigation";
 import { Paperclip, Search } from "lucide-react";
 
 import { formatWhen } from "@/lib/format";
-import type { ConversationThread, ThreadMessage } from "@/lib/server/queries";
+import type {
+  ConversationThread,
+  ThreadDraftStampData,
+  ThreadMessage,
+} from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
 import {
   askLightToDraftAction,
+  markThreadOpenedAction,
   sendDirectMessageAction,
   setAutoDraftPausedAction,
   setSettleOverrideAction,
   type ThreadActionState,
 } from "./actions";
+import { DraftStampPanel } from "./draft-stamp-panel";
 
 /*
  * view-convos, master mockup v2 — Session 16 makes it a drafting AND sending
@@ -83,7 +89,19 @@ function stateChipClass(tone: "gold" | "you" | "done"): string {
   return "border border-ledger-line bg-ledger-tint text-ledger";
 }
 
-function Bubble({ message, thread }: { message: ThreadMessage; thread: ConversationThread }) {
+function Bubble({
+  message,
+  thread,
+  stamp,
+  returnTo,
+}: {
+  message: ThreadMessage;
+  thread: ConversationThread;
+  /** Session 23 (WS1b): present on pending drafts — the thread view of the
+   * same stamp (pre-flight state + WYSIWYS-resolved body + controls). */
+  stamp?: ThreadDraftStampData | null;
+  returnTo: string;
+}) {
   // PR-iii (Session 19): the "as sent" HTML view for dispatched emails.
   const [showSentHtml, setShowSentHtml] = useState(false);
   if (message.channel === "call") {
@@ -123,19 +141,43 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
     );
   }
   if (message.isPendingDraft) {
+    // Session 23 (WS1b): the bubble shows the render-resolved WYSIWYS body
+    // when the viewer holds stamp authority — the same words the inbox card
+    // shows and the stamp approves.
+    const shownBody = stamp?.body ?? message.body;
     return (
       <>
-        <div className="light-panel max-w-[72%] self-end rounded-xl rounded-br-sm border-dashed px-2.5 py-2 text-[12.5px] leading-normal shadow-panel">
+        <div className="light-panel max-w-[72%] self-end rounded-xl rounded-br-sm border-dashed px-2.5 py-2 text-[12.5px] leading-normal whitespace-pre-wrap shadow-panel">
           <span className="light-head mb-1 block font-mono text-[8.5px] font-semibold tracking-[.08em] uppercase">
             ✦ Light&rsquo;s draft — not yet sent
           </span>
-          {message.body}
+          {shownBody}
           <span className="mt-1 block text-right font-mono text-[8.5px] tracking-wide text-ink-faint">
             {message.scheduledFor
               ? `scheduled — sends ${formatWhen(message.scheduledFor)} on approval`
               : `drafted ${formatWhen(message.occurredAt)}`}
           </span>
         </div>
+        {/* Session 23 (WS1b, founder-ruled): the inline stamp — the SAME
+            server acts as the Approval Inbox; pre-flight visible, Approve
+            withheld when blocked. The inbox link remains the queue view. */}
+        {stamp ? (
+          <DraftStampPanel
+            stamp={{
+              communicationId: stamp.communicationId,
+              checks: stamp.checks,
+              preflightPass: stamp.preflightPass,
+              body: shownBody,
+              signOffNote: stamp.signOffMode
+                ? stamp.signOffResolvedTo
+                  ? `sign-off resolves to you at the stamp — shown as it will send: ${stamp.signOffResolvedTo}`
+                  : "sign-off resolves to the stamping approver at the stamp"
+                : null,
+              creditNote: stamp.creditNote,
+            }}
+            returnTo={returnTo}
+          />
+        ) : null}
         <div className="-mt-0.5 flex gap-1.5 self-end">
           <Link
             href="/inbox"
@@ -207,10 +249,13 @@ function Bubble({ message, thread }: { message: ThreadMessage; thread: Conversat
 export function ConversationsClient({
   threads,
   initialThreadId = null,
+  draftStamps = {},
 }: {
   threads: ConversationThread[];
   /** Deep-link target (Session 11 — the inbox History tab links here). */
   initialThreadId?: string | null;
+  /** Session 23 (WS1b): pending-draft stamp data, keyed by communication id. */
+  draftStamps?: Record<string, ThreadDraftStampData>;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(
     (initialThreadId && threads.some((t) => t.id === initialThreadId)
@@ -301,6 +346,15 @@ export function ConversationsClient({
       el.scrollTop = el.scrollHeight;
     });
   }, [selected?.id, view]);
+
+  // Session 23 (WS1c): opening a thread clears its unread state — the stamp
+  // lands server-side (0035 last_opened_at) and the badge re-derives.
+  const selectedUnread = selected?.unread ?? false;
+  const selectedForOpen = selected?.id ?? null;
+  useEffect(() => {
+    if (!selectedForOpen || !selectedUnread) return;
+    void markThreadOpenedAction(selectedForOpen).then(() => router.refresh());
+  }, [selectedForOpen, selectedUnread, router]);
 
   const awaitingCount = threads.filter((t) => t.awaitingYou).length;
   const lightCount = threads.filter((t) => t.lightHandling || t.hasPendingDraft).length;
@@ -403,7 +457,22 @@ export function ConversationsClient({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
-                    <b className="truncate text-[13.5px] font-semibold">{t.contactName}</b>
+                    <b
+                      className={cn(
+                        "truncate text-[13.5px]",
+                        t.unread ? "font-extrabold" : "font-semibold"
+                      )}
+                    >
+                      {t.contactName}
+                    </b>
+                    {/* Session 23 (WS1c): unread — a fact in accent chrome
+                        (never red: no stamp is owed by a message arriving). */}
+                    {t.unread ? (
+                      <span
+                        aria-label="Unread"
+                        className="size-2 shrink-0 rounded-full bg-accent"
+                      />
+                    ) : null}
                     <span className="ml-auto shrink-0 font-mono text-[9.5px] text-ink-faint">
                       {formatWhen(t.lastAt)}
                     </span>
@@ -585,7 +654,13 @@ export function ConversationsClient({
                         )}
                       >
                         {selected.messages.map((m) => (
-                          <Bubble key={m.id} message={m} thread={selected} />
+                          <Bubble
+                            key={m.id}
+                            message={m}
+                            thread={selected}
+                            stamp={m.isPendingDraft ? (draftStamps[m.id] ?? null) : null}
+                            returnTo={`/conversations?thread=${selected.id}`}
+                          />
                         ))}
                       </div>
                     </div>

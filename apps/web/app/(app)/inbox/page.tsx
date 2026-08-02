@@ -56,6 +56,8 @@ async function toCardProps(row: ApprovalInboxRow, isOwner: boolean): Promise<Inb
     checks: row.preflight?.checks ?? [],
     preflightPass: row.preflight_pass,
     context: detail?.context ?? null,
+    // Session 23 (WS1a): the inbound the draft answers, above the body.
+    theySaid: detail?.theySaid ?? null,
     // Session 15 (PR-3): Light's spend and sources, on the card at stamp time.
     creditLine: detail?.creditLine ?? null,
     // Session 15 fix round: an edited pending body wears its state — a fact

@@ -72,6 +72,7 @@ interface NavSection {
 function navSections(
   inboxCount: number,
   taskCount: number,
+  unreadCount: number,
   showFeedback: boolean
 ): NavSection[] {
   return [
@@ -88,7 +89,9 @@ function navSections(
           badgeStamp: true,
         },
         { href: "/tasks", label: "Tasks", icon: SquareCheck, badge: taskCount },
-        { href: "/conversations", label: "Conversations", icon: Mail },
+        // Session 23 (WS1c): unread conversations — accent badge (the stamp's
+        // red stays the Approval Inbox's alone; unread is not a stamp owed).
+        { href: "/conversations", label: "Conversations", icon: Mail, badge: unreadCount },
         {
           href: "/website",
           label: "Website",
@@ -296,6 +299,7 @@ export function AppShell({
   userRole,
   inboxCount,
   taskCount,
+  unreadCount = 0,
   showFeedback,
   firstLight,
   children,
@@ -305,6 +309,8 @@ export function AppShell({
   userRole: string;
   inboxCount: number;
   taskCount: number;
+  /** Session 23 (WS1c): unread conversations — a COUNT aggregate (5e). */
+  unreadCount?: number;
   showFeedback: boolean;
   /** The First Light pill + panel (decision 81: top-bar, beside Ask Light,
    * never a nav item). Null once retired. */
@@ -313,7 +319,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const sections = navSections(inboxCount, taskCount, showFeedback);
+  const sections = navSections(inboxCount, taskCount, unreadCount, showFeedback);
   const crumb =
     Object.entries(crumbLabels).find(([href]) => pathname.startsWith(href))?.[1] ??
     "Enquiries";

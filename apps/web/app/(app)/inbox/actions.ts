@@ -149,6 +149,12 @@ export async function rejectAction(
 ): Promise<DecisionState> {
   const communicationId = String(formData.get("communicationId") ?? "");
   const reason = String(formData.get("reason") ?? "").trim();
+  // Session 23 (WS1b): the SAME act serves the Conversations thread view —
+  // one row, two views, one stamp. A thread rejection returns the viewer to
+  // the thread, not the inbox. Internal paths only (open-redirect guard).
+  const returnToRaw = String(formData.get("returnTo") ?? "");
+  const returnTo =
+    returnToRaw.startsWith("/") && !returnToRaw.startsWith("//") ? returnToRaw : "/inbox";
   if (!communicationId) return { error: "No communication was selected." };
   if (!reason) {
     return {
@@ -171,7 +177,7 @@ export async function rejectAction(
   }
   await recordRejectionFeedback(db, business.id, actor.id, [communicationId], reason);
   revalidatePath("/", "layout");
-  redirect("/inbox");
+  redirect(returnTo);
 }
 
 export interface BulkRejectState {

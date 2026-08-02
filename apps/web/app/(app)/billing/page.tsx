@@ -1,3 +1,5 @@
+import { formatMeteredGbp } from "@rooshni/db";
+
 import { PageHead } from "@/components/shell/page-head";
 import { BudgetBanner } from "@/components/shell/budget-banner";
 import { getMeteredUsage } from "@/lib/server/queries";
@@ -27,9 +29,10 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function gbp(amount: number): string {
-  return `£${amount.toFixed(amount >= 100 ? 0 : 2)}`;
-}
+// Session 23 (WS1d): displays share the precision-aware formatter — a
+// sub-penny spend shows 3dp, so a £0.01 cap beside £0.006 of spend is
+// explicable; the cap comparison itself always ran on raw amounts.
+const gbp = formatMeteredGbp;
 
 function actionLabel(action: string): string {
   return action.replace(/[._]/g, " ");
@@ -60,7 +63,7 @@ export default async function BillingPage() {
             Metered cost · this month
           </div>
           <div className="my-1 font-display text-[26px] font-extrabold">
-            £{usage.totalGbp.toFixed(2)}
+            {gbp(usage.totalGbp)}
             <span className="text-[13px] font-medium text-ink-soft">
               {" "}
               · {usage.pricedLines} priced line{usage.pricedLines === 1 ? "" : "s"}

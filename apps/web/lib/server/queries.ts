@@ -329,6 +329,20 @@ export async function getInboxCount(): Promise<number> {
   return count ?? 0;
 }
 
+/** Session 23 (WS1c): unread conversations for the sidebar badge — a COUNT
+ * aggregate over the 0035 generated column (5e law), never a row fetch. */
+export async function getUnreadThreadCount(): Promise<number> {
+  const { db, business } = await getAppContext();
+  const { count, error } = await db
+    .from("comm_threads")
+    .select("*", { count: "exact", head: true })
+    .eq("business_id", business.id)
+    .eq("is_unread", true)
+    .is("archived_at", null);
+  if (error) throw new Error(`unread thread count failed: ${error.message}`);
+  return count ?? 0;
+}
+
 export interface CommunicationContext {
   engagementId: string | null;
   engagementTitle: string | null;
@@ -389,7 +403,16 @@ export interface CommunicationDetail {
   /** PR-i (Session 19) — the declared attachments the pre-flight verifies
    * and the dispatch will carry. */
   attachments: { filename: string; sizeBytes: number }[];
+  /** Session 23 (WS1a, founder-ruled) — the question above the answer: every
+   * inbound received on the thread since the last outbound that reached the
+   * client. A lawyer must never stamp an answer without the question. Null
+   * when the thread has no such inbound (an intro, not a reply). */
+  theySaid: { messages: { body: string; occurredAt: string }[]; total: number } | null;
 }
+
+/** WS1a — bounded read: the card shows at most this many inbound messages;
+ * the total is a COUNT aggregate and the remainder is stated honestly. */
+const THEY_SAID_BOUND = 20;
 
 /** Full draft for the inbox detail panel — the view carries only a preview. */
 export async function getCommunicationDetail(
@@ -399,7 +422,7 @@ export async function getCommunicationDetail(
   const { data, error } = await db
     .from("communications")
     .select(
-      "id, body, channel, scheduled_for, engagement_id, contact_id, attributes, compliance_required, comm_threads(subject, contact_id), contacts(display_name)"
+      "id, body, channel, scheduled_for, engagement_id, contact_id, thread_id, attributes, compliance_required, comm_threads(subject, contact_id), contacts(display_name)"
     )
     .eq("id", id)
     .eq("business_id", business.id)
@@ -618,6 +641,47 @@ export async function getCommunicationDetail(
     }
   }
 
+  // Session 23 (WS1a): the inbound message(s) this draft answers — everything
+  // received on the thread since the last outbound that actually reached the
+  // client (sent/delivered/read). Slim columns, bounded, total by aggregate.
+  let theySaid: CommunicationDetail["theySaid"] = null;
+  if (data.thread_id) {
+    const { data: lastOut } = await db
+      .from("communications")
+      .select("occurred_at")
+      .eq("thread_id", data.thread_id)
+      .eq("direction", "outbound")
+      .in("status", ["sent", "delivered", "read"])
+      .order("occurred_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    let inboundQuery = db
+      .from("communications")
+      .select("body, body_format, plain_body:attributes->>plain_body, occurred_at", {
+        count: "exact",
+      })
+      .eq("thread_id", data.thread_id)
+      .eq("direction", "inbound")
+      .is("archived_at", null)
+      .order("occurred_at", { ascending: true })
+      .limit(THEY_SAID_BOUND);
+    if (lastOut?.occurred_at) inboundQuery = inboundQuery.gt("occurred_at", lastOut.occurred_at);
+    const { data: inbound, count } = await inboundQuery;
+    if (inbound && inbound.length > 0) {
+      theySaid = {
+        messages: inbound.map((m) => ({
+          body:
+            (m as { body_format?: string }).body_format === "html"
+              ? ((m as { plain_body?: string | null }).plain_body ??
+                plainTextOfBody(m.body, "html"))
+              : m.body,
+          occurredAt: m.occurred_at,
+        })),
+        total: count ?? inbound.length,
+      };
+    }
+  }
+
   return {
     id: data.id,
     body,
@@ -644,6 +708,7 @@ export async function getCommunicationDetail(
           sizeBytes: Number(a.size_bytes ?? 0),
         }))
       : [],
+    theySaid,
   };
 }
 
@@ -1133,6 +1198,9 @@ export interface ConversationThread {
   settleDueAt: string | null;
   /** Session 16 (PR-A): Meta's 24h service window as recorded on the thread. */
   waServiceWindowExpiresAt: string | null;
+  /** Session 23 (WS1c): derived in the database (0035 generated column) —
+   * inbound newer than the last open. Opening the thread clears it. */
+  unread: boolean;
   contact: {
     type: "person" | "organisation";
     status: string;
@@ -1159,7 +1227,7 @@ export async function getConversations(): Promise<ConversationThread[]> {
     db
       .from("comm_threads")
       .select(
-        "id, subject, channel, contact_id, engagement_id, auto_draft_paused, settle_override_seconds, draft_settle_due_at, wa_service_window_expires_at"
+        "id, subject, channel, contact_id, engagement_id, auto_draft_paused, settle_override_seconds, draft_settle_due_at, wa_service_window_expires_at, is_unread"
       )
       .eq("business_id", business.id)
       .is("archived_at", null),
@@ -1335,6 +1403,7 @@ export async function getConversations(): Promise<ConversationThread[]> {
           typeof t.settle_override_seconds === "number" ? t.settle_override_seconds : null,
         settleDueAt: t.draft_settle_due_at ?? null,
         waServiceWindowExpiresAt: t.wa_service_window_expires_at ?? null,
+        unread: Boolean(t.is_unread),
         contact: {
           type: contact.type as "person" | "organisation",
           status: contact.status,
@@ -1353,6 +1422,62 @@ export async function getConversations(): Promise<ConversationThread[]> {
   });
 
   return result.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+}
+
+/** Session 23 (WS1b) — the thread view of the same stamp: for each pending
+ * draft in the visible threads, the pre-flight state (from the approval_inbox
+ * view — the gate's own truth) and the render-resolved WYSIWYS body (from
+ * getCommunicationDetail — the same resolution the inbox card shows).
+ * Bounded: the guard indexes (0029) allow at most one pending draft per
+ * engagement per channel, so this set is small by construction. */
+export interface ThreadDraftStampData {
+  communicationId: string;
+  checks: { key: string; label: string; pass: boolean; detail: string | null; state?: string }[];
+  preflightPass: boolean;
+  body: string;
+  signOffResolvedTo: string | null;
+  signOffMode: boolean;
+  creditNote: string | null;
+}
+
+const THREAD_STAMP_BOUND = 20;
+
+export async function getThreadDraftStamps(
+  communicationIds: string[]
+): Promise<Record<string, ThreadDraftStampData>> {
+  if (communicationIds.length === 0) return {};
+  const ids = communicationIds.slice(0, THREAD_STAMP_BOUND);
+  const { db, business } = await getAppContext();
+  const { data: rows, error } = await db
+    .from("approval_inbox")
+    .select("item_id, preflight, preflight_pass")
+    .eq("business_id", business.id)
+    .eq("item_type", "communication")
+    .in("item_id", ids);
+  if (error) throw new Error(`thread stamp preflight read failed: ${error.message}`);
+
+  const out: Record<string, ThreadDraftStampData> = {};
+  for (const row of rows ?? []) {
+    const detail = await getCommunicationDetail(row.item_id as string);
+    if (!detail) continue;
+    const preflight = (row.preflight ?? {}) as {
+      checks?: ThreadDraftStampData["checks"];
+    };
+    out[row.item_id as string] = {
+      communicationId: row.item_id as string,
+      checks: preflight.checks ?? [],
+      preflightPass: row.preflight_pass === true,
+      body: detail.body,
+      signOffResolvedTo: detail.signOff?.resolvedTo ?? null,
+      signOffMode: detail.signOff !== null,
+      creditNote: detail.creditLine
+        ? `✦ Light · ${detail.creditLine.tier} · ${
+            detail.creditLine.reason === "floor" ? "floor" : `escalated: ${detail.creditLine.reason}`
+          }`
+        : null,
+    };
+  }
+  return out;
 }
 
 // --- Tasks ---------------------------------------------------------------------

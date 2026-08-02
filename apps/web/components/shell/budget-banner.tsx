@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { formatMeteredGbp } from "@rooshni/db";
 import { cn } from "@/lib/utils";
 
 /*
@@ -37,14 +38,18 @@ export function BudgetBanner({
       <div className="min-w-0 flex-1 text-[13.5px]">
         {hard ? (
           <>
-            <b>AI hard cap reached:</b> £{spendGbp.toFixed(2)} of the £{hardCapGbp!.toFixed(2)} monthly
-            cap. Light is not generating new drafts — each attempt refuses visibly with the cap named.
-            Approved sends and template-path drafts continue; the approval gate is untouched.
+            {/* Session 23 (WS1d): sub-penny amounts show real precision — the
+                display must never round a not-yet-crossed spend up to the cap. */}
+            <b>AI hard cap reached:</b> {formatMeteredGbp(spendGbp)} of the{" "}
+            {formatMeteredGbp(hardCapGbp!)} monthly cap. Light is not generating new drafts — each
+            attempt refuses visibly with the cap named. Approved sends and template-path drafts
+            continue; the approval gate is untouched.
           </>
         ) : (
           <>
-            <b>AI soft cap crossed:</b> £{spendGbp.toFixed(2)} of the £{softCapGbp?.toFixed(2)} monthly
-            soft cap. Nothing is blocked — this is the warning you asked for.
+            <b>AI soft cap crossed:</b> {formatMeteredGbp(spendGbp)} of the{" "}
+            {formatMeteredGbp(softCapGbp ?? 0)} monthly soft cap. Nothing is blocked — this is the
+            warning you asked for.
           </>
         )}
         <small className="mt-1 block font-mono text-[10px] tracking-[.04em] text-ink-faint uppercase">
