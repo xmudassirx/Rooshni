@@ -5,6 +5,7 @@ import {
   clampPageSize,
   computeLightPerformance,
   DEFAULT_LIST_WINDOW,
+  THREAD_TAIL_WINDOW,
   evaluateAiBudget,
   pageRange,
   MONTH_SPEND_ROW_BOUND,
@@ -1177,9 +1178,18 @@ export interface ThreadConsent {
   note: string;
 }
 
-export interface ConversationThread {
+/*
+ * Session 23 (WS2, founder directive: the Messenger shape) — the s22 5c
+ * deferral lands here. The old getConversations read EVERY thread and EVERY
+ * communication each render; the surface now reads:
+ *   - a WINDOWED thread list (DEFAULT_LIST_WINDOW, ordered by the 0036
+ *     trigger-maintained last_activity_at, total a COUNT aggregate),
+ *   - ONE open thread with its recent TAIL (THREAD_TAIL_WINDOW), older
+ *     messages arriving in further bounded windows on upward scroll.
+ */
+
+export interface ConversationListItem {
   id: string;
-  contactId: string;
   contactName: string;
   channel: string;
   subject: string | null;
@@ -1190,6 +1200,30 @@ export interface ConversationThread {
   lightHandling: boolean;
   awaitingYou: boolean;
   hasPendingDraft: boolean;
+  /** Session 23 (WS1c): derived in the database (0035 generated column). */
+  unread: boolean;
+}
+
+export interface ConversationListPage {
+  rows: ConversationListItem[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
+
+/** A stable position in a thread's history: occurred_at with the UUIDv7 id
+ * as tie-break, so no message is skipped or doubled across window edges. */
+export interface ThreadCursor {
+  occurredAt: string;
+  id: string;
+}
+
+export interface OpenThread {
+  id: string;
+  contactId: string;
+  contactName: string;
+  channel: string;
+  subject: string | null;
   enquiry: { id: string; title: string; stageLabel: string | null } | null;
   /** Session 16 (PR-C/D): the drafting preferences and settle state, straight
    * off the thread row — durable server-side truth, never client state. */
@@ -1198,8 +1232,6 @@ export interface ConversationThread {
   settleDueAt: string | null;
   /** Session 16 (PR-A): Meta's 24h service window as recorded on the thread. */
   waServiceWindowExpiresAt: string | null;
-  /** Session 23 (WS1c): derived in the database (0035 generated column) —
-   * inbound newer than the last open. Opening the thread clears it. */
   unread: boolean;
   contact: {
     type: "person" | "organisation";
@@ -1210,7 +1242,12 @@ export interface ConversationThread {
     source: string | null;
     consents: ThreadConsent[];
   };
+  /** The recent tail, ascending — the thread opens at its latest message. */
   messages: ThreadMessage[];
+  /** More history exists above the tail — the scroll fetches it windowed. */
+  hasOlder: boolean;
+  /** Cursor of the OLDEST loaded message (the next older window's `before`). */
+  oldestCursor: ThreadCursor | null;
 }
 
 function consentNote(consent: Record<string, unknown>): { ok: boolean; note: string } {
@@ -1220,61 +1257,117 @@ function consentNote(consent: Record<string, unknown>): { ok: boolean; note: str
   return { ok: true, note: kinds.join(" · ") + source };
 }
 
-export async function getConversations(): Promise<ConversationThread[]> {
-  const { db, business } = await getAppContext();
+/** One communications row, as the read layer selects it. */
+interface CommWindowRow {
+  id: string;
+  thread_id: string;
+  channel: string;
+  direction: string;
+  status: string;
+  body: string;
+  body_format?: string;
+  plain_body?: string | null;
+  scheduled_for: string | null;
+  occurred_at: string;
+  duration_seconds: number | null;
+  drafted_by_actor_id: string | null;
+  approved_by_actor_id: string | null;
+}
 
-  const [threads, comms] = await Promise.all([
-    db
-      .from("comm_threads")
-      .select(
-        "id, subject, channel, contact_id, engagement_id, auto_draft_paused, settle_override_seconds, draft_settle_due_at, wa_service_window_expires_at, is_unread"
-      )
-      .eq("business_id", business.id)
-      .is("archived_at", null),
-    db
-      .from("communications")
-      .select(
-        "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id"
-      )
-      .eq("business_id", business.id)
-      .is("archived_at", null)
-      .order("occurred_at", { ascending: true }),
-  ]);
-  if (threads.error) throw new Error(`comm_threads query failed: ${threads.error.message}`);
-  if (comms.error) throw new Error(`communications query failed: ${comms.error.message}`);
+const COMM_WINDOW_COLUMNS =
+  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id";
 
-  const contactIds = [...new Set((threads.data ?? []).map((t) => t.contact_id))];
-  const engagementIds = [
-    ...new Set((threads.data ?? []).flatMap((t) => (t.engagement_id ? [t.engagement_id] : []))),
-  ];
+function mapCommRow(
+  c: CommWindowRow,
+  actorById: Map<string, { name: string; type: ActorType }>
+): ThreadMessage {
+  // PR-iii (Session 19): a dispatched email row stores its sent HTML — the
+  // bubble reads the WORDS (the preserved plain source, else the
+  // deterministic extraction); the exact document rides for "as sent".
+  const isHtml = c.body_format === "html";
+  const draftedBy = c.drafted_by_actor_id ? actorById.get(c.drafted_by_actor_id) : null;
+  const approvedBy = c.approved_by_actor_id ? actorById.get(c.approved_by_actor_id) : null;
+  return {
+    id: c.id,
+    channel: c.channel,
+    direction: c.direction as ThreadMessage["direction"],
+    status: c.status,
+    body: isHtml ? (c.plain_body ?? plainTextOfBody(c.body, "html")) : c.body,
+    subject: null,
+    occurredAt: c.occurred_at,
+    scheduledFor: c.scheduled_for,
+    durationSeconds: c.duration_seconds,
+    draftedByLight: draftedBy?.type === "agent",
+    stampedByName: approvedBy?.name ?? null,
+    isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
+    sentHtml: isHtml ? c.body : null,
+  };
+}
+
+async function hydrateActors(
+  db: Awaited<ReturnType<typeof getAppContext>>["db"],
+  rows: CommWindowRow[]
+): Promise<Map<string, { name: string; type: ActorType }>> {
   const actorIds = [
     ...new Set(
-      (comms.data ?? []).flatMap((c) => [
+      rows.flatMap((c) => [
         ...(c.drafted_by_actor_id ? [c.drafted_by_actor_id] : []),
         ...(c.approved_by_actor_id ? [c.approved_by_actor_id] : []),
       ])
     ),
   ];
+  if (!actorIds.length) return new Map();
+  const { data, error } = await db
+    .from("actors")
+    .select("id, display_name, actor_type")
+    .in("id", actorIds);
+  if (error) throw new Error(`actors query failed: ${error.message}`);
+  return new Map(
+    (data ?? []).map((a) => [
+      a.id as string,
+      { name: a.display_name as string, type: a.actor_type as ActorType },
+    ])
+  );
+}
 
-  const [contacts, channels, engagements, runs, actors] = await Promise.all([
+/** The windowed thread list (5c): DEFAULT_LIST_WINDOW per page, ordered by
+ * the 0036 trigger-maintained last_activity_at, total a COUNT aggregate.
+ * Hydration (contact names, last message, pending drafts, live runs) is
+ * scoped to the PAGE's threads — the last message is one single-row read per
+ * page thread (the s22 contacts precedent: exact and bounded). */
+export async function getConversationList(page = 1): Promise<ConversationListPage> {
+  const { db, business } = await getAppContext();
+  const range = pageRange(clampPage(page), DEFAULT_LIST_WINDOW);
+  const {
+    data: threads,
+    error,
+    count,
+  } = await db
+    .from("comm_threads")
+    .select("id, subject, channel, contact_id, engagement_id, is_unread, last_activity_at", {
+      count: "exact",
+    })
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .not("last_activity_at", "is", null)
+    .order("last_activity_at", { ascending: false })
+    .range(range.from, range.to);
+  if (error) throw new Error(`comm_threads window failed: ${error.message}`);
+
+  const pageThreads = threads ?? [];
+  const total = count ?? pageThreads.length;
+  const contactIds = [...new Set(pageThreads.map((t) => t.contact_id))];
+  const engagementIds = [
+    ...new Set(pageThreads.flatMap((t) => (t.engagement_id ? [t.engagement_id] : []))),
+  ];
+  const threadIds = pageThreads.map((t) => t.id);
+
+  const [contacts, engagements, runs, pending, lastMessages] = await Promise.all([
     contactIds.length
-      ? db
-          .from("contacts")
-          .select("id, display_name, type, status, first_touch")
-          .in("id", contactIds)
-      : Promise.resolve({ data: [], error: null }),
-    contactIds.length
-      ? db
-          .from("contact_channels")
-          .select("contact_id, channel, value, is_primary, consent")
-          .in("contact_id", contactIds)
-          .is("archived_at", null)
+      ? db.from("contacts").select("id, display_name").in("id", contactIds)
       : Promise.resolve({ data: [], error: null }),
     engagementIds.length
-      ? db
-          .from("engagements")
-          .select("id, title, outcome, stage_definitions(label)")
-          .in("id", engagementIds)
+      ? db.from("engagements").select("id, stage_definitions(label)").in("id", engagementIds)
       : Promise.resolve({ data: [], error: null }),
     engagementIds.length
       ? db
@@ -1283,145 +1376,247 @@ export async function getConversations(): Promise<ConversationThread[]> {
           .in("engagement_id", engagementIds)
           .in("status", ["running", "waiting", "blocked"])
       : Promise.resolve({ data: [], error: null }),
-    actorIds.length
-      ? db.from("actors").select("id, display_name, actor_type").in("id", actorIds)
+    threadIds.length
+      ? db
+          .from("communications")
+          .select("thread_id")
+          .in("thread_id", threadIds)
+          .eq("direction", "outbound")
+          .eq("status", "pending_approval")
+          .is("archived_at", null)
       : Promise.resolve({ data: [], error: null }),
+    Promise.all(
+      pageThreads.map((t) =>
+        db
+          .from("communications")
+          .select("body, body_format, plain_body:attributes->>plain_body, direction, occurred_at")
+          .eq("thread_id", t.id)
+          .is("archived_at", null)
+          .order("occurred_at", { ascending: false })
+          .order("id", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      )
+    ),
   ]);
   for (const [label, result] of [
     ["contacts", contacts],
-    ["contact_channels", channels],
     ["engagements", engagements],
     ["workflow_runs", runs],
-    ["actors", actors],
+    ["pending drafts", pending],
   ] as const) {
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
 
-  const contactById = new Map((contacts.data ?? []).map((c) => [c.id, c]));
-  const channelsByContact = new Map<string, typeof channels.data>();
-  for (const ch of channels.data ?? []) {
-    const list = channelsByContact.get(ch.contact_id) ?? [];
-    list!.push(ch);
-    channelsByContact.set(ch.contact_id, list!);
-  }
-  const engagementById = new Map((engagements.data ?? []).map((e) => [e.id, e]));
-  const liveRunEngagements = new Set((runs.data ?? []).map((r) => r.engagement_id));
-  const actorById = new Map(
-    (actors.data ?? []).map((a) => [
-      a.id,
-      { name: a.display_name as string, type: a.actor_type as ActorType },
-    ])
+  const contactById = new Map((contacts.data ?? []).map((c) => [c.id, c.display_name as string]));
+  const stageByEngagement = new Map(
+    (engagements.data ?? []).map((e) => {
+      const stage = e.stage_definitions as unknown as
+        | { label: string }
+        | { label: string }[]
+        | null;
+      return [e.id, Array.isArray(stage) ? (stage[0]?.label ?? null) : (stage?.label ?? null)];
+    })
   );
+  const liveRunEngagements = new Set((runs.data ?? []).map((r) => r.engagement_id));
+  const pendingThreads = new Set((pending.data ?? []).map((r) => r.thread_id as string));
 
-  const commsByThread = new Map<string, NonNullable<typeof comms.data>>();
-  for (const c of comms.data ?? []) {
-    const list = commsByThread.get(c.thread_id) ?? [];
-    list.push(c);
-    commsByThread.set(c.thread_id, list);
-  }
-
-  const result: ConversationThread[] = (threads.data ?? []).flatMap((t) => {
-    const contact = contactById.get(t.contact_id);
-    if (!contact) return [];
-    const list = commsByThread.get(t.id) ?? [];
-    if (!list.length) return [];
-
-    const messages: ThreadMessage[] = list.map((c) => {
-      const draftedBy = c.drafted_by_actor_id ? actorById.get(c.drafted_by_actor_id) : null;
-      const approvedBy = c.approved_by_actor_id ? actorById.get(c.approved_by_actor_id) : null;
-      // PR-iii (Session 19): a dispatched email row stores its sent HTML —
-      // the bubble reads the WORDS (the preserved plain source, else the
-      // deterministic extraction), and the exact document rides along for
-      // the "as sent" view.
-      const isHtml = (c as { body_format?: string }).body_format === "html";
-      const plainBody = (c as { plain_body?: string | null }).plain_body;
-      return {
-        id: c.id,
-        channel: c.channel,
-        direction: c.direction as ThreadMessage["direction"],
-        status: c.status,
-        body: isHtml ? (plainBody ?? plainTextOfBody(c.body, "html")) : c.body,
-        subject: null,
-        occurredAt: c.occurred_at,
-        scheduledFor: c.scheduled_for,
-        durationSeconds: c.duration_seconds,
-        draftedByLight: draftedBy?.type === "agent",
-        stampedByName: approvedBy?.name ?? null,
-        isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
-        sentHtml: isHtml ? c.body : null,
-      };
-    });
-
-    const last = messages[messages.length - 1];
+  const rows: ConversationListItem[] = pageThreads.flatMap((t, i) => {
+    const last = lastMessages[i]?.data as {
+      body: string;
+      body_format?: string;
+      plain_body?: string | null;
+      direction: string;
+      occurred_at: string;
+    } | null;
     if (!last) return [];
-    const hasPendingDraft = messages.some((m) => m.isPendingDraft);
-    const engagement = t.engagement_id ? engagementById.get(t.engagement_id) : null;
-    const stage = engagement?.stage_definitions as unknown as { label: string } | null;
+    const lastBody =
+      last.body_format === "html"
+        ? (last.plain_body ?? plainTextOfBody(last.body, "html"))
+        : last.body;
+    const hasPendingDraft = pendingThreads.has(t.id);
     const lightHandling = t.engagement_id ? liveRunEngagements.has(t.engagement_id) : false;
     const awaitingYou = !hasPendingDraft && last.direction === "inbound";
-
-    const state: ConversationThread["state"] = hasPendingDraft
-      ? { tone: "gold", label: "✦ draft awaiting stamp" }
-      : lightHandling
-        ? { tone: "gold", label: "Light handling" }
-        : awaitingYou
-          ? { tone: "you", label: "awaiting you" }
-          : { tone: "done", label: stage?.label.toLowerCase() ?? "up to date" };
-
-    const contactChannels = channelsByContact.get(t.contact_id) ?? [];
-    const primary = (kind: string) =>
-      contactChannels.find((c) => c.channel === kind && c.is_primary) ??
-      contactChannels.find((c) => c.channel === kind);
-    const firstTouch = (contact.first_touch ?? {}) as Record<string, unknown>;
-
+    const stageLabel = t.engagement_id ? (stageByEngagement.get(t.engagement_id) ?? null) : null;
     return [
       {
         id: t.id,
-        contactId: t.contact_id,
-        contactName: contact.display_name,
+        contactName: contactById.get(t.contact_id) ?? "Unknown contact",
         channel: t.channel,
         subject: t.subject,
-        lastAt: last.occurredAt,
+        lastAt: t.last_activity_at as string,
         snippet: hasPendingDraft
           ? "✦ Light's draft — awaiting your stamp"
-          : last.body.length > 80
-            ? `${last.body.slice(0, 80)}…`
-            : last.body,
-        state,
+          : lastBody.length > 80
+            ? `${lastBody.slice(0, 80)}…`
+            : lastBody,
+        state: hasPendingDraft
+          ? ({ tone: "gold", label: "✦ draft awaiting stamp" } as const)
+          : lightHandling
+            ? ({ tone: "gold", label: "Light handling" } as const)
+            : awaitingYou
+              ? ({ tone: "you", label: "awaiting you" } as const)
+              : ({ tone: "done", label: stageLabel?.toLowerCase() ?? "up to date" } as const),
         lightHandling,
         awaitingYou,
         hasPendingDraft,
-        enquiry: engagement
-          ? {
-              id: engagement.id,
-              title: engagement.title,
-              stageLabel: stage?.label ?? null,
-            }
-          : null,
-        autoDraftPaused: Boolean(t.auto_draft_paused),
-        settleOverrideSeconds:
-          typeof t.settle_override_seconds === "number" ? t.settle_override_seconds : null,
-        settleDueAt: t.draft_settle_due_at ?? null,
-        waServiceWindowExpiresAt: t.wa_service_window_expires_at ?? null,
         unread: Boolean(t.is_unread),
-        contact: {
-          type: contact.type as "person" | "organisation",
-          status: contact.status,
-          isClient: engagement?.outcome === "won",
-          phone: primary("phone")?.value ?? primary("whatsapp")?.value ?? null,
-          email: primary("email")?.value ?? null,
-          source: typeof firstTouch.source === "string" ? firstTouch.source : null,
-          consents: contactChannels.map((c) => {
-            const { ok, note } = consentNote((c.consent ?? {}) as Record<string, unknown>);
-            return { channel: c.channel, ok, note };
-          }),
-        },
-        messages,
       },
     ];
   });
 
-  return result.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  return {
+    rows,
+    total,
+    page: clampPage(page),
+    pageCount: Math.max(1, Math.ceil(total / DEFAULT_LIST_WINDOW)),
+  };
+}
+
+/** A bounded window of a thread's history, newest-first from `before` (or
+ * the very tail when null), returned ASCENDING with an honest hasOlder. */
+async function readThreadWindow(
+  db: Awaited<ReturnType<typeof getAppContext>>["db"],
+  businessId: string,
+  threadId: string,
+  before: ThreadCursor | null
+): Promise<{ messages: ThreadMessage[]; hasOlder: boolean }> {
+  let query = db
+    .from("communications")
+    .select(COMM_WINDOW_COLUMNS)
+    .eq("business_id", businessId)
+    .eq("thread_id", threadId)
+    .is("archived_at", null)
+    .order("occurred_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(THREAD_TAIL_WINDOW + 1);
+  if (before) {
+    query = query.or(
+      `occurred_at.lt."${before.occurredAt}",and(occurred_at.eq."${before.occurredAt}",id.lt."${before.id}")`
+    );
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(`thread window failed: ${error.message}`);
+  const rows = (data ?? []) as unknown as CommWindowRow[];
+  const hasOlder = rows.length > THREAD_TAIL_WINDOW;
+  const windowRows = rows.slice(0, THREAD_TAIL_WINDOW).reverse();
+  const actorById = await hydrateActors(db, windowRows);
+  return { messages: windowRows.map((c) => mapCommRow(c, actorById)), hasOlder };
+}
+
+/** The open thread: rail facts + the recent tail (5c). */
+export async function getOpenThread(threadId: string): Promise<OpenThread | null> {
+  if (!isUuid(threadId)) return null;
+  const { db, business } = await getAppContext();
+  const { data: t, error } = await db
+    .from("comm_threads")
+    .select(
+      "id, subject, channel, contact_id, engagement_id, auto_draft_paused, settle_override_seconds, draft_settle_due_at, wa_service_window_expires_at, is_unread"
+    )
+    .eq("id", threadId)
+    .eq("business_id", business.id)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (error) throw new Error(`thread lookup failed: ${error.message}`);
+  if (!t) return null;
+
+  const [contactRes, channelsRes, engagementRes, window] = await Promise.all([
+    db
+      .from("contacts")
+      .select("id, display_name, type, status, first_touch")
+      .eq("id", t.contact_id)
+      .maybeSingle(),
+    db
+      .from("contact_channels")
+      .select("channel, value, is_primary, consent")
+      .eq("contact_id", t.contact_id)
+      .is("archived_at", null),
+    t.engagement_id
+      ? db
+          .from("engagements")
+          .select("id, title, outcome, stage_definitions(label)")
+          .eq("id", t.engagement_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    readThreadWindow(db, business.id, threadId, null),
+  ]);
+  const contact = contactRes.data as {
+    id: string;
+    display_name: string;
+    type: string;
+    status: string;
+    first_touch: Record<string, unknown> | null;
+  } | null;
+  if (!contact) return null;
+  const engagement = engagementRes.data as {
+    id: string;
+    title: string;
+    outcome: string | null;
+    stage_definitions: { label: string } | { label: string }[] | null;
+  } | null;
+  const stageRel = engagement?.stage_definitions;
+  const stageLabel = Array.isArray(stageRel)
+    ? (stageRel[0]?.label ?? null)
+    : (stageRel?.label ?? null);
+  const contactChannels = (channelsRes.data ?? []) as {
+    channel: string;
+    value: string;
+    is_primary: boolean;
+    consent: Record<string, unknown> | null;
+  }[];
+  const primary = (kind: string) =>
+    contactChannels.find((c) => c.channel === kind && c.is_primary) ??
+    contactChannels.find((c) => c.channel === kind);
+  const firstTouch = (contact.first_touch ?? {}) as Record<string, unknown>;
+  const oldest = window.messages[0] ?? null;
+
+  return {
+    id: t.id,
+    contactId: t.contact_id,
+    contactName: contact.display_name,
+    channel: t.channel,
+    subject: t.subject,
+    enquiry: engagement
+      ? { id: engagement.id, title: engagement.title, stageLabel }
+      : null,
+    autoDraftPaused: Boolean(t.auto_draft_paused),
+    settleOverrideSeconds:
+      typeof t.settle_override_seconds === "number" ? t.settle_override_seconds : null,
+    settleDueAt: t.draft_settle_due_at ?? null,
+    waServiceWindowExpiresAt: t.wa_service_window_expires_at ?? null,
+    unread: Boolean(t.is_unread),
+    contact: {
+      type: contact.type as "person" | "organisation",
+      status: contact.status,
+      isClient: engagement?.outcome === "won",
+      phone: primary("phone")?.value ?? primary("whatsapp")?.value ?? null,
+      email: primary("email")?.value ?? null,
+      source: typeof firstTouch.source === "string" ? firstTouch.source : null,
+      consents: contactChannels.map((c) => {
+        const { ok, note } = consentNote((c.consent ?? {}) as Record<string, unknown>);
+        return { channel: c.channel, ok, note };
+      }),
+    },
+    messages: window.messages,
+    hasOlder: window.hasOlder,
+    oldestCursor: oldest ? { occurredAt: oldest.occurredAt, id: oldest.id } : null,
+  };
+}
+
+/** Older history, one bounded window at a time (5c — the upward scroll). */
+export async function getOlderThreadMessages(
+  threadId: string,
+  before: ThreadCursor
+): Promise<{ messages: ThreadMessage[]; hasOlder: boolean; oldestCursor: ThreadCursor | null }> {
+  if (!isUuid(threadId)) return { messages: [], hasOlder: false, oldestCursor: null };
+  const { db, business } = await getAppContext();
+  const window = await readThreadWindow(db, business.id, threadId, before);
+  const oldest = window.messages[0] ?? null;
+  return {
+    messages: window.messages,
+    hasOlder: window.hasOlder,
+    oldestCursor: oldest ? { occurredAt: oldest.occurredAt, id: oldest.id } : null,
+  };
 }
 
 /** Session 23 (WS1b) — the thread view of the same stamp: for each pending

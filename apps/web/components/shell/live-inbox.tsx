@@ -97,6 +97,17 @@ export function LiveInbox({ businessId }: { businessId: string }) {
           if ((draftArrived || inboundArrived) && soundEnabled()) {
             playArrivalTone();
           }
+          // Session 23 (WS2, 5c): the open Conversations thread appends the
+          // arriving row WITHOUT a refetch — the payload carries the row.
+          // The debounced server refresh below stays as reconciliation
+          // (every read it triggers is windowed since s22/s23; JUDGMENT:
+          // append-first + bounded reconcile is the honest reading of
+          // "Realtime appends without refetch").
+          window.dispatchEvent(
+            new CustomEvent("rooshni:comm-change", {
+              detail: { eventType: payload.eventType, row: payload.new },
+            })
+          );
           scheduleRefresh();
         }
       )

@@ -4217,6 +4217,30 @@ async function main() {
     if (!refused) throw new Error("no refusal at 0.0101 against a 0.01 cap");
   });
 
+  await expectOk("the Conversations reads are windowed (5c) — the thread list pages, the tail is bounded, the unbounded read is gone", async () => {
+    // File tripwire (the s20/s22 precedent): the 5c ruling's shape is pinned
+    // so a later edit cannot quietly return to fetch-everything.
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    if (/export async function getConversations\(\)/.test(queriesSource)) {
+      throw new Error("the unbounded getConversations() read has returned — 5c forbids it");
+    }
+    const listStart = queriesSource.indexOf("export async function getConversationList");
+    if (listStart < 0) throw new Error("getConversationList is missing");
+    const listBody = queriesSource.slice(listStart, listStart + 3000);
+    if (!listBody.includes(".range(range.from, range.to)")) {
+      throw new Error("the thread list no longer windows its read");
+    }
+    if (!listBody.includes(`count: "exact"`)) {
+      throw new Error("the thread list total must be a COUNT aggregate (5e)");
+    }
+    const windowStart = queriesSource.indexOf("async function readThreadWindow");
+    if (windowStart < 0) throw new Error("readThreadWindow is missing");
+    const windowBody = queriesSource.slice(windowStart, windowStart + 2200);
+    if (!windowBody.includes(".limit(THREAD_TAIL_WINDOW + 1)")) {
+      throw new Error("the thread tail no longer limits by THREAD_TAIL_WINDOW — the 5c bound is broken");
+    }
+  });
+
   await expectOk("sub-penny display shows real precision — the display can never contradict the comparison (1d)", async () => {
     if (formatMeteredGbp(0.006) !== "£0.006") throw new Error(`0.006 → ${formatMeteredGbp(0.006)}`);
     if (formatMeteredGbp(0.01) !== "£0.01") throw new Error(`0.01 → ${formatMeteredGbp(0.01)}`);

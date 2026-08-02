@@ -1,25 +1,44 @@
 import { PageHead } from "@/components/shell/page-head";
-import { getConversations, getThreadDraftStamps } from "@/lib/server/queries";
+import {
+  getConversationList,
+  getOpenThread,
+  getThreadDraftStamps,
+  isUuid,
+} from "@/lib/server/queries";
 
 import { ConversationsClient } from "./conversations-client";
 
 export const dynamic = "force-dynamic";
 
+/*
+ * Session 23 (WS2, founder directive) — the Messenger shape, server-fed by
+ * windows (the s22 5c deferral): the thread list reads one page; the open
+ * thread reads its recent tail; older messages arrive on upward scroll.
+ */
 export default async function ConversationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ thread?: string }>;
+  searchParams: Promise<{ thread?: string; lpage?: string }>;
 }) {
-  // Session 11: the inbox History tab deep-links a decided draft's thread.
-  const [{ thread }, threads] = await Promise.all([searchParams, getConversations()]);
+  const params = await searchParams;
+  const listPage = Number(params.lpage ?? "1");
+  const requestedThread = params.thread && isUuid(params.thread) ? params.thread : null;
 
-  // Session 23 (WS1b): the thread view of the same stamp — pre-flight state
-  // and the render-resolved WYSIWYS body for every pending draft in view.
-  // Small by construction (0029: at most one pending per engagement per
-  // channel), bounded in the query.
-  const pendingIds = threads.flatMap((t) =>
-    t.messages.filter((m) => m.isPendingDraft).map((m) => m.id)
-  );
+  const [list, explicitThread] = await Promise.all([
+    getConversationList(Number.isFinite(listPage) ? listPage : 1),
+    requestedThread ? getOpenThread(requestedThread) : Promise.resolve(null),
+  ]);
+
+  // Desktop auto-opens the newest conversation (Messenger's own behaviour);
+  // the client keeps the LIST full-screen on a phone unless a thread was
+  // explicitly opened, and only an explicit open marks the thread read there.
+  const thread =
+    explicitThread ?? (list.rows[0] ? await getOpenThread(list.rows[0].id) : null);
+
+  // WS1b: the thread view of the same stamp, for pending drafts in the tail.
+  const pendingIds = (thread?.messages ?? [])
+    .filter((m) => m.isPendingDraft)
+    .map((m) => m.id);
   const draftStamps = await getThreadDraftStamps(pendingIds);
 
   return (
@@ -29,8 +48,9 @@ export default async function ConversationsPage({
         sub="One inbox across WhatsApp, email and SMS — every message is a row on The Record"
       />
       <ConversationsClient
-        threads={threads}
-        initialThreadId={thread ?? null}
+        list={list}
+        thread={thread}
+        explicitThread={Boolean(explicitThread)}
         draftStamps={draftStamps}
       />
     </>

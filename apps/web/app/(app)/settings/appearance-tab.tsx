@@ -46,9 +46,12 @@ const SIZES = [
   ["large", "A+"],
 ] as const;
 
+// Session 23 (WS2, founder directive): standard is the DEFAULT everywhere —
+// the phone-frame "as the client sees it" novelty view is demoted to an
+// optional toggle.
 const VIEWS = [
-  ["phone", "📱 Phone"],
   ["standard", "☰ Standard"],
+  ["phone", "📱 Phone frame"],
 ] as const;
 
 // Session 16 (PR-G): the arrival tone for new pending drafts — on by
@@ -101,7 +104,7 @@ export function AppearanceTab() {
   const [light, setLight] = useState("prism");
   const [font, setFont] = useState("theme");
   const [size, setSize] = useState("default");
-  const [view, setView] = useState("phone");
+  const [view, setView] = useState("standard");
   const [sound, setSound] = useState("on");
 
   useEffect(() => {
@@ -113,10 +116,10 @@ export function AppearanceTab() {
     if (SIZES.some(([k]) => k === d.size)) setSize(d.size as string);
     try {
       const v = localStorage.getItem("ui-convview");
-      if (v === "standard") setView("standard");
+      if (v === "phone") setView("phone");
       if (localStorage.getItem("ui-inbox-sound") === "off") setSound("off");
     } catch {
-      /* stays phone */
+      /* stays standard */
     }
   }, []);
 
@@ -187,8 +190,9 @@ export function AppearanceTab() {
       apply: (v) => {
         setView(v);
         // Stamp the html element too, so an in-app navigation to
-        // Conversations picks the default up without a refresh.
-        if (v === "standard") document.documentElement.dataset.convview = "standard";
+        // Conversations picks the default up without a refresh. Standard is
+        // the default: absence of the attribute IS standard (Session 23).
+        if (v === "phone") document.documentElement.dataset.convview = "phone";
         else delete document.documentElement.dataset.convview;
         persist("ui-convview", v);
       },

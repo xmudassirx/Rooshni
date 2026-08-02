@@ -14,7 +14,12 @@ import {
 
 import { getAppContext } from "@/lib/server/context";
 import { dispatchAfterApproval } from "@/lib/server/outbound";
-import { isUuid } from "@/lib/server/queries";
+import {
+  getOlderThreadMessages,
+  isUuid,
+  type ThreadCursor,
+  type ThreadMessage,
+} from "@/lib/server/queries";
 
 /**
  * Session 16 — Conversations becomes a drafting AND sending surface
@@ -215,6 +220,18 @@ export async function setAutoDraftPausedAction(
 
   revalidatePath("/conversations");
   return { error: null, done: true };
+}
+
+/**
+ * Session 23 (WS2, 5c) — the upward scroll: one bounded older window per
+ * call, cursor-keyed. A read, not an act; RLS scopes it, nothing is evented.
+ */
+export async function loadOlderMessagesAction(
+  threadId: string,
+  before: ThreadCursor
+): Promise<{ messages: ThreadMessage[]; hasOlder: boolean; oldestCursor: ThreadCursor | null }> {
+  if (!isUuid(threadId)) return { messages: [], hasOlder: false, oldestCursor: null };
+  return getOlderThreadMessages(threadId, before);
 }
 
 /**
