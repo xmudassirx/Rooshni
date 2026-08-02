@@ -22,6 +22,11 @@ export const DEFAULT_LIST_WINDOW = 20;
  * upward scroll. The thread list itself pages by DEFAULT_LIST_WINDOW. */
 export const THREAD_TAIL_WINDOW = 30;
 
+/** 5b (Session 23, WS3 — the s22 deferral landing): The Record scrolls
+ * reverse-chronologically in day-anchored windows — each fetch one bounded
+ * query, no page numbers. */
+export const RECORD_WINDOW = 50;
+
 export function clampPageSize(requested: number | null | undefined): number {
   if (typeof requested !== "number" || !Number.isFinite(requested)) return DEFAULT_PAGE_SIZE;
   const allowed = (INBOX_PAGE_SIZES as readonly number[]).includes(requested);

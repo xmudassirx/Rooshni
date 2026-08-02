@@ -5,6 +5,7 @@ import {
   clampPageSize,
   computeLightPerformance,
   DEFAULT_LIST_WINDOW,
+  RECORD_WINDOW,
   THREAD_TAIL_WINDOW,
   evaluateAiBudget,
   pageRange,
@@ -1100,19 +1101,36 @@ interface ActorEmbed {
   actor_type: ActorType;
 }
 
+/** A stable position in the ledger: occurred_at with the UUIDv7 id as
+ * tie-break, so no entry is skipped or doubled across window edges. */
+export interface RecordCursor {
+  occurredAt: string;
+  id: string;
+}
+
+export interface RecordWindow {
+  events: RecordEvent[];
+  hasMore: boolean;
+  /** Cursor of the OLDEST returned entry — the next window's `before`. */
+  nextCursor: RecordCursor | null;
+}
+
 /**
- * The most recent slice of the ledger, newest first. When `filter` is given,
- * only entries about that entity — matched on the entity columns or on the
- * payload's `<entity>_id` reference — are returned.
- *
- * JUDGMENT: capped at the most recent 300 entries — search and pagination are
- * their own session; an uncapped query over an append-only table only gets
- * slower forever.
+ * Session 23 (WS3 — the s22 5b deferral, decision 157): The Record reads
+ * reverse-chronological WINDOWS (RECORD_WINDOW per fetch, +1 sentinel for an
+ * honest hasMore), cursor-keyed, no page numbers — infinite scroll fetches
+ * the next bounded query; the day sections anchor in the renderer, merging
+ * across window edges. When `filter` is given, only entries about that
+ * entity — matched on the entity columns or on the payload's `<entity>_id`
+ * reference — are returned.
  */
-export async function getRecordEvents(filter?: {
-  entityType: RecordEntityType;
-  entityId: string;
-}): Promise<RecordEvent[]> {
+export async function getRecordEvents(
+  filter?: {
+    entityType: RecordEntityType;
+    entityId: string;
+  },
+  before?: RecordCursor
+): Promise<RecordWindow> {
   const { db, business } = await getAppContext();
 
   let query = db
@@ -1120,21 +1138,31 @@ export async function getRecordEvents(filter?: {
     .select("id, action, entity_type, entity_id, payload, cost, occurred_at, actors(display_name, actor_type)")
     .eq("business_id", business.id)
     .order("occurred_at", { ascending: false })
-    .limit(300);
+    .order("id", { ascending: false })
+    .limit(RECORD_WINDOW + 1);
 
   if (filter) {
     // isUuid-validated by the caller; belt to those braces before string-building.
-    if (!isUuid(filter.entityId)) return [];
+    if (!isUuid(filter.entityId)) return { events: [], hasMore: false, nextCursor: null };
     query = query.or(
       `and(entity_type.eq.${filter.entityType},entity_id.eq.${filter.entityId}),` +
         `payload->>${filter.entityType}_id.eq.${filter.entityId}`
+    );
+  }
+  if (before) {
+    if (!isUuid(before.id)) return { events: [], hasMore: false, nextCursor: null };
+    // A second .or() ANDs with the filter above — the cursor window.
+    query = query.or(
+      `occurred_at.lt."${before.occurredAt}",and(occurred_at.eq."${before.occurredAt}",id.lt."${before.id}")`
     );
   }
 
   const { data, error } = await query;
   if (error) throw new Error(`events query failed: ${error.message}`);
 
-  return (data ?? []).map((row) => {
+  const rows = data ?? [];
+  const hasMore = rows.length > RECORD_WINDOW;
+  const events = rows.slice(0, RECORD_WINDOW).map((row) => {
     const actor = row.actors as unknown as ActorEmbed | null;
     return {
       id: row.id,
@@ -1148,6 +1176,12 @@ export async function getRecordEvents(filter?: {
       actorType: actor?.actor_type ?? "integration",
     };
   });
+  const oldest = events[events.length - 1] ?? null;
+  return {
+    events,
+    hasMore,
+    nextCursor: oldest ? { occurredAt: oldest.occurredAt, id: oldest.id } : null,
+  };
 }
 
 // --- Conversations -----------------------------------------------------------

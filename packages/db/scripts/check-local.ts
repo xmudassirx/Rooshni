@@ -4241,6 +4241,19 @@ async function main() {
     }
   });
 
+  await expectOk("The Record reads day-anchored bounded windows (5b) — the 300-row block is gone and the cursor window is pinned", async () => {
+    const queriesSource = readFileSync(resolve("../../apps/web/lib/server/queries.ts"), "utf8");
+    const start = queriesSource.indexOf("export async function getRecordEvents");
+    if (start < 0) throw new Error("getRecordEvents is missing");
+    const body = queriesSource.slice(start, start + 3000);
+    if (!body.includes(".limit(RECORD_WINDOW + 1)")) {
+      throw new Error("getRecordEvents no longer windows by RECORD_WINDOW — the 5b bound is broken");
+    }
+    if (/\.limit\(300\)/.test(body)) {
+      throw new Error("the 300-row block has returned — 5b replaced it with cursor windows");
+    }
+  });
+
   await expectOk("sub-penny display shows real precision — the display can never contradict the comparison (1d)", async () => {
     if (formatMeteredGbp(0.006) !== "£0.006") throw new Error(`0.006 → ${formatMeteredGbp(0.006)}`);
     if (formatMeteredGbp(0.01) !== "£0.01") throw new Error(`0.01 → ${formatMeteredGbp(0.01)}`);
