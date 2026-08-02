@@ -317,8 +317,14 @@ export async function dispatchApprovedCommunications(
         businesses.set(comm.business_id, facts);
       }
 
-      // Quiet hours: hold and dispatch at the window's end.
-      const holdUntil = quietHoursHoldUntil(now, facts.timezone, resolveQuietHours(facts.settings));
+      // Quiet hours: hold and dispatch at the window's end. A row carrying
+      // the 0039 override marker is NEVER re-held — a stamp-holder chose the
+      // timing (their stamp, their timing; the choice is on The Record as
+      // communication.quiet_hours_overridden), and re-holding it here would
+      // silently unmake a recorded human decision.
+      const holdUntil = comm.attributes?.quiet_hours_override
+        ? null
+        : quietHoursHoldUntil(now, facts.timezone, resolveQuietHours(facts.settings));
       if (holdUntil) {
         const { error } = await db
           .from("communications")

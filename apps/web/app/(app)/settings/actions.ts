@@ -4,7 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import {
   createServiceClient,
+  describeSendWindow,
   emitEvent,
+  quietHoursFromSendWindow,
   ATTACHMENT_MAX_BYTES,
   DRAFTING_EVENT_KINDS,
   FILES_BUCKET,
@@ -201,6 +203,90 @@ export async function setMailProviderAction(
   });
 
   revalidatePath("/settings");
+  return { error: null, saved: true };
+}
+
+export interface BusinessHoursActionState {
+  error: string | null;
+  saved?: boolean;
+}
+
+/**
+ * Defect-trio hotfix (2 Aug 2026, item 3) — business hours go real. The
+ * firm sets a simple daily send window (open→close, its own timezone); the
+ * stored truth is settings.quiet_hours — the SAME config the dispatch hold
+ * has always read, so the "sends [time]" display and the dispatch_at
+ * calculation cannot diverge (one source, founder-ruled). The setter also
+ * writes the derived settings.business_hours display string (single writer
+ * — a presentation of the one truth, never a second store). Owner-gated
+ * like every business-level policy; one settings merge; evented.
+ *
+ * JUDGMENT: the ruling offered "per-day windows or a simple daily window" —
+ * the simple daily window ships (it maps 1:1 onto the quiet_hours shape the
+ * hold enforces; per-day windows would grow the enforcement config and are
+ * their own session if the firm ever needs them).
+ */
+export async function setBusinessHoursAction(
+  _prev: BusinessHoursActionState,
+  formData: FormData
+): Promise<BusinessHoursActionState> {
+  const mode = String(formData.get("mode") ?? "set");
+  const open = String(formData.get("open") ?? "").trim();
+  const close = String(formData.get("close") ?? "").trim();
+
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "Business hours are the owner's pen — ask the owner to change them." };
+  }
+
+  const { data: bizRow, error: readError } = await db
+    .from("businesses")
+    .select("settings, timezone")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (readError || !bizRow) return { error: `Settings read failed: ${readError?.message ?? "no row"}` };
+  const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
+  const timezone = (bizRow.timezone as string) || "Europe/London";
+
+  if (mode === "reset") {
+    // Back to the honest default — the field reads "default — not yet set
+    // by you" again and the hold reads the shipped window.
+    delete settings.quiet_hours;
+    delete settings.business_hours;
+  } else {
+    const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!HHMM.test(open) || !HHMM.test(close)) {
+      return { error: "Business hours need opening and closing times as HH:MM (24-hour)." };
+    }
+    if (open === close) {
+      return { error: "Opening and closing times cannot be the same — that window holds nothing and sends always." };
+    }
+    const window = { open, close };
+    settings.quiet_hours = quietHoursFromSendWindow(window);
+    settings.business_hours = describeSendWindow(window, timezone);
+  }
+
+  const { error: writeError } = await db
+    .from("businesses")
+    .update({ settings })
+    .eq("id", business.id);
+  if (writeError) return { error: `Save failed: ${writeError.message}` };
+
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: FIRST_LIGHT_EVENT_KINDS.settingsUpdated,
+    entity_type: "business",
+    entity_id: business.id,
+    payload: {
+      keys: ["business_hours", "quiet_hours"],
+      ...(mode === "reset"
+        ? { business_hours: null, note: "reset to the shipped default window" }
+        : { business_hours: settings.business_hours, quiet_hours: settings.quiet_hours }),
+    },
+  });
+
+  revalidatePath("/", "layout");
   return { error: null, saved: true };
 }
 

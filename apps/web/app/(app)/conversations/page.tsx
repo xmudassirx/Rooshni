@@ -3,6 +3,7 @@ import {
   getConversationList,
   getOpenThread,
   getThreadDraftStamps,
+  getViewerStampAuthority,
   isUuid,
 } from "@/lib/server/queries";
 
@@ -39,7 +40,10 @@ export default async function ConversationsPage({
   const pendingIds = (thread?.messages ?? [])
     .filter((m) => m.isPendingDraft)
     .map((m) => m.id);
-  const draftStamps = await getThreadDraftStamps(pendingIds);
+  const [draftStamps, viewerCanStamp] = await Promise.all([
+    getThreadDraftStamps(pendingIds),
+    getViewerStampAuthority(),
+  ]);
 
   return (
     <>
@@ -52,6 +56,7 @@ export default async function ConversationsPage({
         thread={thread}
         explicitThread={Boolean(explicitThread)}
         draftStamps={draftStamps}
+        viewerCanStamp={viewerCanStamp}
       />
     </>
   );

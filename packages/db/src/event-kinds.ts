@@ -43,6 +43,10 @@ export const SEND_EVENT_KINDS = {
   communicationSendFailed: "communication.send_failed",
   /** Stamped inside quiet hours — held, dispatching at the window's end. The stamp is the founder's; the timing is policy. */
   communicationQueuedQuietHours: "communication.queued_quiet_hours",
+  /** Defect-trio hotfix (2 Aug 2026): a stamp-holder collapsed a quiet-hours
+   * hold — SEND NOW. The human actor rides the event; messaging a client at
+   * 22:00 is a recorded human decision, never a silent one. */
+  communicationQuietHoursOverridden: "communication.quiet_hours_overridden",
   /** A real Meta lead arrived through the webhook (idempotent on the leadgen id). */
   metaLeadReceived: "meta.lead_received",
   /** Decision 15: the auto-close step refused to close — its nudges never reached the client. */
