@@ -1724,6 +1724,8 @@ export interface TaskRow {
   assigneeIsAgent: boolean;
   createdByAgent: boolean;
   enquiry: { id: string; title: string } | null;
+  /** Session 23 (WS4d): a member's cancellation request awaits the manager. */
+  cancellationRequested: boolean;
 }
 
 export interface EnquiryOption {
@@ -1780,8 +1782,28 @@ export async function getTasks(): Promise<TaskRow[]> {
       assigneeIsAgent: assignee?.type === "agent",
       createdByAgent: creator?.type === "agent",
       enquiry: engagement ? { id: engagement.id, title: engagement.title } : null,
+      // Session 23 (WS4d): a pending cancellation request shows on the row.
+      cancellationRequested: Boolean(attributes.cancellation_request),
     };
   });
+}
+
+/** Session 23 (WS4d): the manager gate for task cancellation — the owner,
+ * or a human holding settings.team at execute (see 0037's JUDGMENT note). */
+export async function getIsManager(): Promise<boolean> {
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole === "owner") return true;
+  const { data } = await db
+    .from("grants")
+    .select("id")
+    .eq("business_id", business.id)
+    .eq("grantee_actor_id", actor.id)
+    .eq("tool", "settings.team")
+    .eq("access", "execute")
+    .is("revoked_at", null)
+    .is("archived_at", null)
+    .limit(1);
+  return Boolean(data?.length);
 }
 
 /** Open (non-terminal) enquiries for the task modal's link search. */

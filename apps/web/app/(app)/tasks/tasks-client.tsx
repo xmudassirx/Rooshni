@@ -9,7 +9,9 @@ import type { EnquiryOption, TaskRow } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
 
 import {
+  cancelTaskAction,
   handToLightAction,
+  requestTaskCancellationAction,
   saveTaskAction,
   setTaskStatusAction,
   type TaskActionState,
@@ -63,6 +65,9 @@ interface ModalState {
   time: string; // "HH:MM" or "" for no time
   enquiryId: string;
   enquiryLabel: string;
+  /** Session 23 (WS4d): the cancel controls key on these. */
+  status: string;
+  cancellationRequested: boolean;
 }
 
 function emptyModal(day: Date): ModalState {
@@ -76,6 +81,8 @@ function emptyModal(day: Date): ModalState {
     time: "",
     enquiryId: "",
     enquiryLabel: "",
+    status: "open",
+    cancellationRequested: false,
   };
 }
 
@@ -83,10 +90,13 @@ export function TasksClient({
   tasks,
   enquiries,
   agent,
+  isManager = false,
 }: {
   tasks: TaskRow[];
   enquiries: EnquiryOption[];
   agent: { id: string; name: string } | null;
+  /** Session 23 (WS4d): owner, or settings.team execute — the cancel gate. */
+  isManager?: boolean;
 }) {
   const today = new Date();
   const [view, setView] = useState<"week" | "month">("week");
@@ -141,6 +151,8 @@ export function TasksClient({
       time: t.dueAt && !t.allDay ? formatTime(t.dueAt).slice(0, 5) : "",
       enquiryId: t.enquiry?.id ?? "",
       enquiryLabel: t.enquiry?.title ?? "",
+      status: t.status,
+      cancellationRequested: t.cancellationRequested,
     });
   }
 
@@ -192,42 +204,65 @@ export function TasksClient({
 
   function taskRow(t: TaskRow) {
     const done = t.status === "done";
+    const cancelled = t.status === "cancelled";
     return (
+      // WS4b (Session 23): on a phone the strict columns collapse — the
+      // title takes the full width and WRAPS as prose (never one word per
+      // line); time and hand-off reflow onto their own line beneath.
       <div
         key={t.id}
-        className="grid grid-cols-[22px_1fr_92px_156px] items-center gap-2.5 py-1.5"
+        className="grid grid-cols-[22px_1fr_92px_156px] items-center gap-2.5 py-1.5 max-[640px]:grid-cols-[22px_minmax(0,1fr)] max-[640px]:gap-y-1"
       >
-        <button
-          type="button"
-          aria-label={done ? "Reopen task" : "Complete task"}
-          disabled={pending}
-          onClick={() => run(setTaskStatusAction, { id: t.id, done: String(!done) })}
-          className={cn(
-            "flex size-4 items-center justify-center rounded border-[1.5px] text-[10px]",
-            done ? "border-ledger bg-ledger text-white" : "border-rule text-transparent"
-          )}
-        >
-          ✓
-        </button>
+        {cancelled ? (
+          // A cancelled task offers no complete control (decision 116: no
+          // control that cannot act — the 0037 trigger refuses regardless).
+          <span aria-hidden className="flex size-4 items-center justify-center text-[10px] text-ink-faint">
+            ✕
+          </span>
+        ) : (
+          <button
+            type="button"
+            aria-label={done ? "Reopen task" : "Complete task"}
+            disabled={pending}
+            onClick={() => run(setTaskStatusAction, { id: t.id, done: String(!done) })}
+            className={cn(
+              "flex size-4 items-center justify-center rounded border-[1.5px] text-[10px]",
+              done ? "border-ledger bg-ledger text-white" : "border-rule text-transparent"
+            )}
+          >
+            ✓
+          </button>
+        )}
         <button
           type="button"
           onClick={() => openTask(t)}
           className={cn(
-            "text-left text-[13.5px]",
-            done && "text-ink-faint line-through"
+            "min-w-0 text-left text-[13.5px] break-words",
+            (done || cancelled) && "text-ink-faint line-through"
           )}
         >
           {t.title}
           {t.createdByAgent ? <span className="light-text"> ✦</span> : null}
+          {cancelled ? (
+            <span className="ml-1.5 rounded border border-rule bg-paper-deep px-1 py-px align-middle font-mono text-[8.5px] tracking-wide text-ink-soft uppercase no-underline">
+              cancelled
+            </span>
+          ) : t.cancellationRequested ? (
+            <span className="ml-1.5 rounded border border-rule bg-paper-deep px-1 py-px align-middle font-mono text-[8.5px] tracking-wide text-ink-soft uppercase">
+              cancellation requested
+            </span>
+          ) : null}
         </button>
         <button
           type="button"
           onClick={() => openTask(t)}
-          className="justify-self-start rounded border border-rule px-1.5 py-0.5 font-mono text-[9.5px] text-ink-faint hover:border-accent hover:text-accent"
+          className="justify-self-start rounded border border-rule px-1.5 py-0.5 font-mono text-[9.5px] text-ink-faint hover:border-accent hover:text-accent max-[640px]:col-start-2"
         >
           {t.dueAt && !t.allDay ? formatTime(t.dueAt).slice(0, 5) : "+ time"}
         </button>
-        {handOffCell(t)}
+        <span className="contents max-[640px]:col-start-2 max-[640px]:block">
+          {handOffCell(t)}
+        </span>
       </div>
     );
   }
@@ -327,7 +362,7 @@ export function TasksClient({
                 {open ? (
                   <div className="px-5 pb-3.5">
                     {list.length ? (
-                      <div className="grid grid-cols-[22px_1fr_92px_156px] gap-2.5 py-0.5 font-mono text-[8px] tracking-[.14em] text-ink-faint uppercase">
+                      <div className="grid grid-cols-[22px_1fr_92px_156px] gap-2.5 py-0.5 font-mono text-[8px] tracking-[.14em] text-ink-faint uppercase max-[640px]:hidden">
                         <span /><span /><span>Time</span><span>Hand-off</span>
                       </div>
                     ) : null}
@@ -436,7 +471,14 @@ export function TasksClient({
           agent={agent}
           error={error}
           pending={pending}
+          isManager={isManager}
           onSave={() => saveModal()}
+          onCancelTask={(reason) =>
+            modal.id ? run(cancelTaskAction, { id: modal.id, reason }) : undefined
+          }
+          onRequestCancellation={(reason) =>
+            modal.id ? run(requestTaskCancellationAction, { id: modal.id, reason }) : undefined
+          }
           onHandToLight={
             agent
               ? () =>
@@ -458,7 +500,10 @@ function TaskModal({
   agent,
   error,
   pending,
+  isManager,
   onSave,
+  onCancelTask,
+  onRequestCancellation,
   onHandToLight,
 }: {
   modal: ModalState;
@@ -467,10 +512,17 @@ function TaskModal({
   agent: { id: string; name: string } | null;
   error: string | null;
   pending: boolean;
+  isManager: boolean;
   onSave: () => void;
+  onCancelTask: (reason: string) => void;
+  onRequestCancellation: (reason: string) => void;
   onHandToLight: (() => void) | null;
 }) {
   const [pop, setPop] = useState<"cal" | "clock" | "enq" | null>(null);
+  // Session 23 (WS4d): the cancel flow — reason optional for the manager's
+  // cancel and the member's request alike.
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
   const [cal, setCal] = useState({ y: modal.day.y, m: modal.day.m });
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -740,6 +792,54 @@ function TaskModal({
             <p className="mt-2 font-mono text-[10.5px] text-stamp uppercase">{error}</p>
           ) : null}
         </div>
+        {/* Session 23 (WS4d): cancellation — the manager cancels (terminal,
+            0037), a member requests; either way it is evented, never deleted. */}
+        {modal.id && modal.status !== "done" && modal.status !== "cancelled" ? (
+          <div className="border-t border-dashed border-rule px-6 py-3">
+            {modal.cancellationRequested && !isManager ? (
+              <p className="font-mono text-[10px] tracking-wide text-ink-soft uppercase">
+                Cancellation requested — awaiting the manager&rsquo;s decision in the Approval Inbox
+              </p>
+            ) : cancelOpen ? (
+              <div className="flex flex-col gap-2">
+                <input
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="Reason (optional) — it goes on The Record"
+                  className={cn(fieldCls, "w-full font-sans text-[13px]")}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={pending}
+                    onClick={() =>
+                      isManager ? onCancelTask(cancelReason.trim()) : onRequestCancellation(cancelReason.trim())
+                    }
+                  >
+                    {isManager ? "Cancel this task" : "Send the request"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setCancelOpen(false)}>
+                    Keep it open
+                  </Button>
+                  <span className="font-mono text-[9px] tracking-wide text-ink-faint uppercase">
+                    {isManager
+                      ? "Terminal — the database refuses any reopening; nothing is deleted"
+                      : "Lands in the manager's Approval Inbox"}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setCancelOpen(true)}
+                className="cursor-pointer font-mono text-[10px] tracking-wide text-ink-soft uppercase hover:text-ink"
+              >
+                {isManager ? "✕ Cancel task…" : "✕ Request cancellation…"}
+                {modal.cancellationRequested && isManager ? " (a request is waiting)" : ""}
+              </button>
+            )}
+          </div>
+        ) : null}
         <div className="flex items-center gap-1.5 border-t border-rule px-4.5 py-3.5">
           {onHandToLight && agent ? (
             <Button variant="gold" disabled={pending} onClick={onHandToLight}>

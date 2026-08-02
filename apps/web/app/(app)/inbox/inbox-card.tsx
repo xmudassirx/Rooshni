@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatWhen } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DecisionControls } from "./decision-controls";
+import { TaskCancellationControls } from "./task-cancellation-controls";
 import { WithdrawControl } from "./withdraw-control";
 import { editDraftAction, type EditDraftState } from "./actions";
 
@@ -53,8 +54,11 @@ export interface CardTheySaid {
 }
 
 export interface InboxCardProps {
-  itemType: "communication" | "content" | "task" | "workflow_definition";
+  itemType: "communication" | "content" | "task" | "task_cancellation" | "workflow_definition";
   itemId: string;
+  /** Session 23 (WS4d): owner, or settings.team execute — gates the
+   * cancellation-request decision controls. */
+  isManager?: boolean;
   /** Session 21 — a pending workflow definition offers exactly one control,
    * Withdraw, and only to the owner (canWithdrawWorkflowDefinition is the
    * single truth; the database refuses everyone else regardless). Approve
@@ -486,6 +490,9 @@ export function InboxCard(props: InboxCardProps) {
           blockedDetails={failures.map((f) => f.detail as string)}
           onEdit={editing ? undefined : () => setEditing(true)}
         />
+      ) : props.itemType === "task_cancellation" ? (
+        // Session 23 (WS4d): a member asks; the manager decides, here.
+        <TaskCancellationControls taskId={props.itemId} isManager={props.isManager ?? false} />
       ) : props.itemType === "workflow_definition" ? (
         <div className="flex flex-col gap-1.5">
           {props.withdrawable ? <WithdrawControl definitionId={props.itemId} /> : null}

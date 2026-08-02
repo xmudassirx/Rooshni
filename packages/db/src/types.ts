@@ -120,7 +120,13 @@ export interface PreflightResult {
   checks: PreflightCheck[];
 }
 
-export type ApprovalInboxItemType = "communication" | "content" | "task" | "workflow_definition";
+export type ApprovalInboxItemType =
+  | "communication"
+  | "content"
+  | "task"
+  /** Session 23 (WS4d): a member's cancellation request awaiting the manager. */
+  | "task_cancellation"
+  | "workflow_definition";
 
 /** One row of public.approval_inbox — a view over the pending states. */
 export interface ApprovalInboxRow {

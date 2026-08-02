@@ -11,6 +11,7 @@ import {
   getCommunicationDetail,
   getInboxHistory,
   getInboxPage,
+  getIsManager,
   type InboxHistoryRow,
 } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
@@ -26,25 +27,38 @@ function channelLabel(channel: string | null): string {
   return channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-async function toCardProps(row: ApprovalInboxRow, isOwner: boolean): Promise<InboxCardProps> {
+async function toCardProps(
+  row: ApprovalInboxRow,
+  isOwner: boolean,
+  isManager: boolean
+): Promise<InboxCardProps> {
   const isComm = row.item_type === "communication";
   const detail = isComm ? await getCommunicationDetail(row.item_id) : null;
-  const scheduledNote = `Waiting since ${formatWhen(row.awaiting_since)}${
-    row.scheduled_for
-      ? ` · sends ${formatWhen(row.scheduled_for)} on approval`
-      : " · dispatches on approval — quiet hours hold it"
-  }`;
+  const scheduledNote =
+    row.item_type === "task_cancellation"
+      ? `Requested ${formatWhen(row.awaiting_since)} · the task stays open until you decide`
+      : `Waiting since ${formatWhen(row.awaiting_since)}${
+          row.scheduled_for
+            ? ` · sends ${formatWhen(row.scheduled_for)} on approval`
+            : " · dispatches on approval — quiet hours hold it"
+        }`;
 
   return {
     itemType: row.item_type,
     itemId: row.item_id,
+    isManager,
     // Session 21: the single truth for the Withdraw control's rendering —
     // only a pending definition (this view holds nothing else), only to the
     // owner. The 0034 pipeline refuses everyone else regardless.
     withdrawable:
       row.item_type === "workflow_definition" &&
       canWithdrawWorkflowDefinition({ status: "pending_approval", isOwner }),
-    channelLabel: row.item_type === "workflow_definition" ? "Workflow" : channelLabel(row.channel),
+    channelLabel:
+      row.item_type === "workflow_definition"
+        ? "Workflow"
+        : row.item_type === "task_cancellation"
+          ? "Task · cancellation request"
+          : channelLabel(row.channel),
     draftedBy: row.drafted_by,
     draftedByAgent: row.drafted_by_type === "agent",
     recipient: detail?.contactName ?? null,
@@ -236,13 +250,14 @@ export default async function InboxPage({
 
   // WS5a: the owed list reads a WINDOW — oldest wait first (submitted_at per
   // D134), default 20; card detail is fetched for the page only.
-  const [{ membershipRole }, inboxPage, history] = await Promise.all([
+  const [{ membershipRole }, inboxPage, history, isManager] = await Promise.all([
     getAppContext(),
     getInboxPage({ page: requestedPage, pageSize: requestedSize }),
     getInboxHistory(days, Number.isFinite(historyPage) ? historyPage : 1),
+    getIsManager(),
   ]);
   const cards = await Promise.all(
-    inboxPage.rows.map((row) => toCardProps(row, membershipRole === "owner"))
+    inboxPage.rows.map((row) => toCardProps(row, membershipRole === "owner", isManager))
   );
 
   const owedHref = (page: number, size?: number) =>
