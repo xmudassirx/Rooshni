@@ -1621,3 +1621,61 @@ close report awaiting sign-off and are not recorded here.
      closed/unresponsive enquiry → new enquiry created and linked to the
      predecessor, visible on both timelines.
      No auto-send anywhere; the marker is internal, the reply is stamped."
+
+## Post-close rulings (2 August 2026) — attachment honesty, enquiry
+## truth-timing, route classification — recorded on founder authority
+
+Entries 159–161 quote the founder's post-close message verbatim ("RULINGS
+from live testing (record now, build next session, alongside DECISION 158's
+returning-leads workstream)") — the §8 post-close pattern, the D133/D158
+deferred-ruling shape: recorded so the repo carries the fence; NOT built
+here. They join D158 as the next product session's opening workstreams.
+
+159. **DEFERRED RULING — ATTACHMENT HONESTY CHECK (pre-flight tightening,
+     deterministic, prophylactic — no live breach observed, the risk is
+     structural).** Quoted from the founder's ruling (2 August 2026): "a
+     draft body referencing an attachment ('attached', 'enclosed',
+     'attachment' pattern register) while the communication carries no
+     attachment FAILS pre-flight with the mismatch named. Generation
+     prompt additionally instructed: reference an attachment only when
+     one is attached. Attachment-present-but-unmentioned is fine."
+
+160. **DEFERRED RULING — ENQUIRY PAGE TRUTH-TIMING.** Quoted from the
+     founder's ruling (2 August 2026): "the enquiry detail rendered
+     'Route not yet classified' and a draft body WITHOUT surfacing that
+     the draft carried an attachment, minutes after the inbox card showed
+     both route-matched pack retrieval and the attached PDF. Diagnose: is
+     route classification asynchronous to ingest (and the page honest but
+     early), or was the page stale? Fix whichever is true: the enquiry
+     timeline's draft entry must show attachment state, and if
+     classification is async, the page says 'classifying' rather than
+     'not yet classified' while a run is in flight."
+
+161. **DEFERRED RULING — ROUTE CLASSIFICATION, COMPLETE SHAPE.** Context,
+     founder re-checked post-draft: enquiry 019fc32a still reads "Route
+     not yet classified" while the draft retrieved the Spouse pack and
+     attached the Spouse guide — retrieval matched by text relevance, not
+     the route field. Quoted from the founder's ruling (2 August 2026):
+     "Build the full ladder, with provenance recorded on the field
+     (source: human | form_answer | light | form_default) and precedence
+     human > form_answer > light > form_default:
+     (a) PER-FORM DEFAULT: Settings gains per-form-id default route
+     mapping; a form with no route question ingests its default. The
+     live Spouse Visa 23/04/2024 form defaults to spouse.
+     (b) LIGHT CLASSIFIES: when the route is unset or default-sourced
+     and Light's drafting context gives it a confident read (form name,
+     form answers, the person's own words), Light SETS the route —
+     evented with its stated reason on The Record, gold chip on the
+     enquiry ('route: Spouse · set by Light — "form and enquiry text
+     reference spouse visa"'). Light never overwrites a human- or
+     form-answer-sourced route. No extra model call: the classification
+     rides the existing drafting call's output.
+     (c) HUMAN RECLASSIFY: the enquiry detail's route field becomes
+     editable by any team member with enquiry access — dropdown of the
+     template's routes, change evented with optional reason ('caller
+     actually needs ILR'). A human-set route is final against machine
+     writes. Reclassification does NOT retro-edit past drafts; future
+     retrieval follows the new route.
+     (d) Verify from the ledger WHY the classifier never wrote the field
+     for 019fc32a while you are in there; if a distinct bug sits beneath
+     (never ran vs ran and abstained), name it."
