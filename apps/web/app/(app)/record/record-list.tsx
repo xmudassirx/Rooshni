@@ -57,7 +57,11 @@ function ActorTag({ event }: { event: RecordEvent }) {
 function Row({ event }: { event: RecordEvent }) {
   /* Session 26 (C1, founder-ordered): the row's click target expands the
    * entry in place; navigation is the labelled button INSIDE the expanded
-   * register — "Open enquiry" is never the row's own click target. */
+   * register — "Open enquiry" is never the row's own click target.
+   * JUDGMENT: no mockup drew an expanded row — the expansion shows the
+   * entry's register facts (recorded instant, entry id, concerned entity,
+   * cost, the payload verbatim in mono) in the ledger's own face; approved
+   * by the founder in the Session 26 go message, recorded at close. */
   const [open, setOpen] = useState(false);
   const target = recordRowTarget(event);
   const cost = costLabel(event.cost);

@@ -130,9 +130,9 @@ function navSections(
       label: "Think",
       items: [
         { href: "/notes", label: "Notes", icon: PenLine },
-        // JUDGMENT (Session 26, C1..C3 sweep): the mockup carries no Files
-        // screen — the founder-ordered read-only listing lands in Think
-        // (files are material the firm keeps, like Notes), Lane B.
+        // JUDGMENT: (Session 26, C3) the mockup carries no Files screen —
+        // the founder-ordered read-only listing lands in Think (files are
+        // material the firm keeps, like Notes), Lane B.
         { href: "/files", label: "Files", icon: FolderOpen },
         { href: "/memory", label: "Light's Memory", icon: BookMarked },
       ],
