@@ -436,6 +436,10 @@ async function processSettledThread(
     // breach retries exactly ONCE with the violation fed back — evented on
     // The Record, never a loop. A second breach throws past this block into
     // the visible-failure lane below; nothing retries the retry.
+    // JUDGMENT: the post-insert compliance-retry path below keeps its
+    // best-effort behaviour — a register breach THERE leaves attempt 1's
+    // recorded breach standing visibly, already the founder-ruled lane; only
+    // the initial composition gets the automatic register retry.
     const generator = deps.generator;
     const budget = budgetBefore;
     const outcome = await composeWithRegisterRetry(

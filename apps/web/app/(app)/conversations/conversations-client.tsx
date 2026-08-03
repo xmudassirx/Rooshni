@@ -752,9 +752,11 @@ export function ConversationsClient({
     ...messages.map((m) => ({ kind: "msg" as const, at: m.occurredAt, m })),
     ...refusals.map((r) => ({ kind: "refusal" as const, at: r.occurredAt, r })),
   ].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
-  // The refusal that CLOSES the flow stands unanswered — only it carries the
-  // manual door (decision 116: no control where it cannot usefully act; a
-  // refusal followed by later activity is history, not a standing state).
+  // JUDGMENT: the refusal that CLOSES the flow stands unanswered — only it
+  // carries the manual door (decision 116: no control where it cannot
+  // usefully act; a refusal followed by later activity is history, not a
+  // standing state), and a transient refusal states that Light retries
+  // automatically instead of offering the door.
   const lastFlow = flow[flow.length - 1] ?? null;
   const standingRefusalId = lastFlow?.kind === "refusal" ? lastFlow.r.id : null;
 
