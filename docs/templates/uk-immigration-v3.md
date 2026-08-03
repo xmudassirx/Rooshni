@@ -100,7 +100,9 @@ a channel-less form yields Blocked drafts (Session 10 operating note).
 24h reminder + resume (shipped) · day-3 product story (the 2-hours-a-day
 problem, the stamp loop) · day-7 founder's note with walkthrough offer ·
 then silence. Honest copy only: capability claims, no invented social
-proof, until real pilot numbers exist. Unsubscribe on all.
+proof, until real live numbers exist (phase language per decision 168 — the
+paid-pilot phase is withdrawn; the numbers come from the founder's own
+projects and the friends phase). Unsubscribe on all.
 
 ## Versioning
 

@@ -101,3 +101,17 @@ Start by confirming you've read DECISIONS.md (through 125), SESSIONS.md,
 LIGHT-OPERATING-DOCTRINE.md, uk-immigration-v3.md and the latest session
 handover docs in the repo, give me a three-line state-of-play, then ask
 whether the drafting session has fired yet.
+
+ADDENDUM — Session 26 (3 August 2026), decision 168. This handover is a
+dated snapshot and its body is left as written. Go-to-market has since been
+re-sequenced (DECISIONS.md 168): the paid-pilot-firms phase is withdrawn;
+the order is now (1) the founder's own projects run live on the platform,
+(2) friends' firms onboard at a minimal price, (3) general availability.
+Build-out continues before external opening, and the previously pilot-gated
+workstreams (MCP server over Barakah, website auditing + publish gate,
+Studio media generation, payment gate) move onto the pre-world build path.
+References above to "external pilots" read as the friends phase; each phase
+gate opens on explicit GO-LIVE-style criteria recorded in advance, and
+friends-phase entry criteria and pricing are ruled before that phase
+begins. Autonomous outreach remains refused permanently; the approval gate
+and D113 are untouched.

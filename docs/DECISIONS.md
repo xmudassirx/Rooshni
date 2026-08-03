@@ -1690,3 +1690,24 @@ here. They join D158 as the next product session's opening workstreams.
 166. Only a standing (flow-closing) refusal offers the manual re-draft door. A transient refusal states that Light retries automatically — no door, no duplicate-draft invitation.
 
 167. Automatic register retry-once applies to initial composition only. A register breach during post-insert compliance retry leaves attempt 1's recorded breach standing visible, per the existing lane.
+
+## Session 26 (3 August 2026) — strategy amendment, recorded on in-prompt authority
+
+Entry 168 is quoted verbatim from the Session 26 prompt (3 August 2026 — the
+§8 quoted-approval pattern, the entry-113 in-prompt-authority precedent:
+"this ruling is quoted verbatim and founder-approved; you may and must write
+it").
+
+168. Go-to-market re-sequenced; the paid-pilot-firms phase is
+     withdrawn. The order is now: (1) the founder's own projects run
+     live on the platform; (2) friends' firms onboard at a minimal
+     price; (3) general availability. Build-out continues before
+     external opening, and the previously pilot-gated workstreams
+     (MCP server over Barakah, website auditing + publish gate,
+     Studio media generation, payment gate) move onto the pre-world
+     build path. Each gate between phases opens on explicit
+     GO-LIVE-style criteria recorded in advance — never on feel. The
+     friends-phase entry criteria and pricing are ruled before that
+     phase begins, not during it. Autonomous outreach remains refused
+     permanently; the approval gate and D113 are untouched by this
+     re-sequencing.

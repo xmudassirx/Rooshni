@@ -58,7 +58,8 @@ Add to this list during build; check items off only at go-live.
       `feedback` tool — do not go live with the ownership shortcut.
 - [ ] **Stripe LIVE keys** (introduced Session 9): `STRIPE_SECRET_KEY`,
       `STRIPE_WEBHOOK_SECRET` and `STRIPE_PRICE_ID` run in TEST MODE until
-      the first real pilot pays. Swap to live keys in Vercel, register the
+      the first external firm pays (the friends phase, decision 168 — the
+      paid-pilot-firms phase is withdrawn). Swap to live keys in Vercel, register the
       production webhook endpoint (`POST /api/stripe/webhook`) in the Stripe
       dashboard, and confirm the pinned API version (`STRIPE_API_VERSION`,
       packages/db/src/stripe.ts) against the dashboard default at switch
@@ -102,11 +103,13 @@ Add to this list during build; check items off only at go-live.
       `019fb7d1-f883-7c80-9f44-7b0004f33c33`, via the new
       `allowlist:archive` chore script). Remaining before this line ticks:
       the tenant + auth user go with the Pilot-Test purge at go-live.*
-- [ ] **Microsoft sign-in before the first external pilot** (recorded
-      17 July 2026, founder-ruled fast-follow, outside Session 9's scope):
-      signup states the Google constraint on the email field; the Supabase
-      Azure provider (our app registration exists) lifts it. Until then a
-      pilot's signup email must be Google-signable.
+- [ ] **Microsoft sign-in before the first external firm** (recorded
+      17 July 2026, founder-ruled fast-follow, outside Session 9's scope;
+      phase language amended per decision 168 — the gate is now the friends
+      phase, not a pilot programme): signup states the Google constraint on
+      the email field; the Supabase Azure provider (our app registration
+      exists) lifts it. Until then an onboarding firm's signup email must be
+      Google-signable.
 - [ ] **Send-pipeline secrets** (introduced Session 10): `AZURE_CLIENT_SECRET`
       + `GRAPH_SENDER_ADDRESS` (Graph app-only mail — sends as the firm's
       mailbox; the Azure client secret expires per its app-registration
@@ -125,7 +128,8 @@ Add to this list during build; check items off only at go-live.
       `npm run wire-meta --workspace=@rooshni/db -- <page_id>`.
 - [ ] **Meta App Review before non-tester lead traffic** (introduced
       Session 10): a dev-mode app with the firm's own system-user token
-      reads its own page's leads, which covers the pilot; App Review
+      reads its own page's leads, which covers the founder's-own-projects
+      phase (decision 168); App Review
       (leads_retrieval, pages_manage_metadata) is required before the app
       serves any page outside the firm's Business Manager. The working demo
       this session produces is the review submission's evidence.
@@ -216,7 +220,7 @@ Add to this list during build; check items off only at go-live.
       Until granted, every poll records a visible ErrorAccessDenied in the
       tick report (fail closed, never silent). Consider Application Access
       Policy scoping (New-ApplicationAccessPolicy) to confine the app to the
-      one mailbox — recommended, not required for the pilot.
+      one mailbox — recommended, not required before external firms onboard.
 - [ ] **Register the WhatsApp inbound webhook + wire the bindings**
       (introduced Session 16, PR-A): Meta app dashboard → WhatsApp →
       Configuration → Webhook → Callback URL
@@ -278,7 +282,7 @@ Add to this list during build; check items off only at go-live.
       attachments.
 - [ ] **Enable the Supabase Azure provider — the Microsoft door's one
       remaining tick** (introduced Session 20, WS1; this closes the standing
-      "Microsoft sign-in before the first external pilot" item above). The
+      "Microsoft sign-in before the first external firm" item above). The
       app side ships fail-closed: the button fires
       `provider=azure&scopes=email` and Supabase answers 400
       "provider is not enabled" until these steps run.
@@ -289,8 +293,9 @@ Add to this list during build; check items off only at go-live.
          "supabase-signin" keeps rotation independent of Graph mail —
          recommended). Azure Tenant URL: `https://login.microsoftonline.com/organizations`
          covers work accounts of ANY tenant; `/common` also admits personal
-         Microsoft accounts. Recommendation: `organizations` now (pilots are
-         firms), widen to `common` only if a pilot needs a personal account.
+         Microsoft accounts. Recommendation: `organizations` now (the
+         onboarding tenants are firms — decision 168's friends phase), widen
+         to `common` only if an onboarding firm needs a personal account.
          Note the Callback URL the dashboard shows
          (`https://<project-ref>.supabase.co/auth/v1/callback`).
       2. Azure portal → Microsoft Entra ID → App registrations → the
@@ -298,7 +303,7 @@ Add to this list during build; check items off only at go-live.
          Redirect URI = that exact callback URL → Configure. (The app-only
          Graph mail flow is unaffected by adding a platform.)
       3. Same app → Overview → "Supported account types": for external
-         pilots' own Microsoft tenants this must be "Accounts in any
+         firms' own Microsoft tenants this must be "Accounts in any
          organizational directory" (add "and personal Microsoft accounts"
          only with `/common` above). Changing audience is Manifest →
          `signInAudience` or the Authentication blade — founder's tick;
@@ -393,15 +398,17 @@ Add to this list during build; check items off only at go-live.
       business's workflow actor, evented with the stated reason — nothing
       deleted, the run rows remain history. Legitimate live runs (the ones
       holding their event's claim) are untouched.
-- [ ] **Re-cut the provisional pricing constants before the first real
-      pilot bill conversation** (introduced Session 22, WS2): per-model list
+- [ ] **Re-cut the provisional pricing constants before the first
+      friends-phase bill conversation** (introduced Session 22, WS2; phase
+      language amended per decision 168): per-model list
       rates and the USD→GBP rate live in
       `packages/db/src/model-router.ts` (MODEL_PRICING_USD_PER_MTOK,
       USD_TO_GBP_RATE — the AUTO_CLOSE_POLICY provisional-constants
       precedent, every priced line records the fx it used). Verify both
       against the provider's current pricing page and the day's rate; the
-      figures shown are METERED COST, no margin — pilot pricing is a
-      separate founder decision.
+      figures shown are METERED COST, no margin — friends-phase pricing is a
+      separate founder decision, ruled before that phase begins (decision
+      168).
 - [ ] **Merge + deploy `hotfix-graph-processor`, then watch one tick heal
       the backlog** (introduced Hotfix 2 Aug 2026 — Graph inbound was
       silently dead since 1 Aug ~18:00 UTC): after deploy, the poll's

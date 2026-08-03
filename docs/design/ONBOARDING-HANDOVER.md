@@ -139,3 +139,22 @@ Deferred to Session B (First Light), founder-ruled at close:
 - Nurture sequence days 3/7.
 - The dashboard checklist block.
 - The accreditation row as template content.
+
+## Amendment — Session 26 (3 August 2026), decision 168
+
+<!-- JUDGMENT: this doc is a SIGNED handover — its rulings became DECISIONS
+     79–84 and its prose is left byte-intact; the re-sequencing lands as this
+     dated builder addendum (the decision-100 addendum precedent), plan
+     language only. -->
+
+Go-to-market re-sequenced by decision 168; the paid-pilot-firms phase is
+withdrawn. Where this document says "pilot(s)" as a go-to-market phase
+("Phase 2 scope (pilot acquisition)", "for pilots the founder is the
+incentive", "invisible to the pilot"), read the new sequence: (1) the
+founder's own projects run live on the platform; (2) friends' firms onboard
+at a minimal price; (3) general availability — with friends-phase entry
+criteria and pricing ruled before that phase begins. The signed onboarding
+mechanics above (two-step signup, payment before the shell, crawl after
+payment, First Light) are unchanged: external firms still pay — there is no
+free tier (decision 79 stands; the friends phase prices minimally, never
+free). Rulings 79–84 themselves are untouched.
