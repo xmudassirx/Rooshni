@@ -208,6 +208,72 @@ export async function sendNowAction(_prev: SendNowState, formData: FormData): Pr
   return { error: null, sent: true };
 }
 
+export interface RetrySendState {
+  error: string | null;
+  retried?: boolean;
+}
+
+/**
+ * Defect-pair hotfix (2 Aug 2026, item 2) — RETRY on a failed dispatch. The
+ * 0040 door enforces everything structural (human stamp-holder; only a
+ * FAILED row; same body, same stamp — the pre-flight and human-stamp
+ * triggers re-run inside the transition), the ledger records the human
+ * decision with the failure it answers, and the inline dispatch re-attempts
+ * carriage immediately. One act, every face: the thread bubble, the inbox
+ * History arm and the enquiry timeline all import this same action.
+ *
+ * JUDGMENT: (Lane B) the 0040 door resets scheduled_for to null — the retry
+ * asks for carriage NOW, and the dispatcher's own policy (quiet hours, with
+ * its recorded SEND NOW override) re-applies at dispatch time rather than
+ * any stale hold surviving the failure it predates.
+ */
+export async function retryFailedSendAction(
+  _prev: RetrySendState,
+  formData: FormData
+): Promise<RetrySendState> {
+  const communicationId = String(formData.get("communicationId") ?? "");
+  if (!isUuid(communicationId)) return { error: "No communication was selected." };
+
+  const { db, business, actor } = await getAppContext();
+  const { data: comm } = await db
+    .from("communications")
+    .select("id, channel, send_failure:attributes->send_failure")
+    .eq("id", communicationId)
+    .eq("business_id", business.id)
+    .maybeSingle();
+  if (!comm) return { error: "That message no longer exists." };
+
+  const { error: rpcError } = await db.rpc("retry_failed_communication", {
+    p_comm: communicationId,
+    p_actor: actor.id,
+  });
+  if (rpcError) return { error: rpcError.message };
+
+  const failure = (comm.send_failure ?? null) as {
+    provider?: string;
+    reason?: string;
+    failed_at?: string;
+  } | null;
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: SEND_EVENT_KINDS.communicationSendRetried,
+    entity_type: "communication",
+    entity_id: communicationId,
+    payload: {
+      channel: comm.channel,
+      ...(failure?.provider ? { provider: failure.provider } : {}),
+      ...(failure?.reason ? { failure_reason: failure.reason } : {}),
+      ...(failure?.failed_at ? { failed_at: failure.failed_at } : {}),
+      note: "Retry — same body, same stamp; transport re-attempts. Re-drafting is never required to recover from a transport failure.",
+    },
+  });
+
+  await dispatchAfterApproval(communicationId);
+  revalidatePath("/", "layout");
+  return { error: null, retried: true };
+}
+
 /**
  * The refusal. The database refuses a rejection without a reason; the UI
  * demands one first so the refusal reads as guidance, not an error.

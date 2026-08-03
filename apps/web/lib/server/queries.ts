@@ -803,8 +803,12 @@ export interface InboxHistoryRow {
   /** Session 16: superseded joins the decided states — terminal, evented,
    * never deletable (decision 133a); rendered in neutral chrome.
    * Session 21: withdrawn joins them — the owner's terminal exit for a
-   * pending workflow definition (0034); neutral chrome likewise. */
-  action: "approved" | "rejected" | "superseded" | "withdrawn";
+   * pending workflow definition (0034); neutral chrome likewise.
+   * JUDGMENT: (defect-pair hotfix, Lane B) send_failed joins them RED — the
+   * ruling names "inbox history" as a failed-render surface, and History is
+   * events-based, so the event kind joins the action set as a decided fact
+   * rather than a parallel query being invented. */
+  action: "approved" | "rejected" | "superseded" | "withdrawn" | "send_failed";
   occurredAt: string;
   actorName: string | null;
   reason: string | null;
@@ -814,12 +818,17 @@ export interface InboxHistoryRow {
   contactName: string | null;
   threadId: string | null;
   engagementId: string | null;
+  /** Defect-pair hotfix: the communication's CURRENT status — a send_failed
+   * row offers Retry only while the message is still failed (decision 116:
+   * no control that cannot act). */
+  commStatus: string | null;
 }
 
 const HISTORY_ACTIONS = [
   "communication.approved",
   "communication.rejected",
   "communication.superseded",
+  "communication.send_failed",
   "workflow.definition_withdrawn",
 ];
 
@@ -876,7 +885,7 @@ export async function getInboxHistory(days: 7 | 30, page = 1): Promise<InboxHist
     ? await db
         .from("communications")
         .select(
-          "id, channel, body, body_format, plain_body:attributes->>plain_body, thread_id, engagement_id, contact_id, comm_threads(contact_id), contacts(display_name)"
+          "id, channel, status, body, body_format, plain_body:attributes->>plain_body, thread_id, engagement_id, contact_id, comm_threads(contact_id), contacts(display_name)"
         )
         .in("id", commIds)
     : { data: [], error: null };
@@ -910,6 +919,7 @@ export async function getInboxHistory(days: 7 | 30, page = 1): Promise<InboxHist
           contactName: null,
           threadId: null,
           engagementId: null,
+          commStatus: null,
         },
       ];
     }
@@ -917,6 +927,7 @@ export async function getInboxHistory(days: 7 | 30, page = 1): Promise<InboxHist
       | {
           id: string;
           channel: string;
+          status: string;
           body: string;
           body_format: string;
           plain_body: string | null;
@@ -939,7 +950,9 @@ export async function getInboxHistory(days: 7 | 30, page = 1): Promise<InboxHist
             ? ("approved" as const)
             : e.action === "communication.superseded"
               ? ("superseded" as const)
-              : ("rejected" as const),
+              : e.action === "communication.send_failed"
+                ? ("send_failed" as const)
+                : ("rejected" as const),
         occurredAt: e.occurred_at,
         actorName: Array.isArray(actorRel)
           ? (actorRel[0]?.display_name ?? null)
@@ -956,6 +969,7 @@ export async function getInboxHistory(days: 7 | 30, page = 1): Promise<InboxHist
           : (contactRel?.display_name ?? null),
         threadId: comm?.thread_id ?? null,
         engagementId: comm?.engagement_id ?? null,
+        commStatus: comm?.status ?? null,
       },
     ];
   });
@@ -1270,6 +1284,27 @@ export async function getRecordEvents(
 
 // --- Conversations -----------------------------------------------------------
 
+/** Defect-pair hotfix (2 Aug 2026): the recorded dispatch failure — read
+ * from attributes.send_failure, the truth mark_communication_send_failed
+ * writes (0021). Rendered RED with the reason at every surface the message
+ * appears; never invented, never summarised. */
+export interface SendFailure {
+  provider: string | null;
+  reason: string;
+  failedAt: string | null;
+}
+
+export function parseSendFailure(raw: unknown): SendFailure | null {
+  if (!raw || typeof raw !== "object") return null;
+  const f = raw as { provider?: unknown; reason?: unknown; failed_at?: unknown };
+  if (typeof f.reason !== "string" || !f.reason) return null;
+  return {
+    provider: typeof f.provider === "string" ? f.provider : null,
+    reason: f.reason,
+    failedAt: typeof f.failed_at === "string" ? f.failed_at : null,
+  };
+}
+
 export interface ThreadMessage {
   id: string;
   channel: string;
@@ -1288,6 +1323,9 @@ export interface ThreadMessage {
    * the row stores one (body_format html) — the "as sent" view. `body` is
    * always the plain words. */
   sentHtml: string | null;
+  /** Defect-pair hotfix (2 Aug 2026): the recorded failure when status is
+   * 'failed' — red at every surface, reason inline. */
+  sendFailure: SendFailure | null;
 }
 
 export interface ThreadConsent {
@@ -1390,10 +1428,11 @@ interface CommWindowRow {
   duration_seconds: number | null;
   drafted_by_actor_id: string | null;
   approved_by_actor_id: string | null;
+  send_failure: unknown;
 }
 
 const COMM_WINDOW_COLUMNS =
-  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id";
+  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id";
 
 function mapCommRow(
   c: CommWindowRow,
@@ -1419,6 +1458,7 @@ function mapCommRow(
     stampedByName: approvedBy?.name ?? null,
     isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
     sentHtml: isHtml ? c.body : null,
+    sendFailure: parseSendFailure(c.send_failure),
   };
 }
 
@@ -2856,6 +2896,9 @@ export interface EnquiryComm {
   approvedByName: string | null;
   approvedAt: string | null;
   rejection: { reason: string; at: string; byName: string } | null;
+  /** Defect-pair hotfix (2 Aug 2026): the recorded failure when status is
+   * 'failed' — red on the timeline, reason inline, Retry for stamp-holders. */
+  sendFailure: SendFailure | null;
 }
 
 export interface EnquiryTask {
@@ -2930,7 +2973,7 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
     db
       .from("communications")
       .select(
-        "id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, occurred_at, scheduled_for, drafted_by_actor_id, approved_by_actor_id, created_by, comm_threads(subject)"
+        "id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, occurred_at, scheduled_for, drafted_by_actor_id, approved_by_actor_id, created_by, comm_threads(subject)"
       )
       .eq("engagement_id", id)
       .is("archived_at", null)
@@ -3101,6 +3144,7 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
         approvedByName: approvedBy?.name ?? approval?.byName ?? null,
         approvedAt: approval?.at ?? null,
         rejection: rejections.get(c.id) ?? null,
+        sendFailure: parseSendFailure((c as { send_failure?: unknown }).send_failure),
       };
     }),
     events: (engagementEvents.data ?? []).map((row) => {
