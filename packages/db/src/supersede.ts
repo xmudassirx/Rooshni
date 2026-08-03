@@ -4,6 +4,7 @@ import { emitEvent } from "./events";
 import { DRAFTING_EVENT_KINDS, INBOUND_EVENT_KINDS } from "./event-kinds";
 import {
   composeReplyDraft,
+  composeWithRegisterRetry,
   isTransientProviderError,
   retrieveKnowledgeEntries,
   type ComposeDraftResult,
@@ -423,6 +424,7 @@ async function processSettledThread(
   };
 
   let composed: ComposeDraftResult;
+  let registerRetried = false;
   let budgetBefore: Awaited<ReturnType<typeof assessAiBudget>> | null = null;
   try {
     // Session 22 (WS2, ruling 2b): the hard cap refuses reply GENERATION
@@ -430,7 +432,30 @@ async function processSettledThread(
     // visible-failure lane below. Nothing else on the thread is touched.
     budgetBefore = await assessAiBudget(db, thread.business_id, deps.now);
     guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
-    composed = await composeReplyDraft(deps.generator, composeInput);
+    // Session 25 (register retry-once, founder-ordered): a register-screen
+    // breach retries exactly ONCE with the violation fed back — evented on
+    // The Record, never a loop. A second breach throws past this block into
+    // the visible-failure lane below; nothing retries the retry.
+    const generator = deps.generator;
+    const budget = budgetBefore;
+    const outcome = await composeWithRegisterRetry(
+      (inp, opts) => composeReplyDraft(generator, inp, opts),
+      composeInput,
+      async (breach) => {
+        await emitEvent(db, {
+          business_id: thread.business_id,
+          actor_id: drafter,
+          action: DRAFTING_EVENT_KINDS.draftRegisterRetried,
+          entity_type: "comm_thread",
+          entity_id: thread.id,
+          payload: { violation: breach.breach, reason: breach.message },
+        });
+        // WS2: the retry is generation too — the hard cap binds it.
+        guardGenerationBudget(budget.spend_gbp, budget);
+      }
+    );
+    composed = outcome.composed;
+    registerRetried = outcome.registerRetried;
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const transient = isTransientProviderError(err);
@@ -482,7 +507,9 @@ async function processSettledThread(
         attributes: {
           reply_to_thread: thread.id,
           ...(subject ? { subject } : {}),
-          credit_line: { ...composed.credit_line, attempts: 1 },
+          // Session 25: attempts counts every model call honestly — the
+          // register retry-once is attempt 2 when it fired.
+          credit_line: { ...composed.credit_line, attempts: registerRetried ? 2 : 1 },
           ...(oldDraft
             ? {
                 supersedes: {
@@ -513,7 +540,7 @@ async function processSettledThread(
       });
       const mergedCredit = {
         ...retry.credit_line,
-        attempts: 2,
+        attempts: registerRetried ? 3 : 2,
         retry_reason: check.rule_matched ?? "no-go breach",
       };
       const { error: updError } = await db

@@ -99,6 +99,10 @@ export const DRAFTING_EVENT_KINDS = {
   draftGenerated: "light.draft_generated",
   /** Generation failed VISIBLY — provider error or over-budget assembly; the reason is the payload. Never a silent stub fallback. */
   draftGenerationFailed: "light.draft_generation_failed",
+  /** Session 25: a register-screen breach (em/en dash) triggered the automatic
+   * retry-once — the violation fed back into the regeneration prompt. One
+   * retry, never a loop; a second failure lands draftGenerationFailed. */
+  draftRegisterRetried: "light.draft_register_retried",
   /** A compliance check was recorded against the no-go register (0026). */
   complianceChecked: "communication.compliance_checked",
   /** A stamped-authority holder edited a draft before stamping — before/after in the payload; pre-flight re-runs. */
