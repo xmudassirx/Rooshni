@@ -804,8 +804,10 @@ export interface InboxHistoryRow {
    * never deletable (decision 133a); rendered in neutral chrome.
    * Session 21: withdrawn joins them — the owner's terminal exit for a
    * pending workflow definition (0034); neutral chrome likewise.
-   * Defect-pair hotfix (2 Aug 2026): send_failed joins them RED — a
-   * provider refusal is a decided fact the queue's history must show. */
+   * JUDGMENT: (defect-pair hotfix, Lane B) send_failed joins them RED — the
+   * ruling names "inbox history" as a failed-render surface, and History is
+   * events-based, so the event kind joins the action set as a decided fact
+   * rather than a parallel query being invented. */
   action: "approved" | "rejected" | "superseded" | "withdrawn" | "send_failed";
   occurredAt: string;
   actorName: string | null;

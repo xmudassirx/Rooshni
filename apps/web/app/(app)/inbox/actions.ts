@@ -221,6 +221,11 @@ export interface RetrySendState {
  * decision with the failure it answers, and the inline dispatch re-attempts
  * carriage immediately. One act, every face: the thread bubble, the inbox
  * History arm and the enquiry timeline all import this same action.
+ *
+ * JUDGMENT: (Lane B) the 0040 door resets scheduled_for to null — the retry
+ * asks for carriage NOW, and the dispatcher's own policy (quiet hours, with
+ * its recorded SEND NOW override) re-applies at dispatch time rather than
+ * any stale hold surviving the failure it predates.
  */
 export async function retryFailedSendAction(
   _prev: RetrySendState,
