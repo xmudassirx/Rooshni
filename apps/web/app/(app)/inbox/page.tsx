@@ -99,7 +99,7 @@ async function toCardProps(
     emailHtmlPreview: detail?.emailHtmlPreview ?? null,
     // PR-i (Session 19): the declared attachment(s), named on the card.
     attachmentNotes: (detail?.attachments ?? []).map(
-      (a) => `⎘ ${a.filename} · ${(a.sizeBytes / 1024 / 1024).toFixed(1)}MB`
+      (a) => `${a.filename} · ${(a.sizeBytes / 1024 / 1024).toFixed(1)}MB`
     ),
   };
 }

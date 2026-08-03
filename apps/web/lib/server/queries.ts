@@ -4025,3 +4025,99 @@ export async function getIntegrationStates(): Promise<IntegrationState[]> {
     },
   ];
 }
+
+/* ------------------------------------------------------------------------- *
+ * The Files surface — Session 26 (C3, founder-ordered): one read-only
+ * listing of the business's stored files (booklets, guide documents,
+ * attachments). No upload, no delete — the doors that write files stay
+ * where they are (Settings → Knowledge, the drafting engine); this surface
+ * only shows what the files table holds. Windowed per the 5e read law.
+ * ------------------------------------------------------------------------- */
+
+export interface BusinessFileRow {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedAt: string;
+  uploadedByName: string;
+  uploadedByType: ActorType;
+  /** What the file rides — plain labels derived from file_links, deduped. */
+  linkedTo: string[];
+}
+
+export interface BusinessFilesPage {
+  rows: BusinessFileRow[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
+
+/** Plain-English labels for the entities a file can ride. */
+const FILE_LINK_LABELS: Record<string, string> = {
+  content_item: "knowledge entry",
+  communication: "message",
+  task: "task",
+  note: "note",
+};
+
+export async function getBusinessFiles(page = 1): Promise<BusinessFilesPage> {
+  const { db, business } = await getAppContext();
+  const range = pageRange(page, DEFAULT_LIST_WINDOW);
+
+  const [files, totalResult] = await Promise.all([
+    db
+      .from("files")
+      .select("id, filename, mime_type, size_bytes, created_at, actors!files_uploaded_by_fkey(display_name, actor_type)")
+      .eq("business_id", business.id)
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .range(range.from, range.to),
+    db
+      .from("files")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business.id)
+      .is("archived_at", null),
+  ]);
+  if (files.error) throw new Error(`files query failed: ${files.error.message}`);
+  if (totalResult.error) throw new Error(`files count failed: ${totalResult.error.message}`);
+  const total = totalResult.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / DEFAULT_LIST_WINDOW));
+  const pageIds = (files.data ?? []).map((f) => f.id as string);
+
+  // Links for the PAGE's files only — bounded by construction.
+  const links = pageIds.length
+    ? await db
+        .from("file_links")
+        .select("file_id, entity_type")
+        .eq("business_id", business.id)
+        .in("file_id", pageIds)
+    : { data: [], error: null };
+  if (links.error) throw new Error(`file links query failed: ${links.error.message}`);
+  const linkLabels = new Map<string, Set<string>>();
+  for (const link of links.data ?? []) {
+    const fileId = link.file_id as string;
+    const label = FILE_LINK_LABELS[link.entity_type as string] ?? (link.entity_type as string);
+    if (!linkLabels.has(fileId)) linkLabels.set(fileId, new Set());
+    linkLabels.get(fileId)!.add(label);
+  }
+
+  return {
+    rows: (files.data ?? []).map((f) => {
+      const actor = f.actors as unknown as { display_name: string; actor_type: ActorType } | null;
+      return {
+        id: f.id as string,
+        filename: f.filename as string,
+        mimeType: f.mime_type as string,
+        sizeBytes: Number(f.size_bytes ?? 0),
+        uploadedAt: f.created_at as string,
+        uploadedByName: actor?.display_name ?? "unknown",
+        uploadedByType: actor?.actor_type ?? "human",
+        linkedTo: [...(linkLabels.get(f.id as string) ?? [])].sort(),
+      };
+    }),
+    total,
+    page: clampPage(page),
+    pageCount,
+  };
+}

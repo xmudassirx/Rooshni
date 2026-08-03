@@ -3,9 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
+import { ChevronDown } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { dayKey, formatDayHeading, formatTime } from "@/lib/format";
 import { costLabel, describeEvent } from "@/lib/record-language";
+import { recordRowTarget } from "@/lib/record-row";
 import type {
   RecordCursor,
   RecordEntityType,
@@ -40,15 +44,6 @@ function matchesFilter(event: RecordEvent, filter: ActorFilter): boolean {
   return event.actorType === "integration" || event.actorType === "workflow";
 }
 
-/** Where this entry leads when clicked — the ledger links back into the faces. */
-function eventHref(event: RecordEvent): string | null {
-  if (event.entityType === "engagement" && event.entityId) return `/enquiries/${event.entityId}`;
-  if (event.entityType === "contact" && event.entityId) return `/contacts/${event.entityId}`;
-  const engagementId = event.payload.engagement_id;
-  if (typeof engagementId === "string") return `/enquiries/${engagementId}`;
-  return null;
-}
-
 function ActorTag({ event }: { event: RecordEvent }) {
   if (event.actorType === "human") {
     return <Badge variant="red">{event.actorName}</Badge>;
@@ -60,8 +55,13 @@ function ActorTag({ event }: { event: RecordEvent }) {
 }
 
 function Row({ event }: { event: RecordEvent }) {
-  const href = eventHref(event);
+  /* Session 26 (C1, founder-ordered): the row's click target expands the
+   * entry in place; navigation is the labelled button INSIDE the expanded
+   * register — "Open enquiry" is never the row's own click target. */
+  const [open, setOpen] = useState(false);
+  const target = recordRowTarget(event);
   const cost = costLabel(event.cost);
+  const payloadKeys = Object.keys(event.payload);
   const inner = (
     <>
       {/* Desktop: the three-column register (unchanged). */}
@@ -93,15 +93,63 @@ function Row({ event }: { event: RecordEvent }) {
     </>
   );
   const rowClass =
-    "grid grid-cols-[86px_1fr_auto] items-baseline gap-2.5 border-b border-rule px-3.5 py-2.5 last:border-b-0 max-[640px]:flex max-[640px]:flex-col max-[640px]:gap-1";
-  if (href) {
-    return (
-      <Link href={href} className={cn(rowClass, "transition-colors hover:bg-paper-deep")}>
+    "grid w-full grid-cols-[86px_1fr_auto_14px] items-baseline gap-2.5 px-3.5 py-2.5 text-left max-[640px]:flex max-[640px]:flex-col max-[640px]:gap-1";
+  return (
+    <div className="border-b border-rule last:border-b-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className={cn(rowClass, "cursor-pointer transition-colors hover:bg-paper-deep")}
+      >
         {inner}
-      </Link>
-    );
-  }
-  return <div className={rowClass}>{inner}</div>;
+        <ChevronDown
+          aria-hidden
+          className={cn(
+            "size-3.5 self-center justify-self-end text-ink-faint transition-transform max-[640px]:hidden",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+      {open ? (
+        <div className="border-t border-dashed border-rule bg-paper-deep/60 px-3.5 py-3">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-mono text-[10.5px] text-ink-soft">
+            <dt className="tracking-wide text-ink-faint uppercase">Recorded</dt>
+            <dd className="min-w-0 break-all">{event.occurredAt}</dd>
+            <dt className="tracking-wide text-ink-faint uppercase">Entry</dt>
+            <dd className="min-w-0 break-all">{event.id}</dd>
+            {event.entityType ? (
+              <>
+                <dt className="tracking-wide text-ink-faint uppercase">Concerns</dt>
+                <dd className="min-w-0 break-all">
+                  {event.entityType}
+                  {event.entityId ? ` · ${event.entityId}` : ""}
+                </dd>
+              </>
+            ) : null}
+            {cost ? (
+              <>
+                <dt className="tracking-wide text-ink-faint uppercase">Cost</dt>
+                <dd className="light-text">{cost}</dd>
+              </>
+            ) : null}
+          </dl>
+          {payloadKeys.length > 0 ? (
+            <pre className="mt-2.5 max-h-56 overflow-auto rounded-lg border border-rule bg-paper px-3 py-2.5 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-ink-soft">
+              {JSON.stringify(event.payload, null, 2)}
+            </pre>
+          ) : null}
+          {target ? (
+            <div className="mt-3">
+              <Button asChild size="sm">
+                <Link href={target.href}>{target.label}</Link>
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function RecordList({

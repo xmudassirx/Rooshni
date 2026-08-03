@@ -15,6 +15,7 @@ import {
   QUIET_HOURS_DEFAULT,
 } from "../src/quiet-hours";
 import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
+import { recordRowTarget } from "../../../apps/web/lib/record-row";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
@@ -5066,6 +5067,112 @@ async function main() {
       if (!source.includes("composeWithRegisterRetry")) {
         throw new Error(`${file} no longer routes composition through the register retry-once`);
       }
+    }
+  });
+
+  // --- Session 26: docs true-up + small-fixes sweep ------------------------
+  console.log("\nSession 26 — Record row expansion, the Files surface:");
+
+  await expectOk("the Files listing shows only the business's own rows (RLS-shaped)", async () => {
+    // Seed one file per tenant service-side (the doors that write files are
+    // not under test here — the wall is).
+    await db.query(
+      `insert into public.files (business_id, storage_key, filename, mime_type, size_bytes, sha256, uploaded_by)
+       values ($1, 's26/own-booklet.pdf', 'Spouse-Visa-Booklet.pdf', 'application/pdf', 1048576, repeat('a', 64), $2)`,
+      [f.business_id, f.human_id]
+    );
+    await db.query(
+      `insert into public.files (business_id, storage_key, filename, mime_type, size_bytes, sha256, uploaded_by)
+       values ($1, 's26/other-tenant.pdf', 'Jurists-Private.pdf', 'application/pdf', 2048, repeat('b', 64), $2)`,
+      [activation!.business_id, activation!.owner_actor_id]
+    );
+    const visibleTo = async (sub: string, email: string) => {
+      await db.exec(`set role authenticated`);
+      await db.exec(`set request.jwt.claim.sub = '${sub}'`);
+      await db.exec(`set request.jwt.claims = '{"sub":"${sub}","email":"${email}"}'`);
+      const r = await db.query<{ filename: string }>(
+        `select filename from public.files where archived_at is null`
+      );
+      await db.exec(`reset role`);
+      return r.rows.map((row) => row.filename);
+    };
+    const own = await visibleTo(ids.user, "owner@example.test");
+    if (!own.includes("Spouse-Visa-Booklet.pdf")) throw new Error("the member cannot see their own business's file");
+    if (own.includes("Jurists-Private.pdf")) throw new Error("another tenant's file leaked into the listing");
+    const jurists = await visibleTo(ownerUserId, "aisha@jurists.test");
+    if (!jurists.includes("Jurists-Private.pdf")) throw new Error("the Jurists owner cannot see their own file");
+    if (jurists.includes("Spouse-Visa-Booklet.pdf")) throw new Error("the fixture business's file leaked to Jurists");
+  });
+
+  await expectOk("the Files surface is windowed per the 5e read law and offers no write control", async () => {
+    // File tripwires (the s20/s22 precedent): the listing query reads a
+    // bounded window with a COUNT aggregate, and the read-only surface draws
+    // no upload or delete door (decision 116 — no control that cannot act).
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    const fn = queriesSource.slice(queriesSource.indexOf("export async function getBusinessFiles"));
+    if (!fn.includes("pageRange(page, DEFAULT_LIST_WINDOW)")) {
+      throw new Error("getBusinessFiles no longer reads a bounded window");
+    }
+    if (!fn.includes(`{ count: "exact", head: true }`)) {
+      throw new Error("getBusinessFiles no longer counts by aggregate");
+    }
+    const pageSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/files/page.tsx"),
+      "utf8"
+    );
+    if (pageSource.includes(`type="file"`) || pageSource.includes("action=") || pageSource.includes("<form")) {
+      throw new Error("the read-only Files surface grew a write door");
+    }
+  });
+
+  await expectOk("a Record row expands in place — 'Open enquiry' is a button inside the row, never the row's click target", async () => {
+    // The pure module carries the where-does-this-lead decision (the
+    // live-inbox-rules precedent) — proven component-level here.
+    const engagement = recordRowTarget({ entityType: "engagement", entityId: "e-1", payload: {} });
+    if (engagement?.href !== "/enquiries/e-1" || engagement.label !== "Open enquiry") {
+      throw new Error("an engagement entry does not lead to its enquiry");
+    }
+    const contact = recordRowTarget({ entityType: "contact", entityId: "c-1", payload: {} });
+    if (contact?.href !== "/contacts/c-1" || contact.label !== "Open contact") {
+      throw new Error("a contact entry does not lead to its contact");
+    }
+    const viaPayload = recordRowTarget({ entityType: "communication", entityId: "m-1", payload: { engagement_id: "e-2" } });
+    if (viaPayload?.href !== "/enquiries/e-2" || viaPayload.label !== "Open enquiry") {
+      throw new Error("a payload-named engagement does not lead to its enquiry");
+    }
+    if (recordRowTarget({ entityType: "business", entityId: null, payload: {} }) !== null) {
+      throw new Error("an entry leading nowhere invented a destination");
+    }
+    // File tripwire: the row is a disclosure control, the navigation lives
+    // INSIDE the expansion, and the old whole-row link is gone.
+    const rowSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/record/record-list.tsx"),
+      "utf8"
+    );
+    if (!rowSource.includes("aria-expanded")) throw new Error("the Record row is no longer a disclosure control");
+    if (!rowSource.includes("recordRowTarget")) throw new Error("the row no longer reads the pure target module");
+    if (!rowSource.includes("<Link href={target.href}>{target.label}</Link>")) {
+      throw new Error("the expanded row lost its labelled navigation button");
+    }
+    if (rowSource.includes("Link href={href}")) {
+      throw new Error("the whole-row link returned — the row's click target must expand, never navigate");
+    }
+  });
+
+  await expectOk("attachment chips wear the real paperclip — the ⎘ stand-in glyph is gone", async () => {
+    const sites: [string, boolean][] = [
+      ["../../../apps/web/app/(app)/inbox/inbox-card.tsx", true],
+      ["../../../apps/web/app/(app)/settings/knowledge-tab.tsx", true],
+      ["../../../apps/web/app/(app)/settings/knowledge-editor.tsx", true],
+      ["../../../apps/web/app/(app)/inbox/page.tsx", false],
+    ];
+    for (const [file, wantsIcon] of sites) {
+      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
+      if (source.includes("⎘")) throw new Error(`${file} still renders the ⎘ stand-in`);
+      if (wantsIcon && !source.includes("Paperclip")) throw new Error(`${file} lost its paperclip icon`);
     }
   });
 

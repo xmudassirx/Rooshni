@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -240,8 +241,9 @@ export function EntryTitle({ entry, vocab }: { entry: KnowledgeEntryRow; vocab: 
               )}
               {entry.file ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-rule bg-paper-deep px-3 py-2">
-                  <span className="font-mono text-[11px] text-ink-soft">
-                    ⎘ {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
+                  <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-ink-soft">
+                    <Paperclip className="size-3 shrink-0" aria-hidden />
+                    {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
                   </span>
                   <Button size="sm" className="ml-auto" onClick={() => void openAttachment()}>
                     Open / download
