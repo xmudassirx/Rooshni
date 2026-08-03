@@ -6,6 +6,7 @@ import { evaluateAutoClose, type NudgeFact } from "./auto-close";
 import { DRAFTING_EVENT_KINDS, SEND_EVENT_KINDS, WORKFLOW_EVENT_KINDS } from "./event-kinds";
 import {
   composeDraft,
+  composeWithRegisterRetry,
   createAnthropicGenerator,
   isTransientProviderError,
   leadTextFromAnswers,
@@ -878,6 +879,7 @@ async function executeDraftComm(
     let composed: ComposeDraftResult | null = null;
     let composeInput: Parameters<typeof composeDraft>[1] | null = null;
     let attestation: DraftAttestation;
+    let registerRetried = false;
     let guide: RouteGuide | null = null;
     let budgetBefore: Awaited<ReturnType<typeof assessAiBudget>> | null = null;
 
@@ -942,7 +944,38 @@ async function executeDraftComm(
           booking_url: bookingUrl,
           attachment: guide ? { title: guide.title, filename: guide.file.filename } : null,
         };
-        composed = await composeDraft(generator, composeInput);
+        // Session 25 (register retry-once, founder-ordered): a register-screen
+        // breach retries exactly ONCE with the violation fed back — evented on
+        // The Record, never a loop. A second breach throws past this block
+        // into the visible-failure lane below; nothing retries the retry.
+        // JUDGMENT: the post-insert compliance-retry path below keeps its
+        // best-effort behaviour — a register breach THERE leaves attempt 1's
+        // recorded breach standing visibly (unapprovable, honest), which is
+        // already the founder-ruled lane; only the initial composition gets
+        // the automatic register retry.
+        const outcome = await composeWithRegisterRetry(
+          (inp, opts) => composeDraft(generator, inp, opts),
+          composeInput,
+          async (breach) => {
+            await emitEvent(db, {
+              business_id: run.business_id,
+              actor_id: drafter,
+              action: DRAFTING_EVENT_KINDS.draftRegisterRetried,
+              entity_type: "workflow_run",
+              entity_id: run.id,
+              payload: {
+                step_run_id: stepRun.id,
+                step_key: step.key,
+                violation: breach.breach,
+                reason: breach.message,
+              },
+            });
+            // WS2: the retry is generation too — the hard cap binds it.
+            if (budgetBefore) guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
+          }
+        );
+        composed = outcome.composed;
+        registerRetried = outcome.registerRetried;
         body = composed.body;
         subject = subject ?? composed.subject;
         attestation = composed.attestation;
@@ -1069,7 +1102,9 @@ async function executeDraftComm(
             ...(guide ? { attachments: [declareAttachment(guide)] } : {}),
             // Session 15: the credit line — the founder's visibility into
             // Light's spend and sources at the moment of stamping (PR-3).
-            ...(composed ? { credit_line: { ...composed.credit_line, attempts: 1 } } : {}),
+            // Session 25: attempts counts every model call honestly — the
+            // register retry-once is attempt 2 when it fired.
+            ...(composed ? { credit_line: { ...composed.credit_line, attempts: registerRetried ? 2 : 1 } } : {}),
           },
         })
         .select("id, channel, contact_id, status"),
@@ -1132,7 +1167,7 @@ async function executeDraftComm(
           });
           const mergedCredit = {
             ...retry.credit_line,
-            attempts: 2,
+            attempts: registerRetried ? 3 : 2,
             retry_reason: check.rule_matched ?? "no-go breach",
           };
           const { error: updError } = await db

@@ -22,11 +22,14 @@ import { canWithdrawWorkflowDefinition, resolveTemplateBody } from "../src/workf
 import { formAnswersFromFieldData } from "../src/meta";
 import {
   composeDraft,
+  composeWithRegisterRetry,
   findRegisterBreach,
+  isTransientProviderError,
   leadTextFromAnswers,
   matchRoutes,
   selectKnowledgeEntries,
   PermanentGenerationError,
+  RegisterBreachError,
   type GenerateFn,
   type KnowledgeEntry,
 } from "../src/drafting";
@@ -4916,6 +4919,153 @@ async function main() {
     const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
     if (!kinds.includes(`"communication.send_retried"`)) {
       throw new Error("the retry's ledger kind left the declared vocabulary");
+    }
+  });
+
+  // Session 25 (founder-ordered, ledger-evidenced) — generation-failure
+  // visibility + register retry-once. The engine behaved correctly and the
+  // UI hid it; and a single dash slip must no longer kill a live reply.
+  console.log("\nSession 25 — generation-failure visibility + register retry-once:");
+
+  await expectOk("a register slip retries ONCE with the violation fed back, and the clean second attempt stands", async () => {
+    let calls = 0;
+    let secondPrompt = "";
+    const fake: GenerateFn = async (request) => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          subject: null,
+          body: "Hello Amina, we can help — book a consultation.",
+          attestation: { attested: true, statement: "x" },
+          usage: { input_tokens: 10, output_tokens: 5 },
+        };
+      }
+      secondPrompt = request.prompt;
+      return {
+        subject: null,
+        body: "Hello Amina, we can help. Book a consultation at your convenience.",
+        attestation: { attested: true, statement: "x" },
+        usage: { input_tokens: 12, output_tokens: 6 },
+      };
+    };
+    let retriesEvented = 0;
+    const { composed, registerRetried } = await composeWithRegisterRetry(
+      (inp, opts) => composeDraft(fake, inp, opts),
+      s18Input("intro"),
+      async (breach) => {
+        retriesEvented += 1;
+        if (!/em dash/.test(breach.message)) throw new Error("the breach did not name the violation");
+      }
+    );
+    if (calls !== 2) throw new Error(`expected exactly 2 attempts, saw ${calls}`);
+    if (retriesEvented !== 1) throw new Error(`the retry must be evented exactly once, saw ${retriesEvented}`);
+    if (!registerRetried) throw new Error("the outcome does not state the retry");
+    if (!/em dash/.test(secondPrompt)) throw new Error("the violation was not fed back into the regeneration prompt");
+    if (composed.usage.input_tokens !== 22 || composed.usage.output_tokens !== 11) {
+      throw new Error("both attempts must be metered spend");
+    }
+    if ((composed.credit_line as { register_retry?: string }).register_retry !== "em dash") {
+      throw new Error("the credit line does not carry the register retry");
+    }
+    if (findRegisterBreach(composed.body) !== null) throw new Error("the standing body still breaches");
+  });
+
+  await expectOk("the retry is once and ONLY once — a second breach propagates to the visible-failure lane, never a loop", async () => {
+    let calls = 0;
+    const fake: GenerateFn = async () => {
+      calls += 1;
+      return {
+        subject: null,
+        body: "Hello Amina, we can help — always.",
+        attestation: { attested: true, statement: "x" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    let retriesEvented = 0;
+    let threw: unknown = null;
+    try {
+      await composeWithRegisterRetry(
+        (inp, opts) => composeDraft(fake, inp, opts),
+        s18Input("intro"),
+        async () => {
+          retriesEvented += 1;
+        }
+      );
+    } catch (err) {
+      threw = err;
+    }
+    if (calls !== 2) throw new Error(`expected exactly 2 attempts, saw ${calls}`);
+    if (retriesEvented !== 1) throw new Error(`the retry evented ${retriesEvented} times — it must event exactly once`);
+    if (!(threw instanceof RegisterBreachError)) throw new Error("the second breach did not propagate");
+    // Permanent for the classifier: the caller's catch events
+    // light.draft_generation_failed and the failure stands VISIBLE (fix 1) —
+    // no lease-retry loop ever forms from a register breach.
+    if (isTransientProviderError(threw)) throw new Error("a register breach must never read as transient");
+  });
+
+  await expectOk("a reply-path register slip takes the same retry-once — tonight's defect shape, the WhatsApp reply", async () => {
+    let calls = 0;
+    const fake: GenerateFn = async () => {
+      calls += 1;
+      return calls === 1
+        ? {
+            subject: null,
+            body: "Hello Amina, Monday–Friday works.",
+            attestation: { attested: true, statement: "x" },
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }
+        : {
+            subject: null,
+            body: "Hello Amina, Monday to Friday works.",
+            attestation: { attested: true, statement: "x" },
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+    };
+    const { composed, registerRetried } = await composeWithRegisterRetry(
+      (inp, opts) => composeReplyDraft(fake, inp, opts),
+      s16ReplyInput,
+      async (breach) => {
+        if (breach.breach !== "en dash") throw new Error("the breach did not name the en dash");
+      }
+    );
+    if (!registerRetried || calls !== 2) throw new Error("the reply path did not retry exactly once");
+    if (findRegisterBreach(composed.body) !== null) throw new Error("the standing body still breaches");
+  });
+
+  await expectOk("generation refusals surface on the thread and the enquiry timeline — the fail-loud tripwires", async () => {
+    // File tripwires (the defect-pair precedent): the surfaces keep their
+    // refusal arms with the RECORDED reason, the ledger kinds stand in the
+    // declared vocabulary, and both production compose sites route through
+    // the shared retry-once.
+    const surfaces: Array<[string, string[]]> = [
+      [
+        "../../../apps/web/app/(app)/conversations/conversations-client.tsx",
+        ["draftRefusals", "Light&rsquo;s draft was refused", "Ask Light to draft again"],
+      ],
+      [
+        "../../../apps/web/app/(app)/enquiries/[id]/page.tsx",
+        ['"light.draft_generation_failed"', "Light&rsquo;s draft was refused", "Ask Light to draft again"],
+      ],
+      [
+        "../../../apps/web/lib/server/queries.ts",
+        ['"light.draft_generation_failed"', "draftRefusals"],
+      ],
+    ];
+    for (const [file, markers] of surfaces) {
+      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
+      for (const marker of markers) {
+        if (!source.includes(marker)) throw new Error(`${file} lost its refusal-visibility marker: ${marker}`);
+      }
+    }
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    if (!kinds.includes(`"light.draft_register_retried"`)) {
+      throw new Error("the register retry's ledger kind left the declared vocabulary");
+    }
+    for (const file of ["../src/workflow.ts", "../src/supersede.ts"]) {
+      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
+      if (!source.includes("composeWithRegisterRetry")) {
+        throw new Error(`${file} no longer routes composition through the register retry-once`);
+      }
     }
   });
 

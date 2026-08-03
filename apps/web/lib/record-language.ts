@@ -70,6 +70,19 @@ export function describeEvent(action: string, payload: Record<string, unknown>):
     }
     case "communication.submitted":
       return "draft submitted for approval — awaiting the stamp";
+    // Session 25 (founder-ordered fail-loud): the refusal carries its
+    // RECORDED reason — never invented, never summarised.
+    case "light.draft_generation_failed": {
+      const reason = str("reason");
+      return "Light's draft was refused" + (reason ? `: ${reason}` : " — no reason recorded");
+    }
+    case "light.draft_register_retried": {
+      const violation = str("violation");
+      return (
+        "register slip caught — Light redrafted once with the violation fed back" +
+        (violation ? ` (${violation})` : "")
+      );
+    }
     case "communication.approved":
       return "communication approved — the human stamp, recorded forever";
     case "communication.rejected": {

@@ -195,6 +195,59 @@ export class TransientGenerationError extends Error {}
 /** A failure no retry will fix (bad credential, over-budget assembly,
  * malformed output twice) — the step fails VISIBLY with the reason. */
 export class PermanentGenerationError extends Error {}
+/** Session 25: the register screen's own refusal (em/en dash in a generated
+ * body). Still permanent for the classifier — no lease retry — but the
+ * CALLER retries exactly once with the violation fed back into the
+ * regeneration prompt (evented), before a second breach stands visible.
+ * Carries the failed attempt's provider usage so metering stays honest. */
+export class RegisterBreachError extends PermanentGenerationError {
+  constructor(
+    public readonly breach: "em dash" | "en dash",
+    message: string,
+    public readonly usage: { input_tokens: number; output_tokens: number }
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Session 25 (founder-ordered): the register retry-once, shared by both
+ * drafting callers. A register-screen breach retries exactly ONCE with the
+ * violation fed back into the regeneration prompt; `onRetry` runs BEFORE the
+ * second attempt so the caller can put the retry on The Record whatever the
+ * outcome. Any second failure — register or otherwise — propagates untouched
+ * to the caller's visible-failure lane. One retry, never a loop.
+ */
+export async function composeWithRegisterRetry<TIn>(
+  compose: (input: TIn, options: { feedback?: string }) => Promise<ComposeDraftResult>,
+  input: TIn,
+  onRetry: (breach: RegisterBreachError) => Promise<void>
+): Promise<{ composed: ComposeDraftResult; registerRetried: boolean }> {
+  try {
+    return { composed: await compose(input, {}), registerRetried: false };
+  } catch (err) {
+    if (!(err instanceof RegisterBreachError)) throw err;
+    await onRetry(err);
+    const retried = await compose(input, { feedback: err.message });
+    const credit = {
+      ...retried.credit_line,
+      register_retry: err.breach,
+    } as ComposeDraftResult["credit_line"];
+    return {
+      composed: {
+        ...retried,
+        credit_line: credit,
+        // Both attempts are metered spend — the refused attempt's tokens are
+        // priced too.
+        usage: {
+          input_tokens: retried.usage.input_tokens + err.usage.input_tokens,
+          output_tokens: retried.usage.output_tokens + err.usage.output_tokens,
+        },
+      },
+      registerRetried: true,
+    };
+  }
+}
 
 export interface ComposeDraftInput {
   business_name: string;
@@ -370,11 +423,14 @@ export async function composeDraft(
   // JUDGMENT: the Session 18 register rule lands as an output screen in the
   // braces-check lane (a permanent, visible refusal) — that is what makes
   // "a drafted body containing an em or en dash fails the harness" true in
-  // production, not only in a test's own assertion.
+  // production, not only in a test's own assertion. Session 25: the breach
+  // throws its own class so the caller can retry once with feedback.
   const registerBreach = findRegisterBreach(body);
   if (registerBreach) {
-    throw new PermanentGenerationError(
-      `the generated body contains an ${registerBreach} — the client-facing register uses commas and full stops (Session 18)`
+    throw new RegisterBreachError(
+      registerBreach,
+      `the generated body contains an ${registerBreach} — the client-facing register uses commas and full stops (Session 18)`,
+      result.usage
     );
   }
 
@@ -573,11 +629,14 @@ export async function composeReplyDraft(
   if (/\{\{|\}\}/.test(body)) {
     throw new PermanentGenerationError("the generated body carries unresolved template braces");
   }
-  // Session 18 register rule — same screen, same lane as composeDraft's.
+  // Session 18 register rule — same screen, same lane as composeDraft's
+  // (Session 25: the breach class carries the retry-once contract).
   const registerBreach = findRegisterBreach(body);
   if (registerBreach) {
-    throw new PermanentGenerationError(
-      `the generated body contains an ${registerBreach} — the client-facing register uses commas and full stops (Session 18)`
+    throw new RegisterBreachError(
+      registerBreach,
+      `the generated body contains an ${registerBreach} — the client-facing register uses commas and full stops (Session 18)`,
+      result.usage
     );
   }
 

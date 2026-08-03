@@ -212,6 +212,46 @@ function TimelineEntry({
       </div>
     );
   }
+  // Session 25 (founder-ordered fail-loud): a refused draft generation wears
+  // RED on the timeline with the RECORDED reason — never invented, never
+  // summarised. JUDGMENT: "Ask Light to draft again" is a live act only on a
+  // conversation thread (askLightToDraftAction), so a comm_thread refusal
+  // links across to it (the timeline's read-only precedent — pending drafts
+  // link to the inbox); a workflow_run refusal names the refusal and its
+  // reason with no dead control (decision 116).
+  if (item.event.action === "light.draft_generation_failed") {
+    const reason =
+      typeof item.event.payload.reason === "string" && item.event.payload.reason.trim() !== ""
+        ? item.event.payload.reason
+        : "no reason recorded";
+    const transient = item.event.payload.transient === true;
+    const threadId = item.event.entityType === "comm_thread" ? item.event.entityId : null;
+    return (
+      <div className="relative py-3 pl-10.5">
+        <Pin tone="red" />
+        <When>
+          {formatWhen(item.event.occurredAt)} · {item.event.actorName}
+        </When>
+        <div className="mt-0.5 text-[13.5px]">
+          <b>Light&rsquo;s draft was refused:</b>{" "}
+          <span className="text-stamp">{reason}</span>
+          {transient ? (
+            <span className="block text-[11.5px] text-ink-soft">
+              transient, Light retries automatically
+            </span>
+          ) : null}
+          {threadId && !transient ? (
+            <Link
+              href={`/conversations?thread=${threadId}`}
+              className="mt-0.5 block font-mono text-[10px] font-semibold tracking-wide text-accent uppercase hover:underline"
+            >
+              Ask Light to draft again →
+            </Link>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
   const byLight = item.event.actorType === "agent";
   return (
     <div className="relative py-3 pl-10.5">
