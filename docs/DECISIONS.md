@@ -1679,3 +1679,14 @@ here. They join D158 as the next product session's opening workstreams.
      (d) Verify from the ledger WHY the classifier never wrote the field
      for 019fc32a while you are in there; if a distinct bug sits beneath
      (never ran vs ran and abstained), name it."
+162. communication.send_failed joins the Approval Inbox History event set. History is events-based; failed dispatch is a decided fact and renders red with recorded reason. No parallel query.
+
+163. Retry of a stamped-but-failed communication resets scheduled_for to null. Dispatch policy (quiet hours, Send-now override) re-applies fresh at retry time. WYSIWYS freezes the body and stamp, never carriage timing.
+
+164. Draft-refusal surfacing splits by entity: comm_thread refusals render in the conversation flow; workflow_run refusals render on the enquiry timeline only. A run refusal names no channel — pinning it to a thread would misattribute it.
+
+165. "Ask Light to draft again" is a live control only on comm_thread refusals. workflow_run refusals carry no control (per 116 — no dead controls).
+
+166. Only a standing (flow-closing) refusal offers the manual re-draft door. A transient refusal states that Light retries automatically — no door, no duplicate-draft invitation.
+
+167. Automatic register retry-once applies to initial composition only. A register breach during post-insert compliance retry leaves attempt 1's recorded breach standing visible, per the existing lane.
