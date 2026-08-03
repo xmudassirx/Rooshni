@@ -1711,3 +1711,35 @@ it").
      phase begins, not during it. Autonomous outreach remains refused
      permanently; the approval gate and D113 are untouched by this
      re-sequencing.
+
+## Session 26 close rulings (3 August 2026)
+
+Entries 169–171 are the founder-approved wordings from the Session 26 close
+review, appended by docs chore on in-prompt authority (the entry-113
+quoted-approval precedent).
+
+169. The nudge ladder is re-ruled (3 Aug 2026): nudge 1 T+1d WhatsApp
+     (email fallback), nudge 2 T+3d email, nudge 3 T+6d final email, close
+     wait 3d — auto-close ≈T+9d. Waits sequential after the intro stamp and
+     cancel-on-reply; the decision 96 refusal untouched. Landed as a
+     re-issue through the definition pipeline (40/102) via
+     chore:reissue-nudge-ladder — v5 active under the founder's stamp; the
+     first chore run's v4 staging was withdrawn as superseded after npm
+     swallowed the approval flag. Nurture step keys rename to their true
+     T-offsets; message-template keys are stable identities and keep the
+     approved wa_template binding.
+
+170. The unset-business quiet-hours default resolves from the installed
+     template's declared business_identity.defaults.quiet_hours — one
+     source; vertical content renders from the template, never product
+     chrome. QUIET_HOURS_DEFAULT remains only as the last-resort fallback
+     for install-less businesses. A firm-set window always wins; explicit
+     null disables; a malformed declaration falls to the constant, never
+     disables the hold. The dispatch hold and Settings → General read one
+     resolver.
+
+171. A Record row's click target expands the entry in place; where an
+     entry leads is a labelled button inside the expansion, never the row's
+     click target. The expansion shows the entry's register facts —
+     recorded instant, entry id, concerned entity, cost, payload verbatim —
+     in the ledger's own face.
