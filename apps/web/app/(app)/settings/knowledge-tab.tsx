@@ -1,6 +1,7 @@
 import { getKnowledgeEntries, getKnowledgeVocab } from "@/lib/server/queries";
 import { EntryTitle, KnowledgeEntryControls, NewEntryButton } from "./knowledge-editor";
 import { Badge } from "@/components/ui/badge";
+import { Paperclip } from "lucide-react";
 
 /*
  * Settings → Knowledge (Session 15, PR-1) — the ONE door for the knowledge
@@ -93,7 +94,8 @@ export async function KnowledgeTab() {
                             stays visibly incomplete (PR-i). */}
                         {entry.file ? (
                           <Badge variant="source">
-                            ⎘ {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
+                            <Paperclip className="size-3 shrink-0" aria-hidden />
+                            {entry.file.filename} · {(entry.file.sizeBytes / 1024 / 1024).toFixed(1)}MB
                           </Badge>
                         ) : entry.category === "route_guide" ? (
                           <Badge variant="pending">no document — nothing will attach</Badge>

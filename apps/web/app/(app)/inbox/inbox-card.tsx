@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Sparkles } from "lucide-react";
+import { Check, Paperclip, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,8 +99,9 @@ export interface InboxCardProps {
    * by the same deterministic function dispatch uses over the same resolved
    * body. Email drafts only; null elsewhere. */
   emailHtmlPreview: string | null;
-  /** PR-i (Session 19) — "⎘ Spouse-Guide.pdf · 1.2MB", pre-formatted on the
-   * server; what the ATTACHMENTS pre-flight verified will actually ride. */
+  /** PR-i (Session 19) — "Spouse-Guide.pdf · 1.2MB", pre-formatted on the
+   * server (the chip wears the paperclip icon, Session 26); what the
+   * ATTACHMENTS pre-flight verified will actually ride. */
   attachmentNotes: string[];
   /** Session 12 — selection mode, for bulk REJECTION only. Approval never
    * takes a selection: the stamp is individual by constitution. */
@@ -365,6 +366,7 @@ export function InboxCard(props: InboxCardProps) {
         {/* PR-i: the document riding this send — declared, verified, named. */}
         {props.attachmentNotes.map((note) => (
           <Badge key={note} variant="source">
+            <Paperclip className="size-3 shrink-0" aria-hidden />
             {note}
           </Badge>
         ))}

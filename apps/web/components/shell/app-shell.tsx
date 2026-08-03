@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Columns3,
   CreditCard,
+  FolderOpen,
   Globe,
   LayoutDashboard,
   LayoutPanelTop,
@@ -129,6 +130,10 @@ function navSections(
       label: "Think",
       items: [
         { href: "/notes", label: "Notes", icon: PenLine },
+        // JUDGMENT: (Session 26, C3) the mockup carries no Files screen —
+        // the founder-ordered read-only listing lands in Think (files are
+        // material the firm keeps, like Notes), Lane B.
+        { href: "/files", label: "Files", icon: FolderOpen },
         { href: "/memory", label: "Light's Memory", icon: BookMarked },
       ],
     },
@@ -176,6 +181,7 @@ const crumbLabels: Record<string, string> = {
   "/automation": "Automation",
   "/contacts": "Contacts",
   "/notes": "Notes",
+  "/files": "Files",
   "/memory": "Light's Memory",
   "/record": "The Record",
   "/feedback": "Feedback",

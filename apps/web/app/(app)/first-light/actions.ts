@@ -7,6 +7,7 @@ import {
   evaluateBasicsPredicate,
   evaluateConnectionPredicates,
   FIRST_LIGHT_EVENT_KINDS,
+  QUIET_HOURS_DEFAULT,
   readBasicsStamps,
   resolveBasicsRequiredKeys,
   satisfyFirstLightPredicate,
@@ -73,8 +74,8 @@ export async function confirmBasicsRow(input: ConfirmBasicsInput): Promise<{ ok:
     }
     patch.quiet_hours = { start: qh.start, end: qh.end };
     const isDefault =
-      qh.start === (template?.quietHoursDefault.start ?? "20:00") &&
-      qh.end === (template?.quietHoursDefault.end ?? "08:00");
+      qh.start === (template?.quietHoursDefault.start ?? QUIET_HOURS_DEFAULT.start) &&
+      qh.end === (template?.quietHoursDefault.end ?? QUIET_HOURS_DEFAULT.end);
     provenance = isDefault
       ? "our regulated-firm default — a suggestion, not a reading"
       : "set by you";

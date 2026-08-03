@@ -342,6 +342,9 @@ function BasicsModal({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // C5 (Session 26): the template's declared default rides the server-built
+  // prop; the literal below mirrors QUIET_HOURS_DEFAULT (client components
+  // do not import the db barrel) and fires only for an install-less business.
   const qhDefault = template?.quietHoursDefault ?? { start: "20:00", end: "08:00" };
 
   const initialValues = useMemo(
