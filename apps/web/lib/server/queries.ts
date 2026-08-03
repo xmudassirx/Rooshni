@@ -22,6 +22,7 @@ import {
   resolveConversionsConfig,
   resolveEmailIdentity,
   resolveMailProvider,
+  QUIET_HOURS_DEFAULT,
   resolveSignOffBody,
   resolveSignOffMode,
   resolveSignOffText,
@@ -3750,7 +3751,7 @@ export async function getTemplateContent(): Promise<TemplateContent | null> {
     signupFooter: d.signup_footer ?? "",
     regulatedStatusOptions: d.business_identity?.regulated_status_options ?? [],
     standardKeys: d.business_identity?.standard_keys ?? [],
-    quietHoursDefault: d.business_identity?.defaults?.quiet_hours ?? { start: "20:00", end: "08:00" },
+    quietHoursDefault: d.business_identity?.defaults?.quiet_hours ?? QUIET_HOURS_DEFAULT,
     noGoRules: d.no_go_rules ?? [],
     knowledgePackCategories: d.knowledge_pack_categories ?? [],
   };

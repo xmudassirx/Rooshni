@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emitEvent } from "./events";
 import { SEND_EVENT_KINDS } from "./event-kinds";
-import { quietHoursHoldUntil, resolveQuietHours } from "./quiet-hours";
+import { quietHoursHoldUntil, resolveQuietHours, type QuietHours } from "./quiet-hours";
+import { getInstalledQuietHoursDefault } from "./templates";
 import { renderEmailHtml, resolveEmailIdentity } from "./email-html";
 import { ATTACHMENT_MAX_BYTES, FILES_BUCKET } from "./route-guides";
 
@@ -141,6 +142,10 @@ interface BusinessFacts {
   name: string;
   timezone: string;
   settings: Record<string, unknown>;
+  /** The installed template's declared quiet-hours default (Session 26, C5,
+   * founder-ruled) — the unset-business fallback the hold resolves through;
+   * null for an install-less business (the constant then applies). */
+  template_quiet_hours: QuietHours | null;
   dispatch_actor_id: string;
 }
 
@@ -180,6 +185,7 @@ async function loadBusinessFacts(db: SupabaseClient, businessId: string): Promis
     name: businesses[0].name,
     timezone: businesses[0].timezone || "Europe/London",
     settings: businesses[0].settings ?? {},
+    template_quiet_hours: await getInstalledQuietHoursDefault(db, businessId),
     dispatch_actor_id: actors[0]!.id,
   };
 }
@@ -324,7 +330,7 @@ export async function dispatchApprovedCommunications(
       // silently unmake a recorded human decision.
       const holdUntil = comm.attributes?.quiet_hours_override
         ? null
-        : quietHoursHoldUntil(now, facts.timezone, resolveQuietHours(facts.settings));
+        : quietHoursHoldUntil(now, facts.timezone, resolveQuietHours(facts.settings, facts.template_quiet_hours));
       if (holdUntil) {
         const { error } = await db
           .from("communications")

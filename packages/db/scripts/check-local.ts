@@ -16,6 +16,8 @@ import {
 } from "../src/quiet-hours";
 import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
 import { recordRowTarget } from "../../../apps/web/lib/record-row";
+import { carriesRuledLadder, reissueNudgeLadderSteps, ruledLadderDescription, type LadderStep } from "../src/nudge-ladder";
+import { declaredTemplateQuietHours } from "../src/quiet-hours";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
 import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KEYS } from "../src/first-light";
@@ -5159,6 +5161,157 @@ async function main() {
     }
     if (rowSource.includes("Link href={href}")) {
       throw new Error("the whole-row link returned — the row's click target must expand, never navigate");
+    }
+  });
+
+  // C4 (founder-ruled 3 Aug 2026): the ruled nudge ladder lands by RE-ISSUE
+  // through the definition pipeline — proven against a live-shaped v1.
+  await expectOk("the re-issued workflow definition carries the ruled ladder — T+1/T+3/T+6, close ≈T+9, by re-issue only", async () => {
+    // Service-side, no session — the chore's own posture.
+    await db.exec(`reset role`);
+    await db.exec(`set request.jwt.claim.sub = ''`);
+    await db.exec(`set request.jwt.claims = ''`);
+    // A live-shaped v1: the current production ladder (waits 2/3/4).
+    const v1 = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'meta_lead_to_consultation', 1, $3, '{"action":"s26.ladder_smoke"}'::jsonb, 'draft',
+               'Ladder smoke: the pre-ruling nudge cadence.') returning id`,
+      [f.business_id, f.human_id, f.template_id]
+    );
+    const v1Id = v1.rows[0]!.id;
+    const V1_STEPS: [string, number, string, string, number][] = [
+      ["intro_ack", 1, "draft_comm", '{"template":"intro_v1","channel":"email","await_approval":true,"companion_channels":["whatsapp"]}', 3],
+      ["call_task", 2, "create_task", '{"title":"Call {{first_name}}","assignee":"owner","due":{"hours":2}}', 2],
+      ["nurture_wait_t2", 3, "wait", '{"wait":{"days":2},"cancel_on_reply":true}', 0],
+      ["nurture_t2", 4, "draft_comm", '{"template":"nurture_t2_v1","channel":"whatsapp","fallback_channel":"email","cancel_on_reply":true}', 3],
+      ["nurture_wait_t5", 5, "wait", '{"wait":{"days":3},"cancel_on_reply":true}', 0],
+      ["nurture_t5", 6, "draft_comm", '{"template":"nurture_t5_v1","channel":"email","cancel_on_reply":true}', 3],
+      ["nurture_wait_t9", 7, "wait", '{"wait":{"days":4},"cancel_on_reply":true}', 0],
+      ["nurture_t9", 8, "draft_comm", '{"template":"nurture_t9_v1","channel":"email","cancel_on_reply":true}', 3],
+      ["close_wait", 9, "wait", '{"wait":{"days":3},"cancel_on_reply":true}', 0],
+      ["auto_close", 10, "close", '{"stage":"unresponsive"}', 2],
+    ];
+    for (const [key, sort, kind, config, gate] of V1_STEPS) {
+      await db.query(
+        `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config, gate_level)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+        [f.business_id, f.human_id, v1Id, key, sort, kind, config, gate]
+      );
+    }
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [v1Id, f.human_id]);
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [v1Id, f.human_id]);
+
+    const oldSteps = (
+      await db.query<LadderStep>(
+        `select key, sort_order, kind, config, gate_level from public.workflow_steps
+         where definition_id = $1 and archived_at is null order by sort_order`,
+        [v1Id]
+      )
+    ).rows;
+    if (carriesRuledLadder(oldSteps)) throw new Error("the pre-ruling ladder read as already ruled");
+
+    // The re-issue, exactly as the chore performs it: new version through
+    // the pipeline, transformed steps, superseded version paused.
+    const v2 = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'meta_lead_to_consultation', 2, $3, '{"action":"s26.ladder_smoke"}'::jsonb, 'draft', $4) returning id`,
+      [f.business_id, f.human_id, f.template_id, ruledLadderDescription()]
+    );
+    const v2Id = v2.rows[0]!.id;
+    for (const step of reissueNudgeLadderSteps(oldSteps)) {
+      await db.query(
+        `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config, gate_level)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+        [f.business_id, f.human_id, v2Id, step.key, step.sort_order, step.kind, JSON.stringify(step.config), step.gate_level]
+      );
+    }
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [v2Id, f.human_id]);
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [v2Id, f.human_id]);
+    await db.query(`select public.pause_workflow_definition($1, $2)`, [v1Id, f.human_id]);
+
+    const statuses = await db.query<{ id: string; status: string }>(
+      `select id, status from public.workflow_definitions where id = any(array[$1, $2]::uuid[])`,
+      [v1Id, v2Id]
+    );
+    const statusOf = new Map(statuses.rows.map((r) => [r.id, r.status]));
+    if (statusOf.get(v2Id) !== "active") throw new Error("the re-issued version is not active");
+    if (statusOf.get(v1Id) !== "paused") throw new Error("the superseded version did not pause");
+
+    const newSteps = (
+      await db.query<LadderStep>(
+        `select key, sort_order, kind, config, gate_level from public.workflow_steps
+         where definition_id = $1 and archived_at is null order by sort_order`,
+        [v2Id]
+      )
+    ).rows;
+    if (!carriesRuledLadder(newSteps)) throw new Error("the re-issued version does not carry the ruled ladder");
+    const byKey = new Map(newSteps.map((s) => [s.key, s]));
+    const wait = (key: string) => (byKey.get(key)?.config as { wait?: { days?: number } })?.wait?.days;
+    if (wait("nurture_wait_t1") !== 1 || wait("nurture_wait_t3") !== 2 || wait("nurture_wait_t6") !== 3 || wait("close_wait") !== 3) {
+      throw new Error(`ruled waits wrong: t1=${wait("nurture_wait_t1")} t3=${wait("nurture_wait_t3")} t6=${wait("nurture_wait_t6")} close=${wait("close_wait")}`);
+    }
+    const n1 = byKey.get("nurture_t1")?.config as Record<string, unknown> | undefined;
+    if (n1?.template !== "nurture_t2_v1" || n1?.channel !== "whatsapp" || n1?.fallback_channel !== "email" || n1?.cancel_on_reply !== true) {
+      throw new Error("nudge 1 lost its WhatsApp-with-email-fallback shape or its template identity");
+    }
+    const n3 = byKey.get("nurture_t3")?.config as Record<string, unknown> | undefined;
+    const n6 = byKey.get("nurture_t6")?.config as Record<string, unknown> | undefined;
+    if (n3?.channel !== "email" || n6?.channel !== "email") throw new Error("nudges 2/3 lost their email channel");
+    const intro = byKey.get("intro_ack")?.config as Record<string, unknown> | undefined;
+    if (intro?.await_approval !== true || !Array.isArray(intro?.companion_channels)) {
+      throw new Error("the intro changed — it was ruled unchanged");
+    }
+    if (byKey.get("auto_close")?.kind !== "close") throw new Error("auto_close changed shape");
+    // Idempotency: the ruled ladder reads as ruled — a chore re-run re-issues nothing.
+    if (!carriesRuledLadder(reissueNudgeLadderSteps(newSteps))) {
+      throw new Error("re-running the transformation broke the ruled ladder");
+    }
+  });
+
+  // C5 (founder-ruled 3 Aug 2026): the unset-business quiet-hours default
+  // resolves from the installed template's declaration — one source; the
+  // constant only for install-less businesses.
+  await expectOk("quiet hours: the unset-business default is the TEMPLATE's declaration; the constant only when install-less", async () => {
+    const declared = { start: "21:30", end: "07:30" };
+    // Unset settings + an installed declaration → the template's window.
+    const viaTemplate = resolveQuietHours({}, declared);
+    if (viaTemplate?.start !== "21:30" || viaTemplate?.end !== "07:30") {
+      throw new Error("an unset business did not inherit the template's declared default");
+    }
+    // Unset settings, no install → the last-resort constant.
+    const installLess = resolveQuietHours({}, null);
+    if (installLess?.start !== QUIET_HOURS_DEFAULT.start || installLess?.end !== QUIET_HOURS_DEFAULT.end) {
+      throw new Error("an install-less business lost the constant fallback");
+    }
+    // A firm-set window WINS over the declaration; an explicit null disables.
+    const firmSet = resolveQuietHours({ quiet_hours: { start: "19:00", end: "09:00" } }, declared);
+    if (firmSet?.start !== "19:00") throw new Error("a firm-set window lost to the template default");
+    if (resolveQuietHours({ quiet_hours: null }, declared) !== null) {
+      throw new Error("a deliberate disable was overridden by the template default");
+    }
+    // A malformed declaration never disables the hold — it falls to the constant.
+    if (declaredTemplateQuietHours({ start: "9pm", end: "07:30" }) !== null) {
+      throw new Error("a malformed declaration validated");
+    }
+    const malformed = resolveQuietHours({}, { start: "9pm", end: "07:30" } as { start: string; end: string });
+    if (malformed?.start !== QUIET_HOURS_DEFAULT.start) {
+      throw new Error("a malformed declaration did not fall to the constant");
+    }
+    // The declared v3 content carries the declaration the resolver reads.
+    const v3 = await db.query<{ declared: { start?: string; end?: string } | null }>(
+      `select definition #> '{business_identity,defaults,quiet_hours}' as declared
+       from public.template_definitions where key = 'uk_immigration_advisory'
+       order by version desc limit 1`
+    );
+    const fromStore = declaredTemplateQuietHours(v3.rows[0]?.declared);
+    if (!fromStore) throw new Error("the installed v3 definition no longer declares its quiet-hours default");
+    // File tripwire: the dispatch hold resolves THROUGH the template default.
+    const sendSource = readFileSync(resolve(import.meta.dirname, "../src/send.ts"), "utf8");
+    if (!sendSource.includes("resolveQuietHours(facts.settings, facts.template_quiet_hours)")) {
+      throw new Error("the dispatch hold no longer resolves through the installed template's default");
+    }
+    if (!sendSource.includes("getInstalledQuietHoursDefault")) {
+      throw new Error("dispatch business facts no longer carry the installed template default");
     }
   });
 

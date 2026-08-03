@@ -435,3 +435,17 @@ Add to this list during build; check items off only at go-live.
       function + its grant. After deploy, the live #131030 failed message
       gains its red state + Retry at the thread, History and the enquiry
       timeline.
+- [ ] **Run `npm run chore:reissue-nudge-ladder --workspace=@rooshni/db -- --approve-as-owner`
+      after merging the Session 26 branch** (introduced Session 26, C4 —
+      founder-ruled ladder, 3 Aug 2026): re-issues meta_lead_to_consultation
+      as v4 through the pipeline with the ruled cadence — nudge 1 T+1d
+      WhatsApp (fallback email), nudge 2 T+3d email, nudge 3 T+6d final
+      email, close wait 3d (auto-close ≈T+9d; the decision 96 refusal
+      untouched) — and pauses v3 so exactly one version consumes triggers.
+      The founder running the chore IS the stamp (the multitouch-intro
+      precedent; the Approval Inbox's definition card deliberately carries
+      no Approve — decision 152). Without `--approve-as-owner` it stages v4
+      at pending_approval and stops. Idempotent; harness-proven (the
+      ordered Session 26 ladder smoke). Live runs mid-flight on v3 finish
+      on v3; new leads enrol on v4. This chore is the C4 DoD witness: after
+      the run, Automation shows v4 active carrying the ruled ladder.

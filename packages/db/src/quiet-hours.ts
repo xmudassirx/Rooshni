@@ -20,11 +20,33 @@ export interface QuietHours {
   end: string;
 }
 
-/** PROVISIONAL — the mockup's regulated-firm default; founder-tunable per business. */
+/** The last-resort fallback for INSTALL-LESS businesses only (Session 26,
+ * C5, founder-ruled): the unset-business default resolves from the installed
+ * template's declared business_identity.defaults.quiet_hours — one source;
+ * vertical content renders from the template, never product chrome. This
+ * constant remains solely for a business with no template install. */
 export const QUIET_HOURS_DEFAULT: QuietHours = { start: "20:00", end: "08:00" };
 
-/** businesses.settings.quiet_hours: undefined → default; null → disabled. */
-export function resolveQuietHours(settings: Record<string, unknown> | null | undefined): QuietHours | null {
+/** A declared {start, end} from template content, validated — null when the
+ * declaration is absent or malformed (a bad declaration never disables the
+ * hold; resolution falls through to the constant). */
+export function declaredTemplateQuietHours(value: unknown): QuietHours | null {
+  if (value && typeof value === "object") {
+    const candidate = value as Partial<QuietHours>;
+    if (isHHMM(candidate.start) && isHHMM(candidate.end)) {
+      return { start: candidate.start!, end: candidate.end! };
+    }
+  }
+  return null;
+}
+
+/** businesses.settings.quiet_hours: a firm-set window wins; undefined →
+ * the installed template's declared default (C5, founder-ruled), else the
+ * install-less constant; explicit null → disabled. */
+export function resolveQuietHours(
+  settings: Record<string, unknown> | null | undefined,
+  templateDefault?: QuietHours | null
+): QuietHours | null {
   const raw = settings?.quiet_hours;
   if (raw === null) return null;
   if (raw && typeof raw === "object") {
@@ -33,7 +55,7 @@ export function resolveQuietHours(settings: Record<string, unknown> | null | und
       return { start: candidate.start!, end: candidate.end! };
     }
   }
-  return QUIET_HOURS_DEFAULT;
+  return declaredTemplateQuietHours(templateDefault) ?? QUIET_HOURS_DEFAULT;
 }
 
 function isHHMM(value: unknown): value is string {

@@ -59,7 +59,10 @@ export async function GeneralTab() {
     getAppContext(),
   ]);
   const s = config.settings;
-  const quiet = resolveQuietHours(s);
+  // Session 26 (C5, founder-ruled): the unset-firm default resolves from the
+  // installed template's declared quiet hours — the SAME resolver the
+  // dispatch hold reads, so display and enforcement cannot disagree.
+  const quiet = resolveQuietHours(s, template?.quietHoursDefault ?? null);
 
   const edit = (
     <HonestButton size="sm" variant="ghost" notice={EDIT_NOTICE}>
