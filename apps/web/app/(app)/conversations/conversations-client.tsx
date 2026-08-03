@@ -17,6 +17,7 @@ import { formatWhen } from "@/lib/format";
 import type {
   ConversationListItem,
   ConversationListPage,
+  DraftRefusal,
   OpenThread,
   ThreadCursor,
   ThreadDraftStampData,
@@ -740,17 +741,41 @@ export function ConversationsClient({
     );
   }
 
+  // Session 25 (founder-ordered fail-loud): refused draft generations render
+  // IN the flow at their moment — a refusal is never silence. The reason is
+  // the RECORDED one from The Record, verbatim.
+  const refusals: DraftRefusal[] = thread?.draftRefusals ?? [];
+  const flow: (
+    | { kind: "msg"; at: string; m: ThreadMessage }
+    | { kind: "refusal"; at: string; r: DraftRefusal }
+  )[] = [
+    ...messages.map((m) => ({ kind: "msg" as const, at: m.occurredAt, m })),
+    ...refusals.map((r) => ({ kind: "refusal" as const, at: r.occurredAt, r })),
+  ].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  // The refusal that CLOSES the flow stands unanswered — only it carries the
+  // manual door (decision 116: no control where it cannot usefully act; a
+  // refusal followed by later activity is history, not a standing state).
+  const lastFlow = flow[flow.length - 1] ?? null;
+  const standingRefusalId = lastFlow?.kind === "refusal" ? lastFlow.r.id : null;
+
   // Burst separators (Messenger's grouped timestamps): a centred label opens
   // each burst; a gap beyond BURST_GAP_MS starts a new one.
-  const withSeparators: ({ kind: "sep"; at: string; key: string } | { kind: "msg"; m: ThreadMessage })[] =
-    [];
+  const withSeparators: (
+    | { kind: "sep"; at: string; key: string }
+    | { kind: "msg"; at: string; m: ThreadMessage }
+    | { kind: "refusal"; at: string; r: DraftRefusal }
+  )[] = [];
   let prevAt: number | null = null;
-  for (const m of messages) {
-    const at = new Date(m.occurredAt).getTime();
+  for (const item of flow) {
+    const at = new Date(item.at).getTime();
     if (prevAt === null || at - prevAt > BURST_GAP_MS) {
-      withSeparators.push({ kind: "sep", at: m.occurredAt, key: `sep-${m.id}` });
+      withSeparators.push({
+        kind: "sep",
+        at: item.at,
+        key: `sep-${item.kind === "msg" ? item.m.id : item.r.id}`,
+      });
     }
-    withSeparators.push({ kind: "msg", m });
+    withSeparators.push(item);
     prevAt = at;
   }
 
@@ -909,6 +934,39 @@ export function ConversationsClient({
                               className="self-center py-0.5 font-mono text-[9px] tracking-[.08em] text-ink-faint uppercase"
                             >
                               {formatWhen(item.at)}
+                            </div>
+                          ) : item.kind === "refusal" ? (
+                            /* Session 25 (founder-ordered fail-loud): the
+                               refusal wears RED on the firm's side (decision
+                               78 — Light's failed act is firm-authored) with
+                               the RECORDED reason inline, never invented. */
+                            <div
+                              key={item.r.id}
+                              className="max-w-[72%] self-end rounded-[13px] rounded-br-sm border border-dashed border-stamp bg-stamp-tint px-2.5 py-2 text-[12.5px] leading-normal shadow-panel"
+                            >
+                              <span className="mb-1 block font-mono text-[8.5px] font-semibold tracking-[.08em] text-stamp uppercase">
+                                ✗ Light&rsquo;s draft was refused
+                              </span>
+                              <span className="whitespace-pre-wrap text-stamp">{item.r.reason}</span>
+                              <span className="mt-1 block text-right font-mono text-[8.5px] tracking-wide text-ink-faint">
+                                {formatWhen(item.r.occurredAt)}
+                                {item.r.transient ? " · transient, Light retries automatically" : ""}
+                              </span>
+                              {item.r.id === standingRefusalId &&
+                              !item.r.transient &&
+                              ["email", "whatsapp"].includes(thread.channel) ? (
+                                <form action={askAction} className="mt-1 block">
+                                  <input type="hidden" name="threadId" value={thread.id} />
+                                  <button
+                                    type="submit"
+                                    disabled={askPending}
+                                    className="light-btn-soft min-h-8 cursor-pointer rounded-md px-2.5 py-1 font-mono text-[9.5px] font-semibold tracking-wide uppercase"
+                                    title="Light drafts against the full thread again; the draft still needs your stamp"
+                                  >
+                                    {askPending ? "✦ drafting…" : "✦ Ask Light to draft again"}
+                                  </button>
+                                </form>
+                              ) : null}
                             </div>
                           ) : (
                             <Bubble

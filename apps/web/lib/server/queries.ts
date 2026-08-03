@@ -1334,6 +1334,35 @@ export interface ThreadConsent {
   note: string;
 }
 
+/** Session 25 (founder-ordered): a light.draft_generation_failed event as the
+ * thread and timeline render it — the RECORDED reason from the ledger,
+ * never invented, never summarised. */
+export interface DraftRefusal {
+  id: string;
+  occurredAt: string;
+  reason: string;
+  /** A transient refusal (rate limit, network) retries automatically on a
+   * later tick; a permanent one stands until a human asks Light again. */
+  transient: boolean;
+}
+
+function mapDraftRefusal(row: {
+  id: string;
+  occurred_at: string;
+  payload: Record<string, unknown> | null;
+}): DraftRefusal {
+  const payload = (row.payload ?? {}) as Record<string, unknown>;
+  return {
+    id: row.id,
+    occurredAt: row.occurred_at,
+    reason:
+      typeof payload.reason === "string" && payload.reason.trim() !== ""
+        ? payload.reason
+        : "no reason recorded",
+    transient: payload.transient === true,
+  };
+}
+
 /*
  * Session 23 (WS2, founder directive: the Messenger shape) — the s22 5c
  * deferral lands here. The old getConversations read EVERY thread and EVERY
@@ -1404,6 +1433,9 @@ export interface OpenThread {
   hasOlder: boolean;
   /** Cursor of the OLDEST loaded message (the next older window's `before`). */
   oldestCursor: ThreadCursor | null;
+  /** Session 25: refused draft generations on THIS thread, ascending —
+   * rendered in the flow so a refusal is never silence. */
+  draftRefusals: DraftRefusal[];
 }
 
 function consentNote(consent: Record<string, unknown>): { ok: boolean; note: string } {
@@ -1678,7 +1710,7 @@ export async function getOpenThread(threadId: string): Promise<OpenThread | null
   if (error) throw new Error(`thread lookup failed: ${error.message}`);
   if (!t) return null;
 
-  const [contactRes, channelsRes, engagementRes, window] = await Promise.all([
+  const [contactRes, channelsRes, engagementRes, window, refusalsRes] = await Promise.all([
     db
       .from("contacts")
       .select("id, display_name, type, status, first_touch")
@@ -1697,7 +1729,23 @@ export async function getOpenThread(threadId: string): Promise<OpenThread | null
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     readThreadWindow(db, business.id, threadId, null),
+    // Session 25 (founder-ordered fail-loud): refused draft generations on
+    // this thread render in the flow — never silence. Bounded (5e law).
+    // JUDGMENT: only comm_thread-entity refusals attach here; workflow_run
+    // refusals surface on the enquiry timeline instead — an engagement can
+    // hold several channel threads and a run refusal names no channel, so
+    // pinning it to one thread would misattribute it.
+    db
+      .from("events")
+      .select("id, occurred_at, payload")
+      .eq("business_id", business.id)
+      .eq("action", "light.draft_generation_failed")
+      .eq("entity_type", "comm_thread")
+      .eq("entity_id", threadId)
+      .order("occurred_at", { ascending: false })
+      .limit(20),
   ]);
+  if (refusalsRes.error) throw new Error(`draft refusal query failed: ${refusalsRes.error.message}`);
   const contact = contactRes.data as {
     id: string;
     display_name: string;
@@ -1758,6 +1806,9 @@ export async function getOpenThread(threadId: string): Promise<OpenThread | null
     messages: window.messages,
     hasOlder: window.hasOlder,
     oldestCursor: oldest ? { occurredAt: oldest.occurredAt, id: oldest.id } : null,
+    draftRefusals: ((refusalsRes.data ?? []) as { id: string; occurred_at: string; payload: Record<string, unknown> | null }[])
+      .map(mapDraftRefusal)
+      .reverse(),
   };
 }
 
@@ -3002,6 +3053,31 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
     if (result.error) throw new Error(`${label} query failed: ${result.error.message}`);
   }
 
+  // Session 25 (founder-ordered fail-loud): refused draft generations reach
+  // the timeline even though their events ride comm_thread / workflow_run
+  // entities with no engagement_id in the payload — resolved through this
+  // engagement's own threads and runs. Bounded (5e law).
+  const refusalEvents = await (async () => {
+    const [threadRows, runRows] = await Promise.all([
+      db.from("comm_threads").select("id").eq("engagement_id", id).limit(50),
+      db.from("workflow_runs").select("id").eq("engagement_id", id).limit(50),
+    ]);
+    if (threadRows.error) throw new Error(`thread id query failed: ${threadRows.error.message}`);
+    if (runRows.error) throw new Error(`run id query failed: ${runRows.error.message}`);
+    const entityIds = [...(threadRows.data ?? []), ...(runRows.data ?? [])].map((r) => r.id);
+    if (entityIds.length === 0) return [];
+    const { data, error } = await db
+      .from("events")
+      .select("id, action, entity_type, entity_id, payload, cost, occurred_at, actors(display_name, actor_type)")
+      .eq("business_id", business.id)
+      .eq("action", "light.draft_generation_failed")
+      .in("entity_id", entityIds)
+      .order("occurred_at", { ascending: true })
+      .limit(30);
+    if (error) throw new Error(`draft refusal events query failed: ${error.message}`);
+    return data ?? [];
+  })();
+
   // Approval/rejection detail lives on the communication events.
   const commIds = (comms.data ?? []).map((c) => c.id);
   const { data: commEvents, error: commEventsError } = commIds.length
@@ -3147,20 +3223,28 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
         sendFailure: parseSendFailure((c as { send_failure?: unknown }).send_failure),
       };
     }),
-    events: (engagementEvents.data ?? []).map((row) => {
-      const actor = row.actors as unknown as ActorEmbed | null;
-      return {
-        id: row.id,
-        action: row.action,
-        entityType: row.entity_type,
-        entityId: row.entity_id,
-        payload: (row.payload ?? {}) as Record<string, unknown>,
-        cost: row.cost as EventRow["cost"],
-        occurredAt: row.occurred_at,
-        actorName: actor?.display_name ?? "Unknown actor",
-        actorType: actor?.actor_type ?? "integration",
-      };
-    }),
+    events: (() => {
+      // Merge the refusal events in by time, deduped by id — the timeline is
+      // one story whichever entity the ledger charged the event to.
+      const rows = [...(engagementEvents.data ?? [])];
+      const seen = new Set(rows.map((r) => r.id));
+      for (const row of refusalEvents) if (!seen.has(row.id)) rows.push(row);
+      rows.sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+      return rows.map((row) => {
+        const actor = row.actors as unknown as ActorEmbed | null;
+        return {
+          id: row.id,
+          action: row.action,
+          entityType: row.entity_type,
+          entityId: row.entity_id,
+          payload: (row.payload ?? {}) as Record<string, unknown>,
+          cost: row.cost as EventRow["cost"],
+          occurredAt: row.occurred_at,
+          actorName: actor?.display_name ?? "Unknown actor",
+          actorType: actor?.actor_type ?? "integration",
+        };
+      });
+    })(),
     tasks: (tasks.data ?? []).map((t) => ({
       id: t.id,
       title: t.title,
