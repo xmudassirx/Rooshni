@@ -4779,6 +4779,146 @@ async function main() {
     }
   });
 
+  // Defect pair (2 Aug 2026, founder-observed, ledger-evidenced) — fail-loud
+  // reaches every surface a failed send renders on, and a stamped-but-failed
+  // message gains RETRY (0040: same body, same stamp, the gate re-earned).
+  console.log("\nDefect pair — fail-loud surfaces + RETRY for stamped-but-failed (2 Aug 2026):");
+
+  const pairFailedComm = async (): Promise<string> => {
+    // The production shape: a human-stamped message the provider refused —
+    // stamped through the real doors, failed through the real 0021 door.
+    const t = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'email') returning id`,
+      [activation!.business_id, activation!.owner_actor_id, trioContact.rows[0]!.id]
+    );
+    const r = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body)
+       values ($1, $2, $3, $4, 'email', 'outbound', 'draft', 'A stamped answer the provider refused.') returning id`,
+      [activation!.business_id, activation!.owner_actor_id, t.rows[0]!.id, trioContact.rows[0]!.id]
+    );
+    await db.query(`select public.submit_communication($1, $2)`, [r.rows[0]!.id, activation!.owner_actor_id]);
+    await db.query(`select public.approve_communication($1, $2)`, [r.rows[0]!.id, activation!.owner_actor_id]);
+    await db.query(
+      `select public.mark_communication_send_failed($1, 'graph', 'The provider refused the message. ErrorInvalidRecipients (#131030)')`,
+      [r.rows[0]!.id]
+    );
+    return r.rows[0]!.id;
+  };
+
+  await expectError(
+    "RETRY is a HUMAN act — an agent actor is refused by the database",
+    /HUMAN act/,
+    async () => {
+      const id = await pairFailedComm();
+      await db.query(`select public.retry_failed_communication($1, $2)`, [id, activation!.light_actor_id]);
+    }
+  );
+
+  await expectError(
+    "a human WITHOUT stamp authority cannot retry — approvals.comms (execute) or the owner, nobody else",
+    /approvals\.comms/,
+    async () => {
+      const account = await db.query<{ account_id: string }>(
+        `select account_id from public.businesses where id = $1`,
+        [activation!.business_id]
+      );
+      const bystander = await db.query<{ id: string }>(
+        `insert into public.actors (account_id, actor_type, display_name)
+         values ($1, 'human', 'Ungranted Retrier') returning id`,
+        [account.rows[0]!.account_id]
+      );
+      const id = await pairFailedComm();
+      await db.query(`select public.retry_failed_communication($1, $2)`, [id, bystander.rows[0]!.id]);
+    }
+  );
+
+  await expectError(
+    "only a FAILED communication can be retried — an approved (merely held) row is refused",
+    /Only a FAILED/,
+    async () => {
+      const id = await trioHeldComm();
+      await db.query(`select public.retry_failed_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    }
+  );
+
+  await expectOk("the owner's RETRY re-arms dispatch: same body, SAME STAMP preserved, failure kept on the record, gate re-earned", async () => {
+    const id = await pairFailedComm();
+    const before = await db.query<{ approver: string; body: string }>(
+      `select approved_by_actor_id as approver, body from public.communications where id = $1`,
+      [id]
+    );
+    await db.query(`select public.retry_failed_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    const after = await db.query<{
+      status: string;
+      approver: string | null;
+      body: string;
+      failure: string | null;
+      retried_by: string | null;
+    }>(
+      `select status, approved_by_actor_id as approver, body,
+              attributes -> 'send_failure' ->> 'reason' as failure,
+              attributes -> 'send_retry' ->> 'by_actor_id' as retried_by
+       from public.communications where id = $1`,
+      [id]
+    );
+    if (after.rows[0]!.status !== "approved") throw new Error(`retry left status "${after.rows[0]!.status}"`);
+    if (after.rows[0]!.approver !== before.rows[0]!.approver) {
+      throw new Error("the retry changed the stamp — same stamp is the ruling's letter");
+    }
+    if (after.rows[0]!.body !== before.rows[0]!.body) {
+      throw new Error("the retry changed the body — WYSIWYS broken");
+    }
+    if (!after.rows[0]!.failure?.includes("#131030")) {
+      throw new Error("the recorded failure left the row — it DID fail once, the record must keep saying so");
+    }
+    if (after.rows[0]!.retried_by !== activation!.owner_actor_id) {
+      throw new Error("the row does not carry who retried");
+    }
+    // A second retry finds nothing failed — refused, idempotently.
+    let refused = false;
+    try {
+      await db.query(`select public.retry_failed_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    } catch (err) {
+      refused = /Only a FAILED/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!refused) throw new Error("a second retry on a re-armed row was not refused");
+  });
+
+  await expectOk("fail-loud reaches every surface — thread bubble, inbox History, enquiry timeline all render the failed state", async () => {
+    // File tripwires (the s20/s22 precedent): the three surfaces keep their
+    // failed arms, the retry control exists, and the ledger kind stands in
+    // the declared vocabulary + the History action set.
+    const surfaces: Array<[string, string[]]> = [
+      [
+        "../../../apps/web/app/(app)/conversations/conversations-client.tsx",
+        ['message.status === "failed"', "RetrySendControl"],
+      ],
+      [
+        "../../../apps/web/app/(app)/enquiries/[id]/page.tsx",
+        ['comm.status === "failed"', "RetrySendControl"],
+      ],
+      [
+        "../../../apps/web/app/(app)/inbox/page.tsx",
+        ['"send_failed"', "RetrySendControl"],
+      ],
+      [
+        "../../../apps/web/lib/server/queries.ts",
+        ['"communication.send_failed"', "parseSendFailure"],
+      ],
+    ];
+    for (const [file, markers] of surfaces) {
+      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
+      for (const marker of markers) {
+        if (!source.includes(marker)) throw new Error(`${file} lost its fail-loud marker: ${marker}`);
+      }
+    }
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    if (!kinds.includes(`"communication.send_retried"`)) {
+      throw new Error("the retry's ledger kind left the declared vocabulary");
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed.`);
   process.exit(failed > 0 ? 1 : 0);
 }

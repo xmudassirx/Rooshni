@@ -8,6 +8,7 @@ import { formatGBP, formatWhen } from "@/lib/format";
 import { describeEvent } from "@/lib/record-language";
 import {
   getEnquiryDetail,
+  getViewerStampAuthority,
   type ChannelConsent,
   type EnquiryComm,
   type EnquiryDetail,
@@ -15,6 +16,7 @@ import {
   type RecordEvent,
 } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
+import { RetrySendControl } from "../../inbox/retry-send-control";
 
 export const dynamic = "force-dynamic";
 
@@ -88,11 +90,22 @@ function channelLabel(channel: string): string {
   return channel.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 
-function CommCard({ comm, clientName }: { comm: EnquiryComm; clientName: string | null }) {
+function CommCard({
+  comm,
+  clientName,
+  viewerCanStamp,
+}: {
+  comm: EnquiryComm;
+  clientName: string | null;
+  viewerCanStamp: boolean;
+}) {
   const byLight = comm.draftedByType === "agent";
   const inbound = comm.direction === "inbound";
   const pending = comm.status === "pending_approval";
-  const tone = pending || byLight ? "gold" : "neutral";
+  // Defect-pair hotfix (2 Aug 2026, item 1): FAIL-LOUD reaches the timeline
+  // — a failed dispatch pins and badges RED with the recorded reason.
+  const failed = comm.status === "failed";
+  const tone = failed ? "red" : pending || byLight ? "gold" : "neutral";
 
   return (
     <div className="relative py-3 pl-10.5">
@@ -126,6 +139,7 @@ function CommCard({ comm, clientName }: { comm: EnquiryComm; clientName: string 
           {["sent", "delivered", "read"].includes(comm.status) ? (
             <Badge variant="green">{comm.status}</Badge>
           ) : null}
+          {failed ? <Badge variant="red">✗ send failed</Badge> : null}
           {comm.status === "draft" && comm.rejection ? (
             <Badge variant="gold">returned to Light&apos;s queue</Badge>
           ) : null}
@@ -138,6 +152,20 @@ function CommCard({ comm, clientName }: { comm: EnquiryComm; clientName: string 
           <div className="mt-2 border-t border-dashed border-rule pt-2 text-[12px] text-stamp">
             Rejected by {comm.rejection.byName}, {formatWhen(comm.rejection.at)} — “
             {comm.rejection.reason}”
+          </div>
+        ) : null}
+        {failed ? (
+          <div className="mt-2 border-t border-dashed border-stamp/40 pt-2 text-[12px] text-stamp">
+            Send failed
+            {comm.sendFailure?.failedAt ? `, ${formatWhen(comm.sendFailure.failedAt)}` : ""} —{" "}
+            {comm.sendFailure
+              ? `${comm.sendFailure.provider ? `${comm.sendFailure.provider}: ` : ""}${comm.sendFailure.reason}`
+              : "the provider refused the message; reason on The Record"}
+            {viewerCanStamp ? (
+              <span className="mt-1.5 block">
+                <RetrySendControl communicationId={comm.id} />
+              </span>
+            ) : null}
           </div>
         ) : null}
         {/* JUDGMENT: the mockup shows Approve/Refine controls here; this session
@@ -159,9 +187,17 @@ function CommCard({ comm, clientName }: { comm: EnquiryComm; clientName: string 
   );
 }
 
-function TimelineEntry({ item, clientName }: { item: TimelineItem; clientName: string | null }) {
+function TimelineEntry({
+  item,
+  clientName,
+  viewerCanStamp,
+}: {
+  item: TimelineItem;
+  clientName: string | null;
+  viewerCanStamp: boolean;
+}) {
   if (item.kind === "comm") {
-    return <CommCard comm={item.comm} clientName={clientName} />;
+    return <CommCard comm={item.comm} clientName={clientName} viewerCanStamp={viewerCanStamp} />;
   }
   if (item.kind === "stage") {
     return (
@@ -229,7 +265,10 @@ export default async function EnquiryDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const detail = await getEnquiryDetail(id);
+  const [detail, viewerCanStamp] = await Promise.all([
+    getEnquiryDetail(id),
+    getViewerStampAuthority(),
+  ]);
   if (!detail) notFound();
 
   const client = detail.participants.find((p) => p.role === "client") ?? null;
@@ -321,6 +360,7 @@ export default async function EnquiryDetailPage({
                 key={`${item.kind}-${item.kind === "comm" ? item.comm.id : item.kind === "stage" ? item.move.id : item.event.id}`}
                 item={item}
                 clientName={client?.name ?? null}
+                viewerCanStamp={viewerCanStamp}
               />
             ))}
             {timeline.length === 0 ? (

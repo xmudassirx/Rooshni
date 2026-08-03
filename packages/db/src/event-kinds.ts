@@ -47,6 +47,10 @@ export const SEND_EVENT_KINDS = {
    * hold — SEND NOW. The human actor rides the event; messaging a client at
    * 22:00 is a recorded human decision, never a silent one. */
   communicationQuietHoursOverridden: "communication.quiet_hours_overridden",
+  /** Defect-pair hotfix (2 Aug 2026): a stamp-holder retried a FAILED send —
+   * same body, same stamp, transport re-attempts (0040). The human actor and
+   * the failure being answered ride the payload. */
+  communicationSendRetried: "communication.send_retried",
   /** A real Meta lead arrived through the webhook (idempotent on the leadgen id). */
   metaLeadReceived: "meta.lead_received",
   /** Decision 15: the auto-close step refused to close — its nudges never reached the client. */

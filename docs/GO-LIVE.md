@@ -419,3 +419,12 @@ Add to this list during build; check items off only at go-live.
       exist" error visibly. check-local green at 308 including the door's
       four refusal/permit smokes. No data touched — one security-definer
       function + its grant.
+- [ ] **Apply migration 0040 (`retry_failed_communication`) before merging
+      `ui/defect-pair-failed-sends`** (introduced defect-pair hotfix, 2 Aug
+      2026): the Retry control on failed sends calls this door; until the
+      apply, the button returns the database's "function does not exist"
+      error visibly. check-local green at 313 including the door's four
+      refusal/permit smokes. No data touched — one security-definer
+      function + its grant. After deploy, the live #131030 failed message
+      gains its red state + Retry at the thread, History and the enquiry
+      timeline.

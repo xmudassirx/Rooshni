@@ -33,6 +33,7 @@ import {
   type ThreadActionState,
 } from "./actions";
 import { sendNowAction, type SendNowState } from "../inbox/actions";
+import { RetrySendControl } from "../inbox/retry-send-control";
 import { formatSendsAt } from "@/lib/held-until";
 import { DraftStampPanel } from "./draft-stamp-panel";
 
@@ -255,16 +256,28 @@ function Bubble({
   }
   const inbound = message.direction === "inbound";
   const isEmail = message.channel === "email";
+  // Defect-pair hotfix (2 Aug 2026, item 1): FAIL-LOUD reaches the thread —
+  // a failed dispatch wears RED (the alignment stays author-side, decision
+  // 78: state changes only the chrome) with the recorded reason inline and
+  // Retry for stamp-holders. It previously wore sent-looking chrome.
+  const failed = !inbound && message.status === "failed";
   return (
     <div
       className={cn(
         "max-w-[72%] rounded-[13px] border px-2.5 py-2 text-[12.5px] leading-normal shadow-panel",
         inbound
           ? "self-start rounded-bl-sm border-rule bg-panel"
-          : "self-end rounded-br-sm border-ledger-line bg-accent-tint",
+          : failed
+            ? "self-end rounded-br-sm border-stamp bg-stamp-tint"
+            : "self-end rounded-br-sm border-ledger-line bg-accent-tint",
         isEmail && "rounded-lg"
       )}
     >
+      {failed ? (
+        <span className="mb-1 block font-mono text-[8.5px] font-semibold tracking-[.08em] text-stamp uppercase">
+          ✗ send failed — not delivered
+        </span>
+      ) : null}
       {isEmail && thread.subject ? (
         <span className="mb-1 block border-b border-dashed border-rule pb-1 font-mono text-[9px] tracking-wide text-ink-soft uppercase">
           {thread.subject}
@@ -297,6 +310,20 @@ function Bubble({
         <span className="light-text mt-0.5 block text-right font-mono text-[8.5px] tracking-wide">
           ✦ drafted by Light{message.stampedByName ? ` · stamped by ${message.stampedByName}` : ""}
         </span>
+      ) : null}
+      {failed ? (
+        <div className="mt-1 border-t border-dashed border-stamp/40 pt-1">
+          <span className="block text-[11.5px] text-stamp">
+            {message.sendFailure
+              ? `${message.sendFailure.provider ? `${message.sendFailure.provider}: ` : ""}${message.sendFailure.reason}`
+              : "the provider refused the message — reason on The Record"}
+          </span>
+          {viewerCanStamp ? (
+            <span className="mt-1 block">
+              <RetrySendControl communicationId={message.id} />
+            </span>
+          ) : null}
+        </div>
       ) : null}
       {/* Defect-trio hotfix (2 Aug 2026, item 2): an approved message the
           quiet-hours hold is carrying later says so HERE, until dispatch —
@@ -655,6 +682,10 @@ export function ConversationsClient({
                 stampedByName: null,
                 isPendingDraft: row.direction === "outbound" && row.status === "pending_approval",
                 sentHtml: row.body_format === "html" ? (row.body ?? null) : null,
+                // A live-appended row is an INSERT — it cannot be born failed
+                // (only approved rows fail, 0021); the reconciling refresh
+                // carries any later failure with its recorded reason.
+                sendFailure: null,
               },
             ]
       );

@@ -12,11 +12,13 @@ import {
   getInboxHistory,
   getInboxPage,
   getIsManager,
+  getViewerStampAuthority,
   type InboxHistoryRow,
 } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
 import { type InboxCardProps } from "./inbox-card";
 import { OwedList } from "./owed-list";
+import { RetrySendControl } from "./retry-send-control";
 
 export const dynamic = "force-dynamic";
 
@@ -102,7 +104,7 @@ async function toCardProps(
   };
 }
 
-function HistoryRow({ row }: { row: InboxHistoryRow }) {
+function HistoryRow({ row, viewerCanStamp }: { row: InboxHistoryRow; viewerCanStamp: boolean }) {
   return (
     <div className="glass flex flex-wrap items-start gap-2.5 rounded-xl px-4 py-3">
       <span
@@ -118,7 +120,9 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
                 // authority (approve/reject remain the stamps), so red would
                 // overclaim.
                 "border-rule bg-paper-deep text-ink-soft"
-              : "border-stamp/40 bg-stamp/10 text-stamp"
+              : // Rejected AND send_failed wear red — a refusal by a human, a
+                // refusal by the provider: both are fail-loud states here.
+                "border-stamp/40 bg-stamp/10 text-stamp"
         )}
       >
         {row.action === "approved"
@@ -127,7 +131,9 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
             ? "⇢ Superseded"
             : row.action === "withdrawn"
               ? "⤺ Withdrawn"
-              : "✗ Rejected"}
+              : row.action === "send_failed"
+                ? "✗ Send failed"
+                : "✗ Rejected"}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5 text-[13px]">
@@ -159,6 +165,19 @@ function HistoryRow({ row }: { row: InboxHistoryRow }) {
           ) : (
             <p className="mt-1 text-[12px] text-stamp">&ldquo;{row.reason}&rdquo;</p>
           )
+        ) : null}
+        {/* Defect-pair hotfix (2 Aug 2026): a still-failed send offers its
+            RETRY here too — same act as the thread and the timeline; offered
+            only while the row is failed and to stamp authority (116). */}
+        {row.action === "send_failed" && row.commStatus === "failed" && viewerCanStamp ? (
+          <div className="mt-1.5">
+            <RetrySendControl communicationId={row.communicationId} />
+          </div>
+        ) : null}
+        {row.action === "send_failed" && row.commStatus && row.commStatus !== "failed" ? (
+          <p className="mt-1 font-mono text-[10px] tracking-wide text-ink-soft uppercase">
+            since recovered — now {row.commStatus}
+          </p>
         ) : null}
         <div className="mt-1.5 flex gap-3 font-mono text-[10px] tracking-wide uppercase">
           {row.threadId ? (
@@ -250,11 +269,12 @@ export default async function InboxPage({
 
   // WS5a: the owed list reads a WINDOW — oldest wait first (submitted_at per
   // D134), default 20; card detail is fetched for the page only.
-  const [{ membershipRole }, inboxPage, history, isManager] = await Promise.all([
+  const [{ membershipRole }, inboxPage, history, isManager, viewerCanStamp] = await Promise.all([
     getAppContext(),
     getInboxPage({ page: requestedPage, pageSize: requestedSize }),
     getInboxHistory(days, Number.isFinite(historyPage) ? historyPage : 1),
     getIsManager(),
+    getViewerStampAuthority(),
   ]);
   const cards = await Promise.all(
     inboxPage.rows.map((row) => toCardProps(row, membershipRole === "owner", isManager))
@@ -336,7 +356,7 @@ export default async function InboxPage({
           ) : (
             <div className="flex max-w-[860px] flex-col gap-2.5">
               {history.rows.map((row) => (
-                <HistoryRow key={row.eventId} row={row} />
+                <HistoryRow key={row.eventId} row={row} viewerCanStamp={viewerCanStamp} />
               ))}
               {/* WS5d: History reads a window too — default 20, counted by
                   aggregate. */}
