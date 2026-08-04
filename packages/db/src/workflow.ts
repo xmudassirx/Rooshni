@@ -1367,11 +1367,11 @@ async function executeDraftComm(
     ? step.config.companion_channels
     : [];
   const companions: Record<string, string> = {};
-  // JUDGMENT (Session 27, D158c): the WhatsApp companion carries the
-  // APPROVED intro template VERBATIM (118/119) — a cold introduction. A
-  // returning lead must never receive it, so the companion stands down for
-  // successor enquiries; recorded in the step outcome (the D146 precedent:
-  // silently correct, stated where the run's books are kept).
+  // JUDGMENT: the WhatsApp companion carries the APPROVED intro template
+  // VERBATIM (118/119) — a cold introduction; a returning lead must never
+  // receive it, so the companion stands down for successor enquiries,
+  // recorded in the step outcome (the D146 precedent: silently correct,
+  // stated where the run's books are kept) (Session 27, D158c).
   let returningEngagement = false;
   if (companionChannels.length > 0) {
     const rows = await q<{ predecessor_engagement_id: string | null; attributes: Record<string, unknown> | null }[]>(

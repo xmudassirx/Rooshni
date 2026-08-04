@@ -5881,6 +5881,9 @@ async function main() {
 
     // D161(a): the mapping's settings shape — the live Spouse form's id maps
     // to the declared spouse_family key; an unmapped form resolves nothing.
+    // JUDGMENT: D161(a)'s "defaults to spouse" maps to the declared
+    // vocabulary key `spouse_family` — the installed v3 route list carries
+    // no bare `spouse` key (Session 27 pre-flight).
     const settings = {
       meta: { form_route_defaults: { "751097307189312": { route: "spouse_family", label: "Spouse Visa 23/04/2024" } } },
     };

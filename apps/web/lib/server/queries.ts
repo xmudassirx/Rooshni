@@ -3246,10 +3246,12 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
   const visaRoute = typeof attributes.visa_route === "string" ? attributes.visa_route : null;
   const visaRouteSource =
     typeof attributes.visa_route_source === "string" ? attributes.visa_route_source : null;
-  // D160: "classifying" is honest ONLY while a classification may still
-  // arrive — a live run that has not yet produced an agent draft, or an
-  // armed settle timer. A run that drafted and abstained leaves the truth
-  // "not yet classified".
+  // JUDGMENT: D160's "while a run is in flight" reads as "while a
+  // classification may still ARRIVE" — a live run that has not yet produced
+  // an agent draft, or an armed settle timer. A run that drafted and
+  // abstained leaves the honest resting truth "not yet classified"; a
+  // 12-day nudge run would otherwise say "classifying" about a read Light
+  // already declined (Session 27 pre-flight).
   const agentDrafted = (comms.data ?? []).some((c) => {
     const by = c.drafted_by_actor_id ? actors.get(c.drafted_by_actor_id) : undefined;
     return by?.type === "agent";

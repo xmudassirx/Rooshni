@@ -39,11 +39,12 @@ export interface KnownChannelRow {
 
 /**
  * Deterministic known-contact resolution: exact email match first, then
- * exact phone. JUDGMENT (pre-flight, Session 27): an AMBIGUOUS match (two or
- * more distinct contacts behind the priority channel) falls to the next
- * channel, and if still ambiguous resolves to NO ONE — a regulated firm
- * never merges identities on a guess; the submission then processes as a
- * fresh lead.
+ * exact phone.
+ * JUDGMENT: an AMBIGUOUS match (two or more distinct contacts behind the
+ * priority channel) falls to the next channel, and if still ambiguous
+ * resolves to NO ONE — a regulated firm never merges identities on a
+ * guess; the submission then processes as a fresh lead (Session 27
+ * pre-flight, D158b).
  */
 export function resolveKnownContactId(
   rows: KnownChannelRow[],
@@ -232,10 +233,11 @@ async function loadPredecessor(db: SupabaseClient, contactId: string): Promise<P
   };
 }
 
-/** The contact's existing thread (D158a), resolved deterministically:
- * JUDGMENT (pre-flight, Session 27) — the target enquiry's email thread
- * (the ingest-created primary) first, else the contact's most recently
- * active thread; created fresh only if the contact somehow has none. */
+/** The contact's existing thread (D158a), resolved deterministically.
+ * JUDGMENT: "the contact's existing thread" reads as the target enquiry's
+ * email thread (the ingest-created primary) first, else the contact's most
+ * recently active thread; created fresh only if the contact somehow has
+ * none (Session 27 pre-flight). */
 async function resolveMarkerThread(
   db: SupabaseClient,
   binding: MetaBusinessBinding,
@@ -376,9 +378,9 @@ export async function processReturningLead(
     // -- Open fork: the resubmission events onto the existing enquiry. ------
     mode = "resubmission";
     targetEngagementId = predecessor.id;
-    // JUDGMENT (pre-flight, Session 27): attributes.form_answers moves to the
-    // NEWEST submission — the current details are what drafting composes
-    // against; the ledger event below keeps the previous values.
+    // JUDGMENT: attributes.form_answers moves to the NEWEST submission —
+    // the current details are what drafting composes against; the ledger
+    // event below keeps the previous values (Session 27, D158d open fork).
     const nextAttributes = { ...predecessor.attributes, form_answers: newAnswers };
     const { error: updError } = await db
       .from("engagements")
@@ -589,11 +591,16 @@ export async function processReturningLead(
     },
   });
 
-  // -- The returning draft's trigger. Open fork: the settle window arms and
-  // the Conversations sweep composes the returning-context reply (D158c,
-  // "settle window + stamp as ever"). Closed fork: the successor's enrolled
-  // run owns the draft — its intro step composes with returning context
-  // (workflow.ts); arming the settle timer too would invite a second draft.
+  // -- The returning draft's trigger.
+  // JUDGMENT: the closed fork's returning draft IS the enrolled run's intro
+  // step, composed with returning context (deduced from the session order:
+  // "NEW enquiries enrol on the ACTIVE workflow definition" — the run's
+  // intro/nudge/close machinery drives the fork, and no cold intro may ever
+  // be sent, so the intro composition itself becomes returning-aware; nudges
+  // anchor after its stamp exactly as ever, D48). The open fork rides the
+  // settle window verbatim per D158c: the timer arms here and the
+  // Conversations sweep composes the reply. Arming the settle timer on the
+  // closed fork too would invite a second draft (Session 27 pre-flight).
   if (mode === "resubmission") {
     await armSettleTimer(db, marker.thread.id);
   }
