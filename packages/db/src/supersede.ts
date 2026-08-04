@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { scaleDurationMs } from "@rooshni/config";
 import { emitEvent } from "./events";
-import { DRAFTING_EVENT_KINDS, INBOUND_EVENT_KINDS } from "./event-kinds";
+import { DRAFTING_EVENT_KINDS, INBOUND_EVENT_KINDS, RETURNING_MARKER_KIND } from "./event-kinds";
+import { contactReceivedAnyAttachment } from "./route-guides";
+import { loadRouteOptions, setEngagementRoute } from "./routes";
 import {
   composeReplyDraft,
   composeWithRegisterRetry,
@@ -297,7 +299,26 @@ async function processSettledThread(
   const messages = await loadThreadMessages(db, thread.id);
   const lastFirmAt = [...messages].reverse().find((m) => m.role === "firm")?.at ?? null;
   const unanswered = messages.filter((m) => m.role === "client" && (!lastFirmAt || m.at > lastFirmAt));
-  if (unanswered.length === 0) {
+
+  // Session 27 (D158c): a returning-lead marker newer than the last firm
+  // message is a settled burst of its own — the resubmission needs answering
+  // even though the marker (direction internal) never enters the transcript.
+  const markerRows = await q<{ id: string; occurred_at: string; attributes: Record<string, unknown> }[]>(
+    db
+      .from("communications")
+      .select("id, occurred_at, attributes")
+      .eq("thread_id", thread.id)
+      .eq("direction", "internal")
+      .eq("attributes->>kind", RETURNING_MARKER_KIND)
+      .is("archived_at", null)
+      .order("occurred_at", { ascending: false })
+      .limit(1),
+    "returning marker lookup"
+  );
+  const marker = markerRows[0] ?? null;
+  const markerActive = Boolean(marker && (!lastFirmAt || marker.occurred_at > lastFirmAt));
+
+  if (unanswered.length === 0 && !markerActive) {
     report.skipped += 1;
     return;
   }
@@ -370,6 +391,8 @@ async function processSettledThread(
   let enquiryTitle = `${fullName} — conversation`;
   let stageLabel = "";
   let formAnswers: FormAnswer[] = [];
+  let engagementRoute: string | null = null;
+  let engagementRouteSource: string | null = null;
   if (thread.engagement_id) {
     const engagements = await q<
       { title: string; attributes: Record<string, unknown> | null; stage: { label: string } | { label: string }[] | null }[]
@@ -385,12 +408,28 @@ async function processSettledThread(
       enquiryTitle = engagements[0].title;
       const stage = Array.isArray(engagements[0].stage) ? engagements[0].stage[0] : engagements[0].stage;
       stageLabel = stage?.label ?? "";
-      formAnswers = ((engagements[0].attributes ?? {}) as { form_answers?: FormAnswer[] }).form_answers ?? [];
+      const attrs = (engagements[0].attributes ?? {}) as Record<string, unknown>;
+      formAnswers = (attrs as { form_answers?: FormAnswer[] }).form_answers ?? [];
+      engagementRoute = typeof attrs.visa_route === "string" ? attrs.visa_route : null;
+      engagementRouteSource = typeof attrs.visa_route_source === "string" ? attrs.visa_route_source : null;
     }
   }
 
   const burstText = unanswered.map((m) => m.body).join("\n");
-  const retrieval = await retrieveKnowledgeEntries(db, thread.business_id, `${burstText}\n${enquiryTitle}`);
+  // Session 27 (D158c): a settled returning marker contributes the new
+  // submission's answers to retrieval — with no unanswered client message,
+  // the resubmission IS the burst.
+  const markerText =
+    markerActive && marker
+      ? ((marker.attributes?.marker ?? {}) as { answers?: Array<{ label?: string; value?: string }> }).answers
+          ?.map((a) => `${a.label ?? ""}: ${a.value ?? ""}`)
+          .join("\n") ?? ""
+      : "";
+  const retrieval = await retrieveKnowledgeEntries(
+    db,
+    thread.business_id,
+    `${burstText}\n${markerText}\n${enquiryTitle}`
+  );
   const noGoRules = await (async () => {
     const rows = await q<{ template: { no_go_rules: unknown } | { no_go_rules: unknown }[] | null }[]>(
       db
@@ -405,6 +444,38 @@ async function processSettledThread(
     const rules = template?.no_go_rules;
     return Array.isArray(rules) ? rules.map((r) => String(r)) : [];
   })();
+
+  // Session 27 (D158c): the returning register when the marker is what
+  // settled — acknowledge prior contact, reference the route, no cold
+  // intro, no duplicate booklet (never re-offer a guide they already hold).
+  let returning: ComposeReplyInput["returning"] = null;
+  if (markerActive && marker) {
+    const markerFacts = (marker.attributes?.marker ?? {}) as {
+      form_label?: string;
+      submitted_at?: string;
+      answers?: Array<{ label?: string; value?: string; previous_value?: string | null; changed?: boolean }>;
+    };
+    const bookletAlreadySent = await contactReceivedAnyAttachment(db, thread.contact_id);
+    returning = {
+      prior_route: engagementRoute,
+      form_label: markerFacts.form_label ?? null,
+      resubmitted_at: markerFacts.submitted_at ?? marker.occurred_at,
+      changed_lines: (markerFacts.answers ?? [])
+        .filter((a) => a.changed)
+        .map(
+          (a) =>
+            `${a.label ?? "Detail"}: ${a.value ?? ""}${a.previous_value != null ? ` (was ${a.previous_value})` : " (new)"}`
+        ),
+      booklet_already_sent: bookletAlreadySent,
+    };
+  }
+
+  // Session 27 (D161b): classification rides this call when the route is
+  // unset or default-sourced.
+  const routeOptions =
+    thread.engagement_id && (!engagementRoute || engagementRouteSource === "form_default")
+      ? await loadRouteOptions(db, thread.business_id)
+      : null;
 
   const composeInput: ComposeReplyInput = {
     business_name: businessName,
@@ -421,6 +492,8 @@ async function processSettledThread(
     booking_url: resolveBookingUrl(settings),
     thread_messages: messages,
     new_inbound_count: unanswered.length,
+    returning,
+    route_options: routeOptions?.length ? routeOptions : null,
   };
 
   let composed: ComposeDraftResult;
@@ -642,6 +715,28 @@ async function processSettledThread(
       };
     })(),
   });
+
+  // Session 27 (D161b): Light's confident route read — from the SAME call's
+  // output — lands through the 0042 door, evented with its stated reason. A
+  // precedence refusal (a human or form answer won a race) is the ladder
+  // working, not an error.
+  if (thread.engagement_id && composed.route_classification?.key && routeOptions?.length) {
+    try {
+      await setEngagementRoute(db, {
+        business_id: thread.business_id,
+        engagement_id: thread.engagement_id,
+        route: composed.route_classification.key,
+        source: "light",
+        actor_id: drafter,
+        reason: composed.route_classification.reason,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/precedence/i.test(message)) {
+        report.errors.push(`thread ${thread.id}: route classification write failed — ${message}`);
+      }
+    }
+  }
 
   // WS2: a soft-cap crossing lands once per month on The Record — never a block.
   if (budgetBefore) {

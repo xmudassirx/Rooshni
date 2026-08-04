@@ -21,7 +21,8 @@ import { assessAiBudget, guardGenerationBudget, maybeEmitSoftCapCrossed } from "
 import { priceGeneration } from "./model-router";
 import { resolveSignOffText } from "./sign-off";
 import { resolveBookingUrl, substituteBookingLink } from "./booking-link";
-import { declareAttachment, findPublishedRouteGuide, type RouteGuide } from "./route-guides";
+import { contactAlreadyReceivedFile, declareAttachment, findPublishedRouteGuide, type RouteGuide } from "./route-guides";
+import { loadRouteOptions, setEngagementRoute } from "./routes";
 import type {
   EventRow,
   RealDuration,
@@ -454,6 +455,9 @@ interface EngagementFacts {
   template_type_id: string;
   attributes: Record<string, unknown>;
   attribution: Record<string, unknown> | null;
+  /** Session 27 (D158): set when this enquiry succeeded a closed one for a
+   * returning contact — the intro composes with returning context. */
+  predecessor_engagement_id: string | null;
   stage: { label: string } | null;
   contact: { id: string; display_name: string; given_name: string | null } | null;
 }
@@ -468,6 +472,7 @@ async function loadEngagementFacts(db: SupabaseClient, engagementId: string): Pr
       template_type_id: string;
       attributes: Record<string, unknown>;
       attribution: Record<string, unknown> | null;
+      predecessor_engagement_id: string | null;
       stage: { label: string } | { label: string }[] | null;
     }[]
   >(
@@ -475,7 +480,7 @@ async function loadEngagementFacts(db: SupabaseClient, engagementId: string): Pr
       .from("engagements")
       // Session 15: attributes carry the lead's form answers (PR-2) — the
       // drafting engine composes against what the lead SAID.
-      .select("id, business_id, title, owner_actor_id, template_type_id, attributes, attribution, stage:stage_definitions(label)")
+      .select("id, business_id, title, owner_actor_id, template_type_id, attributes, attribution, predecessor_engagement_id, stage:stage_definitions(label)")
       .eq("id", engagementId)
       .limit(1),
     "engagement lookup"
@@ -916,10 +921,22 @@ async function executeDraftComm(
         guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
         const retrieval = await retrieveKnowledgeEntries(db, run.business_id, leadText);
         const noGoRules = await loadNoGoRules(db, run.business_id);
+
+        // Session 27 (D158c): a successor enquiry for a returning contact
+        // composes its intro WITH returning context — acknowledge prior
+        // contact, reference the route, no cold introduction.
+        const returningAttrs = (facts.attributes?.returning ?? null) as {
+          resubmitted_at?: string;
+          form_label?: string;
+          changed?: Array<{ label?: string; value?: string; previous_value?: string | null }>;
+        } | null;
+        const isReturning = Boolean(facts.predecessor_engagement_id || returningAttrs);
+
         // PR-i (Session 19): the intro email carries the route-matched
         // PUBLISHED guide when one exists — the enquiry's declared route
         // first, then the lead's own words. No guide = no attachment, never
         // a placeholder; the pre-flight verifies the file before the stamp.
+        let bookletAlreadySent = false;
         if (templateKey.startsWith("intro") && picked.channel === "email") {
           const declaredRoute =
             typeof facts.attributes?.visa_route === "string" ? [facts.attributes.visa_route as string] : [];
@@ -927,7 +944,27 @@ async function executeDraftComm(
             ...declaredRoute,
             ...retrieval.route_matches,
           ]);
+          // D158c: no duplicate booklet — the EXACT document this contact
+          // already received is never attached (or offered) again; a guide
+          // they never received may still ride.
+          if (guide && isReturning && facts.contact) {
+            bookletAlreadySent = await contactAlreadyReceivedFile(db, facts.contact.id, guide.file.id);
+            if (bookletAlreadySent) guide = null;
+          }
         }
+
+        // Session 27 (D161b): classification rides THIS drafting call when
+        // the route is unset or default-sourced — never over a human, a form
+        // answer, or Light's own earlier read.
+        const routeSource =
+          typeof facts.attributes?.visa_route_source === "string"
+            ? (facts.attributes.visa_route_source as string)
+            : null;
+        const currentRoute =
+          typeof facts.attributes?.visa_route === "string" ? (facts.attributes.visa_route as string) : null;
+        const routeOptions =
+          !currentRoute || routeSource === "form_default" ? await loadRouteOptions(db, run.business_id) : null;
+
         composeInput = {
           business_name: vars.business_name ?? "",
           sign_off: vars.sign_off ?? vars.business_name ?? "",
@@ -943,6 +980,19 @@ async function executeDraftComm(
           retrieval,
           booking_url: bookingUrl,
           attachment: guide ? { title: guide.title, filename: guide.file.filename } : null,
+          returning: isReturning
+            ? {
+                prior_route: currentRoute,
+                form_label: returningAttrs?.form_label ?? null,
+                resubmitted_at: returningAttrs?.resubmitted_at ?? "recently",
+                changed_lines: (returningAttrs?.changed ?? []).map(
+                  (c) =>
+                    `${c.label ?? "Detail"}: ${c.value ?? ""}${c.previous_value != null ? ` (was ${c.previous_value})` : " (new)"}`
+                ),
+                booklet_already_sent: bookletAlreadySent,
+              }
+            : null,
+          route_options: routeOptions?.length ? routeOptions : null,
         };
         // Session 25 (register retry-once, founder-ordered): a register-screen
         // breach retries exactly ONCE with the violation fed back — evented on
@@ -1280,6 +1330,28 @@ async function executeDraftComm(
       }
     }
 
+    // Session 27 (D161b): Light's confident route read — from the SAME
+    // call's output — lands through the 0042 door, evented with its stated
+    // reason. A precedence refusal (a human or form answer won a race) is
+    // the ladder working, not an error.
+    if (composed?.route_classification?.key && composeInput?.route_options?.length) {
+      try {
+        await setEngagementRoute(db, {
+          business_id: run.business_id,
+          engagement_id: run.engagement_id,
+          route: composed.route_classification.key,
+          source: "light",
+          actor_id: drafter,
+          reason: composed.route_classification.reason,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/precedence/i.test(message)) {
+          report.errors.push(`step ${stepRun.id}: route classification write failed — ${message}`);
+        }
+      }
+    }
+
     await submitCommunication(db, {
       business_id: run.business_id,
       communication_id: comm.id,
@@ -1295,9 +1367,30 @@ async function executeDraftComm(
     ? step.config.companion_channels
     : [];
   const companions: Record<string, string> = {};
+  // JUDGMENT (Session 27, D158c): the WhatsApp companion carries the
+  // APPROVED intro template VERBATIM (118/119) — a cold introduction. A
+  // returning lead must never receive it, so the companion stands down for
+  // successor enquiries; recorded in the step outcome (the D146 precedent:
+  // silently correct, stated where the run's books are kept).
+  let returningEngagement = false;
+  if (companionChannels.length > 0) {
+    const rows = await q<{ predecessor_engagement_id: string | null; attributes: Record<string, unknown> | null }[]>(
+      db
+        .from("engagements")
+        .select("predecessor_engagement_id, attributes")
+        .eq("id", run.engagement_id)
+        .limit(1),
+      "companion returning lookup"
+    );
+    returningEngagement = Boolean(rows[0]?.predecessor_engagement_id || rows[0]?.attributes?.returning);
+  }
   for (const channel of companionChannels) {
     if (channel === comm.channel) {
       companions[channel] = "skipped: the primary draft already covers this channel";
+      continue;
+    }
+    if (returningEngagement) {
+      companions[channel] = "skipped: returning lead — the approved intro template is a cold introduction (D158c)";
       continue;
     }
     if (existingCompanionChannels.has(channel)) {

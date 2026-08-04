@@ -188,3 +188,71 @@ export function declareAttachment(guide: RouteGuide): DeclaredAttachment {
     content_item_id: guide.content_item_id,
   };
 }
+
+/**
+ * Session 27 (D158c): has the firm ever dispatched ANY attachment to this
+ * contact? Gates the reply register's "never offer the guide again" line —
+ * a contact who has received a document is not offered it afresh.
+ */
+export async function contactReceivedAnyAttachment(db: SupabaseClient, contactId: string): Promise<boolean> {
+  const { data: sent, error } = await db
+    .from("communications")
+    .select("id")
+    .eq("contact_id", contactId)
+    .eq("direction", "outbound")
+    .in("status", ["sent", "delivered", "read"])
+    .is("archived_at", null);
+  if (error) throw new Error(`sent-communications lookup failed: ${error.message}`);
+  const ids = (sent ?? []).map((r) => r.id as string);
+  if (!ids.length) return false;
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const { data: links, error: linkError } = await db
+      .from("file_links")
+      .select("id")
+      .eq("entity_type", "communication")
+      .eq("role", "attachment")
+      .in("entity_id", chunk)
+      .limit(1);
+    if (linkError) throw new Error(`attachment history lookup failed: ${linkError.message}`);
+    if ((links ?? []).length > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Session 27 (D158c, no duplicate booklet): has this EXACT file already been
+ * dispatched to the contact? True when any of the contact's genuinely sent
+ * outbound messages carries a file_links attachment row for the file. A
+ * guide the contact never received is not a duplicate.
+ */
+export async function contactAlreadyReceivedFile(
+  db: SupabaseClient,
+  contactId: string,
+  fileId: string
+): Promise<boolean> {
+  const { data: sent, error } = await db
+    .from("communications")
+    .select("id")
+    .eq("contact_id", contactId)
+    .eq("direction", "outbound")
+    .in("status", ["sent", "delivered", "read"])
+    .is("archived_at", null);
+  if (error) throw new Error(`sent-communications lookup failed: ${error.message}`);
+  const ids = (sent ?? []).map((r) => r.id as string);
+  if (!ids.length) return false;
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const { data: links, error: linkError } = await db
+      .from("file_links")
+      .select("id")
+      .eq("file_id", fileId)
+      .eq("entity_type", "communication")
+      .eq("role", "attachment")
+      .in("entity_id", chunk)
+      .limit(1);
+    if (linkError) throw new Error(`attachment history lookup failed: ${linkError.message}`);
+    if ((links ?? []).length > 0) return true;
+  }
+  return false;
+}

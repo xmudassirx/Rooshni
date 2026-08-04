@@ -179,4 +179,43 @@ export const BILLING_EVENT_KINDS = {
   softCapCrossed: "billing.soft_cap_crossed",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 27 — the returning-leads engine (D158). Same JUDGMENT as above:
+ * kinds are TS constants, the single truth every emitter imports.
+ */
+export const RETURNING_EVENT_KINDS = {
+  /** A known contact submitted a form again while their enquiry is OPEN —
+   * the resubmission lands on that enquiry's timeline (D158d, open fork).
+   * Payload: leadgen id, form id/label, the answers, the changed fields. */
+  resubmissionReceived: "engagement.resubmission_received",
+  /** A known contact returned after their enquiry closed — a NEW enquiry
+   * was opened; this kind lands on the PREDECESSOR with the successor's id
+   * (D158d, closed fork — the link visible on the old timeline). */
+  successorOpened: "engagement.successor_opened",
+  /** The same moment on the SUCCESSOR: opened as a returning lead, its
+   * predecessor's id in the payload (the link visible on the new timeline). */
+  openedFromPredecessor: "engagement.opened_from_predecessor",
+  /** The system marker posted into the contact's existing thread (D158a) —
+   * a fact, not Light's act and not a human's; neutral chrome everywhere. */
+  returningMarkerPosted: "communication.returning_marker_posted",
+} as const satisfies Record<string, EventAction>;
+
+/** Session 27 (D158a): the marker's kind marker on the communications row
+ * (attributes.kind). Declared here — imported by both the ingest side and
+ * the settle sweep without a module cycle. Not an event kind. */
+export const RETURNING_MARKER_KIND = "returning_lead_marker";
+
+/**
+ * Session 27 — route classification, complete shape (D161). Same JUDGMENT
+ * as above. One kind for every source: the payload's `source` field is the
+ * provenance (human | form_answer | light | form_default) and the surfaces
+ * chip from it — gold for Light, neutral otherwise.
+ */
+export const ROUTE_EVENT_KINDS = {
+  /** The enquiry's visa route was set or reclassified through the 0042
+   * door. Payload: route, source, reason (Light's stated reason, or the
+   * human's optional one), previous_route, previous_source. */
+  routeSet: "engagement.route_set",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];
