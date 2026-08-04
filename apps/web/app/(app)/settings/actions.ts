@@ -360,6 +360,78 @@ export async function setConversionsAction(
   return { error: null, saved: true };
 }
 
+export interface MetaFormRoutesActionState {
+  error: string | null;
+  saved?: boolean;
+}
+
+/**
+ * Session 27 (D161a) — the per-form default route mapping's one door:
+ * Settings → Integrations, under the Meta row. A form with no route
+ * question ingests its default (source form_default, the ladder's floor).
+ * Owner-gated like the Conversions switch; one settings merge; evented
+ * (settings.updated — form ids and route keys are configuration, never
+ * credentials). An empty route removes the form's mapping.
+ */
+export async function setMetaFormRouteAction(
+  _prev: MetaFormRoutesActionState,
+  formData: FormData
+): Promise<MetaFormRoutesActionState> {
+  const formId = String(formData.get("form_id") ?? "").trim();
+  const route = String(formData.get("route") ?? "").trim();
+  const label = String(formData.get("form_label") ?? "").trim();
+  if (!/^\d{5,20}$/.test(formId)) {
+    return { error: "The form id is the numeric id from Meta's form (digits only)." };
+  }
+
+  const { db, business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "The form mapping is the owner's pen — ask the owner to change it." };
+  }
+
+  const { data: bizRow, error: readError } = await db
+    .from("businesses")
+    .select("settings")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (readError || !bizRow) return { error: `Settings read failed: ${readError?.message ?? "no row"}` };
+
+  const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
+  const meta = { ...((settings.meta as Record<string, unknown>) ?? {}) };
+  const defaults = { ...((meta.form_route_defaults as Record<string, unknown>) ?? {}) };
+  if (route === "") {
+    delete defaults[formId];
+  } else {
+    defaults[formId] = { route, ...(label ? { label } : {}) };
+  }
+  meta.form_route_defaults = defaults;
+  settings.meta = meta;
+
+  const { error: writeError } = await db
+    .from("businesses")
+    .update({ settings })
+    .eq("id", business.id);
+  if (writeError) return { error: `Save failed: ${writeError.message}` };
+
+  await emitEvent(db, {
+    business_id: business.id,
+    actor_id: actor.id,
+    action: FIRST_LIGHT_EVENT_KINDS.settingsUpdated,
+    entity_type: "business",
+    entity_id: business.id,
+    payload: {
+      keys: ["meta.form_route_defaults"],
+      form_id: formId,
+      route: route || null,
+      form_label: label || null,
+      ...(route === "" ? { removed: true } : {}),
+    },
+  });
+
+  revalidatePath("/settings");
+  return { error: null, saved: true };
+}
+
 /**
  * PR-i (Session 19): store a route guide's document — bytes to the private
  * Supabase Storage bucket (service client; files.storage_key has always

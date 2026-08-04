@@ -33,6 +33,47 @@ export function describeEvent(action: string, payload: Record<string, unknown>):
         .filter(Boolean)
         .join(" ");
     }
+    // Session 27 (D158): the returning-leads vocabulary.
+    case "engagement.resubmission_received": {
+      const form = str("form_label");
+      const changed = Array.isArray(payload.changed) ? payload.changed.length : 0;
+      return [
+        "the client submitted the form again",
+        form ? `— ${form}` : null,
+        changed > 0 ? `· ${changed} detail${changed === 1 ? "" : "s"} changed` : "· no details changed",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
+    case "engagement.successor_opened":
+      return "a returning submission opened a newer enquiry — linked below";
+    case "engagement.opened_from_predecessor":
+      return "opened by a returning submission — the previous enquiry is linked";
+    case "communication.returning_marker_posted": {
+      const form = str("form_label");
+      return `system marker posted into the conversation${form ? ` — ${form}` : ""}`;
+    }
+    // Session 27 (D161): route classification, every source honestly named.
+    case "engagement.route_set": {
+      const route = str("route");
+      const routeSource = str("source");
+      const reason = str("reason");
+      const sourceLine =
+        routeSource === "light"
+          ? "set by Light"
+          : routeSource === "human"
+            ? "reclassified by hand"
+            : routeSource === "form_answer"
+              ? "from the form's own answer"
+              : "per-form default";
+      return [
+        `route set${route ? ` → ${route.replace(/_/g, " ")}` : ""}`,
+        `· ${sourceLine}`,
+        reason ? `— “${reason}”` : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
     case "engagement.stage_changed": {
       const to = str("to_stage_key") ?? str("to_stage");
       const auto = str("reason") === "first_outbound_dispatched";
