@@ -88,6 +88,16 @@ import {
   MAX_LIST_WINDOW,
   pageRange,
 } from "../src/read-policy";
+import {
+  buildMarkerBody,
+  diffFormAnswers,
+  resolveFormRouteDefault,
+  resolveKnownContactId,
+  routeFromFormAnswers,
+} from "../src/returning-leads";
+import { lightMaySetRoute, routeSourceRank } from "../src/routes";
+import { normaliseRouteClassification } from "../src/drafting";
+import { parseReturningMarker } from "../../../apps/web/lib/returning-marker";
 
 // Timers are proven at compressed time (PLAYBOOK §4.4) — the harness pins the
 // dev scale so wait-step scheduling is deterministic here regardless of the
@@ -5326,6 +5336,654 @@ async function main() {
       const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
       if (source.includes("⎘")) throw new Error(`${file} still renders the ⎘ stand-in`);
       if (wantsIcon && !source.includes("Paperclip")) throw new Error(`${file} lost its paperclip icon`);
+    }
+  });
+
+  // --- Session 27: returning leads + the three post-close rulings ----------
+  console.log("\nSession 27 — returning leads (D158) + rulings D159/D160/D161:");
+
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await db.exec(`set request.jwt.claims = ''`);
+
+  // A returning-lead fixture: a known contact with a consented email channel
+  // and an existing enquiry + thread in the fixture business.
+  const s27Contact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name, given_name, status, locale)
+     values ($1, $2, 'person', 'Rukhsana Bibi', 'Rukhsana', 'active', 'en-GB') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s27ContactId = s27Contact.rows[0]!.id;
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'rukhsana@example.test', true, '{"transactional": true, "marketing": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s27ContactId]
+  );
+  const s27Eng = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id, external_refs)
+     values ($1, $2, $3, 'Rukhsana Bibi — enquiry', $4, $5,
+             '[{"system":"meta","external_id":"s27_lead_1"}]'::jsonb) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s27EngId = s27Eng.rows[0]!.id;
+  const s27Thread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, engagement_id, channel, subject)
+     values ($1, $2, $3, $4, 'email', 'Rukhsana Bibi — enquiry') returning id`,
+    [f.business_id, f.agent_id, s27ContactId, s27EngId]
+  );
+  const s27ThreadId = s27Thread.rows[0]!.id;
+
+  await expectOk("the frontier's ruled unit: the SAME leadgen id is claimed once, ever — the webhook claim and the ingest guard", async () => {
+    await db.query(
+      `insert into public.meta_webhook_events (leadgen_id, page_id, payload) values ('s27_lead_1', 'p', '{}'::jsonb)`
+    );
+    let refused = false;
+    try {
+      await db.query(
+        `insert into public.meta_webhook_events (leadgen_id, page_id, payload) values ('s27_lead_1', 'p', '{}'::jsonb)`
+      );
+    } catch (err) {
+      refused = /duplicate key/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!refused) throw new Error("a replayed leadgen id was claimed twice");
+    // The ingest guard's own shape: the engagement carrying the ref is found.
+    const found = await db.query<{ id: string }>(
+      `select id from public.engagements
+       where external_refs @> '[{"system":"meta","external_id":"s27_lead_1"}]'::jsonb`
+    );
+    if (!found.rows.some((r) => r.id === s27EngId)) {
+      throw new Error("the same-submission idempotency lookup cannot find the claimed ref");
+    }
+  });
+
+  await expectOk("a NEW leadgen id on a known contact resolves to that contact — deterministically, never by guess", async () => {
+    const rows = [
+      { contact_id: "c1", channel: "email", value: "a@x.test" },
+      { contact_id: "c1", channel: "phone", value: "+441111" },
+      { contact_id: "c2", channel: "email", value: "b@x.test" },
+    ];
+    if (resolveKnownContactId(rows, "A@X.TEST", null) !== "c1") throw new Error("an exact email match did not resolve");
+    if (resolveKnownContactId(rows, null, "+441111") !== "c1") throw new Error("an exact phone match did not resolve");
+    if (resolveKnownContactId(rows, "nobody@x.test", "+449999") !== null) throw new Error("a stranger resolved to someone");
+    // Ambiguity falls through, then resolves to no one — never a merge guess.
+    const clash = [
+      { contact_id: "c1", channel: "email", value: "shared@x.test" },
+      { contact_id: "c2", channel: "email", value: "shared@x.test" },
+      { contact_id: "c2", channel: "phone", value: "+442222" },
+    ];
+    if (resolveKnownContactId(clash, "shared@x.test", "+442222") !== "c2") {
+      throw new Error("an ambiguous email did not fall through to the phone match");
+    }
+    if (resolveKnownContactId(clash, "shared@x.test", null) !== null) {
+      throw new Error("an ambiguous match resolved instead of standing down");
+    }
+    // File tripwire: ingest consults the resolver BEFORE any contact insert
+    // and routes known contacts through the returning path.
+    const metaSource = readFileSync(resolve(import.meta.dirname, "../src/meta.ts"), "utf8");
+    const resolveAt = metaSource.indexOf("findKnownContactId(db");
+    const contactInsertAt = metaSource.indexOf(`.from("contacts")`);
+    if (resolveAt === -1 || !metaSource.includes("processReturningLead")) {
+      throw new Error("ingest no longer routes known contacts through the returning path");
+    }
+    if (contactInsertAt !== -1 && resolveAt > contactInsertAt) {
+      throw new Error("ingest creates the contact before resolving whether it already exists");
+    }
+  });
+
+  await expectOk("the system marker is a neutral internal fact — thread to top, unread badge, arrival tone, changed fields highlighted", async () => {
+    const diff = diffFormAnswers(
+      [
+        { name: "email", label: "Email", value: "rukhsana@example.test" },
+        { name: "phone_number", label: "Phone number", value: "+92306999" },
+      ],
+      [
+        { name: "email", label: "Email", value: "rukhsana@example.test" },
+        { name: "phone_number", label: "Phone number", value: "+44777111" },
+        { name: "situation", label: "Situation", value: "Husband refused entry" },
+      ]
+    );
+    if (diff.length !== 3) throw new Error("the diff lost rows");
+    if (diff[0]!.changed) throw new Error("an unchanged field read as changed");
+    if (!diff[1]!.changed || diff[1]!.previous_value !== "+92306999") throw new Error("a changed field lost its previous value");
+    if (!diff[2]!.changed || diff[2]!.previous_value !== null) throw new Error("a new field did not read as new");
+    const body = buildMarkerBody({ form_label: "Spouse Visa 23/04/2024", submitted_at: "2026-08-04", diff });
+    if (!/was \+92306999/.test(body)) throw new Error("the marker body does not carry the changed-from value");
+    if (/—|–/.test(body)) throw new Error("the marker body carries an em or en dash");
+
+    // The marker row: direction internal, kind in attributes — the 0036
+    // trigger bumps the thread to the top; last_inbound_at makes it unread.
+    const beforeRow = await db.query<{ last_activity_at: string | null }>(
+      `select last_activity_at from public.comm_threads where id = $1`,
+      [s27ThreadId]
+    );
+    const markerAttrs = JSON.stringify({
+      kind: "returning_lead_marker",
+      marker: {
+        form_id: "751097307189312",
+        form_label: "Spouse Visa 23/04/2024",
+        lead_id: "s27_lead_2",
+        submitted_at: "2026-08-04T09:00:00Z",
+        answers: diff,
+      },
+    });
+    await db.query(
+      `insert into public.communications
+         (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body, attributes)
+       values ($1, $2, $3, $4, $5, 'email', 'internal', 'received', $6, $7::jsonb)`,
+      [f.business_id, f.agent_id, s27ThreadId, s27ContactId, s27EngId, body, markerAttrs]
+    );
+    await db.query(`update public.comm_threads set last_inbound_at = now() where id = $1`, [s27ThreadId]);
+    const after = await db.query<{ last_activity_at: string | null; is_unread: boolean }>(
+      `select last_activity_at, is_unread from public.comm_threads where id = $1`,
+      [s27ThreadId]
+    );
+    if (!after.rows[0]!.last_activity_at || after.rows[0]!.last_activity_at === beforeRow.rows[0]!.last_activity_at) {
+      throw new Error("the marker did not bump the thread's activity ordering");
+    }
+    if (!after.rows[0]!.is_unread) throw new Error("the marker did not set the unread badge");
+
+    // Arrival tone (D158a): the marker rings; ordinary internal rows do not.
+    if (!classifyCommChange("INSERT", { direction: "internal", attributes: { kind: "returning_lead_marker" } }, null).tone) {
+      throw new Error("the marker's arrival does not ring");
+    }
+    if (classifyCommChange("INSERT", { direction: "internal", attributes: {} }, null).tone) {
+      throw new Error("an ordinary internal row rings");
+    }
+
+    // The client-side parse round-trips the stored shape.
+    const parsed = parseReturningMarker("returning_lead_marker", JSON.parse(markerAttrs).marker);
+    if (!parsed || parsed.formLabel !== "Spouse Visa 23/04/2024") throw new Error("the marker facts do not parse");
+    if (parsed.answers.filter((a) => a.changed).length !== 2) throw new Error("the parsed diff lost its highlights");
+    if (parseReturningMarker("something_else", {}) !== null) throw new Error("a non-marker row parsed as a marker");
+
+    // Neutral chrome + the transcript exclusion stand in code (tripwires).
+    const convSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/conversations/conversations-client.tsx"),
+      "utf8"
+    );
+    if (!convSource.includes("returningMarker") || !convSource.includes("self-center")) {
+      throw new Error("the conversation marker card lost its neutral centred render");
+    }
+    const enquirySource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/enquiries/[id]/page.tsx"),
+      "utf8"
+    );
+    if (!enquirySource.includes("comm.returningMarker") || !enquirySource.includes(`Pin tone="neutral"`)) {
+      throw new Error("the enquiry timeline marker card lost its neutral pin");
+    }
+    const supersedeSource = readFileSync(resolve(import.meta.dirname, "../src/supersede.ts"), "utf8");
+    if (!supersedeSource.includes(`(r.direction === "inbound" && r.status === "received")`)) {
+      throw new Error("the transcript filter changed — internal markers may be leaking into the model transcript");
+    }
+  });
+
+  await expectOk("the returning draft carries no cold intro and no duplicate booklet — both compose paths, by prompt and by suppression", async () => {
+    const returning = {
+      prior_route: "Spouse/Family",
+      form_label: "Spouse Visa 23/04/2024",
+      resubmitted_at: "2026-08-04",
+      changed_lines: ["Phone number: +44777111 (was +92306999)"],
+      booklet_already_sent: true,
+    };
+    let sawSystem = "";
+    let sawPrompt = "";
+    const fake: GenerateFn = async (request) => {
+      sawSystem = request.system;
+      sawPrompt = request.prompt;
+      return {
+        subject: null,
+        body: "Hello Rukhsana, thank you for coming back to us. We can help with the next step.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    await composeDraft(fake, { ...s18Input("intro"), returning, attachment: null });
+    if (!/Never introduce the firm as if this were first contact/.test(sawSystem)) {
+      throw new Error("the intro prompt does not forbid the cold introduction");
+    }
+    if (!/Never offer, promise or mention sending it again/.test(sawSystem)) {
+      throw new Error("the intro prompt does not forbid the duplicate booklet");
+    }
+    if (!/\(was \+92306999\)/.test(sawPrompt)) throw new Error("the changed details did not reach the prompt");
+
+    const { prompt } = assembleReplyPrompt({ ...s16ReplyInput, returning, new_inbound_count: 0 });
+    if (!/Never introduce the firm as if this were first contact/.test(prompt)) {
+      throw new Error("the reply prompt does not forbid the cold introduction");
+    }
+    if (!/returning form submission \(above\) is what needs answering/.test(prompt)) {
+      throw new Error("a settled marker with no client message does not steer the reply");
+    }
+
+    // Suppression + the companion stand-down are in the workflow drafter.
+    const workflowSource = readFileSync(resolve(import.meta.dirname, "../src/workflow.ts"), "utf8");
+    if (!workflowSource.includes("contactAlreadyReceivedFile") || !workflowSource.includes("if (bookletAlreadySent) guide = null")) {
+      throw new Error("the intro drafter no longer suppresses an already-sent booklet");
+    }
+    if (!workflowSource.includes("returning lead — the approved intro template is a cold introduction")) {
+      throw new Error("the WhatsApp companion no longer stands down for returning leads");
+    }
+    // D159's prompt half: reference an attachment only when one is attached.
+    const draftingSource = readFileSync(resolve(import.meta.dirname, "../src/drafting.ts"), "utf8");
+    if (!draftingSource.includes("Never write that anything is attached or enclosed")) {
+      throw new Error("the generation prompt lost the attachment-honesty instruction");
+    }
+  });
+
+  await expectOk("enquiry linkage: a successor names its predecessor, never itself; the surfaces read the link on both timelines", async () => {
+    const successor = await db.query<{ id: string; predecessor_engagement_id: string }>(
+      `insert into public.engagements
+         (business_id, created_by, template_type_id, title, stage_id, owner_actor_id, predecessor_engagement_id)
+       values ($1, $2, $3, 'Rukhsana Bibi — enquiry', $4, $5, $6) returning id, predecessor_engagement_id`,
+      [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id, s27EngId]
+    );
+    if (successor.rows[0]!.predecessor_engagement_id !== s27EngId) throw new Error("the linkage did not persist");
+    let refused = false;
+    try {
+      await db.query(`update public.engagements set predecessor_engagement_id = id where id = $1`, [
+        successor.rows[0]!.id,
+      ]);
+    } catch (err) {
+      refused = /engagements_no_self_predecessor/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!refused) throw new Error("a self-predecessor was accepted");
+    // Both timelines: the ledger kinds exist and the surfaces render them.
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    for (const kind of [
+      `"engagement.resubmission_received"`,
+      `"engagement.successor_opened"`,
+      `"engagement.opened_from_predecessor"`,
+      `"communication.returning_marker_posted"`,
+      `"engagement.route_set"`,
+    ]) {
+      if (!kinds.includes(kind)) throw new Error(`the declared vocabulary lost ${kind}`);
+    }
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    if (!queriesSource.includes("predecessor_engagement_id") || !queriesSource.includes("successors")) {
+      throw new Error("the enquiry read layer no longer carries the linkage");
+    }
+    const pageSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/enquiries/[id]/page.tsx"),
+      "utf8"
+    );
+    if (!pageSource.includes("detail.predecessor") || !pageSource.includes("detail.successors")) {
+      throw new Error("the enquiry page no longer shows the linkage on both sides");
+    }
+    const languageSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/record-language.ts"),
+      "utf8"
+    );
+    for (const marker of ["engagement.resubmission_received", "engagement.successor_opened", "engagement.route_set"]) {
+      if (!languageSource.includes(marker)) throw new Error(`record language lost ${marker}`);
+    }
+  });
+
+  await expectOk("a new enquiry enrols on the ACTIVE definition — a paused version cannot start runs, and a key consumes an event once", async () => {
+    const defs = await db.query<{ id: string; status: string; version: number }>(
+      `select id, status, version from public.workflow_definitions
+       where business_id = $1 and key = 'meta_lead_to_consultation' and archived_at is null
+       order by version`,
+      [f.business_id]
+    );
+    const active = defs.rows.find((d) => d.status === "active");
+    const paused = defs.rows.find((d) => d.status === "paused");
+    if (!active || !paused) throw new Error("the s26 fixture definitions (active v2, paused v1) are missing");
+
+    const enrol = await db.query<{ id: string }>(
+      `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+       values ($1, $2, $3, 'Enrolment probe — enquiry', $4, $5) returning id`,
+      [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+    );
+    const trigger = await db.query<{ id: string }>(
+      `insert into public.events (business_id, actor_id, action, entity_type, entity_id, payload)
+       values ($1, $2, 'engagement.created', 'engagement', $3, '{"attribution":{"source":"meta"}}'::jsonb) returning id`,
+      [f.business_id, f.agent_id, enrol.rows[0]!.id]
+    );
+    let pausedRefused = false;
+    try {
+      await db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [
+        paused.id,
+        enrol.rows[0]!.id,
+        f.agent_id,
+        trigger.rows[0]!.id,
+      ]);
+    } catch (err) {
+      pausedRefused = /Only an active definition/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!pausedRefused) throw new Error("a paused definition started a run");
+    await db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [
+      active.id,
+      enrol.rows[0]!.id,
+      f.agent_id,
+      trigger.rows[0]!.id,
+    ]);
+    // The KEY-scoped claim (0038): the same trigger event can never start a
+    // second run for this key, whatever engagement or version asks.
+    const enrol2 = await db.query<{ id: string }>(
+      `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+       values ($1, $2, $3, 'Enrolment probe 2 — enquiry', $4, $5) returning id`,
+      [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+    );
+    let claimed = false;
+    try {
+      await db.query(`select public.start_workflow_run($1, $2, $3, $4)`, [
+        active.id,
+        enrol2.rows[0]!.id,
+        f.agent_id,
+        trigger.rows[0]!.id,
+      ]);
+    } catch (err) {
+      claimed = /duplicate key/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!claimed) throw new Error("the key consumed one trigger event twice");
+    // And the returning path emits exactly this trigger for successors.
+    const returningSource = readFileSync(resolve(import.meta.dirname, "../src/returning-leads.ts"), "utf8");
+    if (!returningSource.includes(`action: "engagement.created"`)) {
+      throw new Error("a successor enquiry no longer emits the enrolment trigger");
+    }
+  });
+
+  await expectOk("attachment honesty (D159): a body claiming an attachment with none attached fails pre-flight NAMING the mismatch", async () => {
+    const check = async (body: string, comm: string | null) => {
+      const r = await db.query<{ out: { checks: Array<{ key: string; pass: boolean; detail: string | null }> } }>(
+        `select private.comm_preflight($1, $2, 'email', $3, $4, '{}'::jsonb, false) as out`,
+        [f.business_id, s27ContactId, body, comm]
+      );
+      return r.rows[0]!.out.checks.find((c) => c.key === "attachment")!;
+    };
+    const attached = await check("Please find attached our Spouse Visa guide.", null);
+    if (attached.pass) throw new Error("a body claiming an attachment passed with nothing attached");
+    if (!/"attached"/.test(attached.detail ?? "")) throw new Error("the mismatch is not named (attached)");
+    const enclosed = await check("I have enclosed the booklet for you.", null);
+    if (enclosed.pass) throw new Error("an enclosure claim passed with nothing attached");
+    if (!/"enclosed"/.test(enclosed.detail ?? "")) throw new Error("the mismatch is not named (enclosed)");
+    const silent = await check("Hello, thank you for your message.", null);
+    if (!silent.pass) throw new Error("a body referencing nothing failed the attachment check");
+  });
+
+  await expectOk("attachment honesty (D159): present-but-unmentioned passes; present-and-referenced passes", async () => {
+    const file = await db.query<{ id: string }>(
+      `insert into public.files (business_id, storage_key, filename, mime_type, size_bytes, sha256, uploaded_by)
+       values ($1, 's27/guide.pdf', 'Spouse-Guide.pdf', 'application/pdf', 1024, repeat('c', 64), $2) returning id`,
+      [f.business_id, f.human_id]
+    );
+    const comm = await db.query<{ id: string }>(
+      `insert into public.communications
+         (business_id, created_by, thread_id, contact_id, engagement_id, channel, direction, status, body)
+       values ($1, $2, $3, $4, $5, 'email', 'outbound', 'draft', 'Guide attached for you.') returning id`,
+      [f.business_id, f.agent_id, s27ThreadId, s27ContactId, s27EngId]
+    );
+    await db.query(
+      `insert into public.file_links (business_id, file_id, entity_type, entity_id, role)
+       values ($1, $2, 'communication', $3, 'attachment')`,
+      [f.business_id, file.rows[0]!.id, comm.rows[0]!.id]
+    );
+    const run = async (body: string) => {
+      const r = await db.query<{ out: { checks: Array<{ key: string; pass: boolean }> } }>(
+        `select private.comm_preflight($1, $2, 'email', $3, $4, '{}'::jsonb, false) as out`,
+        [f.business_id, s27ContactId, body, comm.rows[0]!.id]
+      );
+      return r.rows[0]!.out.checks.find((c) => c.key === "attachment")!;
+    };
+    if (!(await run("Guide attached for you.")).pass) {
+      throw new Error("a referenced, genuinely linked attachment failed");
+    }
+    if (!(await run("Hello, here is a short note.")).pass) {
+      throw new Error("attachment-present-but-unmentioned failed — D159 says it passes");
+    }
+  });
+
+  await expectOk("route precedence (D161): human > form_answer > light > form_default — Light never overwrites human or form answers", async () => {
+    // Pure mirrors first — the polite pre-checks match the door's ladder.
+    if (routeSourceRank("human") <= routeSourceRank("form_answer")) throw new Error("rank order broken");
+    if (!lightMaySetRoute(null) || !lightMaySetRoute("form_default")) throw new Error("Light lost its lawful writes");
+    if (lightMaySetRoute("light") || lightMaySetRoute("form_answer") || lightMaySetRoute("human")) {
+      throw new Error("Light may overwrite what it never may");
+    }
+
+    const eng = await db.query<{ id: string }>(
+      `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+       values ($1, $2, $3, 'Precedence probe — enquiry', $4, $5) returning id`,
+      [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+    );
+    const engId = eng.rows[0]!.id;
+    const set = (route: string, source: string, actor: string) =>
+      db.query(`select public.set_engagement_route($1, $2, $3, $4, null)`, [engId, route, source, actor]);
+    const expectRefusal = async (route: string, source: string, actor: string, pattern: RegExp) => {
+      let refused = false;
+      try {
+        await set(route, source, actor);
+      } catch (err) {
+        refused = pattern.test(err instanceof Error ? err.message : String(err));
+      }
+      if (!refused) throw new Error(`source "${source}" was not refused as expected`);
+    };
+    const currentSource = async () => {
+      const r = await db.query<{ s: string | null }>(
+        `select attributes ->> 'visa_route_source' as s from public.engagements where id = $1`,
+        [engId]
+      );
+      return r.rows[0]!.s;
+    };
+
+    await set("visitor", "form_default", f.agent_id);
+    if ((await currentSource()) !== "form_default") throw new Error("form_default did not land on an unset field");
+    await expectRefusal("student", "form_default", f.agent_id, /precedence/);
+    await set("spouse_family", "light", f.agent_id);
+    if ((await currentSource()) !== "light") throw new Error("Light could not refine a form default");
+    await expectRefusal("student", "light", f.agent_id, /precedence/);
+    await set("ilr", "form_answer", f.agent_id);
+    if ((await currentSource()) !== "form_answer") throw new Error("a form answer could not overrule Light");
+    await expectRefusal("student", "light", f.agent_id, /precedence/);
+    await set("student", "human", f.human_id);
+    if ((await currentSource()) !== "human") throw new Error("a human could not reclassify");
+    // Human final against machine writes — every machine source refuses.
+    await expectRefusal("visitor", "light", f.agent_id, /precedence/);
+    await expectRefusal("visitor", "form_answer", f.agent_id, /precedence/);
+    await expectRefusal("visitor", "form_default", f.agent_id, /precedence/);
+    // A human may correct a human.
+    await set("naturalisation", "human", f.human_id);
+    if ((await currentSource()) !== "human") throw new Error("a human correction was refused");
+    // Actor-type honesty: a human actor never records machine provenance,
+    // and machine actors never record the human stamp.
+    await expectRefusal("visitor", "human", f.agent_id, /requires a human actor/);
+    const engFresh = await db.query<{ id: string }>(
+      `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+       values ($1, $2, $3, 'Provenance probe — enquiry', $4, $5) returning id`,
+      [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+    );
+    let honest = false;
+    try {
+      await db.query(`select public.set_engagement_route($1, 'visitor', 'light', $2, null)`, [
+        engFresh.rows[0]!.id,
+        f.human_id,
+      ]);
+    } catch (err) {
+      honest = /never machine provenance/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!honest) throw new Error("a human actor recorded machine provenance");
+  });
+
+  await expectOk("the route moves ONLY through the door — direct writes refused, born-with refused, signed-in sessions write human only", async () => {
+    let direct = false;
+    try {
+      await db.query(
+        `update public.engagements set attributes = jsonb_set(attributes, '{visa_route}', '"student"') where id = $1`,
+        [s27EngId]
+      );
+    } catch (err) {
+      direct = /set_engagement_route/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!direct) throw new Error("a direct route write slipped past the door — service role included");
+    let born = false;
+    try {
+      await db.query(
+        `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id, attributes)
+         values ($1, $2, $3, 'Born-with probe', $4, $5, '{"visa_route":"student"}'::jsonb)`,
+        [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+      );
+    } catch (err) {
+      born = /never born with one/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!born) throw new Error("an engagement was born with a route, skipping the door");
+    // A signed-in member may reclassify as HUMAN (D161c: any team member
+    // with enquiry access) — and may never claim machine provenance.
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.member}'`);
+    await db.exec(`set request.jwt.claims = '{"sub":"${ids.member}","email":"member@example.test"}'`);
+    await db.query(`select public.set_engagement_route($1, 'spouse_family', 'human', $2, 'caller actually needs spouse route')`, [
+      s27EngId,
+      h2.human2_id,
+    ]);
+    let machineClaim = false;
+    try {
+      await db.query(`select public.set_engagement_route($1, 'student', 'light', $2, null)`, [s27EngId, h2.human2_id]);
+    } catch (err) {
+      machineClaim = /only reclassify as source "human"/.test(err instanceof Error ? err.message : String(err));
+    }
+    await db.exec(`reset role`);
+    await db.exec(`set request.jwt.claim.sub = ''`);
+    await db.exec(`set request.jwt.claims = ''`);
+    if (!machineClaim) throw new Error("a signed-in session claimed machine provenance");
+    const routeNow = await db.query<{ r: string | null; s: string | null }>(
+      `select attributes ->> 'visa_route' as r, attributes ->> 'visa_route_source' as s from public.engagements where id = $1`,
+      [s27EngId]
+    );
+    if (routeNow.rows[0]!.r !== "spouse_family" || routeNow.rows[0]!.s !== "human") {
+      throw new Error("the member's reclassification did not stand");
+    }
+  });
+
+  await expectOk("a declared vocabulary refuses undeclared routes; the per-form default mapping resolves deterministically", async () => {
+    // The Jurists install carries the 0024 declaration — an undeclared key
+    // is refused, a declared one lands.
+    const jEng = await db.query<{ id: string }>(
+      `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+       values ($1, $2, $3, 'Vocabulary probe — enquiry', $4, $5) returning id`,
+      [activation!.business_id, activation!.light_actor_id, installedTypeId, installedNewLeadId, activation!.owner_actor_id]
+    );
+    let refused = false;
+    try {
+      await db.query(`select public.set_engagement_route($1, 'not_a_route', 'human', $2, null)`, [
+        jEng.rows[0]!.id,
+        activation!.owner_actor_id,
+      ]);
+    } catch (err) {
+      refused = /declared route vocabulary/.test(err instanceof Error ? err.message : String(err));
+    }
+    if (!refused) throw new Error("an undeclared route slipped past the declared vocabulary");
+    await db.query(`select public.set_engagement_route($1, 'spouse_family', 'human', $2, null)`, [
+      jEng.rows[0]!.id,
+      activation!.owner_actor_id,
+    ]);
+
+    // D161(a): the mapping's settings shape — the live Spouse form's id maps
+    // to the declared spouse_family key; an unmapped form resolves nothing.
+    const settings = {
+      meta: { form_route_defaults: { "751097307189312": { route: "spouse_family", label: "Spouse Visa 23/04/2024" } } },
+    };
+    const hit = resolveFormRouteDefault(settings, "751097307189312");
+    if (hit?.route !== "spouse_family" || hit.label !== "Spouse Visa 23/04/2024") {
+      throw new Error("the per-form default did not resolve");
+    }
+    if (resolveFormRouteDefault(settings, "999") !== null) throw new Error("an unmapped form resolved a default");
+    if (resolveFormRouteDefault({}, "751097307189312") !== null) throw new Error("empty settings resolved a default");
+    // A form's OWN route answer outranks the default (provenance form_answer).
+    const fromAnswers = routeFromFormAnswers([
+      { name: "which_visa_route", label: "Which visa route", value: "Spouse visa for my wife" },
+    ]);
+    if (fromAnswers?.route !== "spouse_family") throw new Error("a route question's answer did not map");
+    if (routeFromFormAnswers([{ name: "email", label: "Email", value: "x@y.test" }]) !== null) {
+      throw new Error("a non-route answer invented a route");
+    }
+    // Ingest consults answers first, then the mapping (file order tripwire).
+    const returningSource = readFileSync(resolve(import.meta.dirname, "../src/returning-leads.ts"), "utf8");
+    const answersAt = returningSource.indexOf("routeFromFormAnswers(answers)");
+    const defaultAt = returningSource.indexOf("resolveFormRouteDefault(businesses[0]?.settings");
+    if (answersAt === -1 || defaultAt === -1 || answersAt > defaultAt) {
+      throw new Error("ingest no longer prefers the form's own answer over the per-form default");
+    }
+  });
+
+  await expectOk("classification rides the ONE drafting call — no extra model call, undeclared keys never survive, no request means no read", async () => {
+    let calls = 0;
+    let sawSystem = "";
+    const routeOptions = [{ key: "spouse_family", label: "Spouse/Family" }];
+    const fake: GenerateFn = async (request) => {
+      calls += 1;
+      sawSystem = request.system;
+      return {
+        subject: null,
+        body: "Hello Amina, thank you for your message. We can help with that.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+        route: { key: "spouse_family", reason: "the form and the enquiry text reference a spouse visa" },
+      };
+    };
+    const composed = await composeDraft(fake, { ...s18Input("intro"), route_options: routeOptions });
+    if (calls !== 1) throw new Error(`classification cost ${calls} calls — it must ride the one drafting call`);
+    if (composed.route_classification?.key !== "spouse_family") throw new Error("the confident read did not survive");
+    if (!/classify this enquiry's visa route/i.test(sawSystem)) {
+      throw new Error("the classification instruction is missing from the requested prompt");
+    }
+    // An undeclared key is normalised to null — never written.
+    const bad = normaliseRouteClassification(routeOptions, { key: "made_up", reason: "x" });
+    if (bad?.key !== null || !/undeclared/.test(bad?.reason ?? "")) {
+      throw new Error("an undeclared route key survived normalisation");
+    }
+    // No request → no classification, even if the model volunteers one.
+    calls = 0;
+    const unrequested = await composeDraft(fake, s18Input("intro"));
+    if (unrequested.route_classification !== null) throw new Error("an unrequested classification was recorded");
+    if (/classify this enquiry's visa route/i.test(sawSystem)) {
+      throw new Error("the classification instruction rides prompts that did not ask for it");
+    }
+    // The reply path takes the same single-call ride.
+    calls = 0;
+    const reply = await composeReplyDraft(fake, { ...s16ReplyInput, route_options: routeOptions });
+    if (calls !== 1 || reply.route_classification?.key !== "spouse_family") {
+      throw new Error("the reply path's classification does not ride its one call");
+    }
+    // Both production callers apply the read through the door as Light, and
+    // the wrapper pairs the door with the ledger event.
+    for (const file of ["../src/workflow.ts", "../src/supersede.ts"]) {
+      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
+      if (!source.includes(`source: "light"`) || !source.includes("setEngagementRoute")) {
+        throw new Error(`${file} no longer applies Light's read through the 0042 door`);
+      }
+    }
+    const routesSource = readFileSync(resolve(import.meta.dirname, "../src/routes.ts"), "utf8");
+    if (!routesSource.includes(`rpc("set_engagement_route"`) || !routesSource.includes("emitEvent")) {
+      throw new Error("the route wrapper separated the door from the ledger");
+    }
+  });
+
+  await expectOk("enquiry truth-timing (D160): 'classifying' only while a read may arrive; the timeline's draft entry shows attachment state", async () => {
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    if (!queriesSource.includes("liveRun && !agentDrafted")) {
+      throw new Error("the classifying signal no longer distinguishes a run that already drafted (and abstained)");
+    }
+    if (!queriesSource.includes("visaRouteSource")) throw new Error("the read layer lost the route's provenance");
+    const pageSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/enquiries/[id]/page.tsx"),
+      "utf8"
+    );
+    if (!pageSource.includes("Classifying route…")) {
+      throw new Error("the enquiry page no longer says 'classifying' while a run is in flight");
+    }
+    if (!pageSource.includes("Route not yet classified")) {
+      throw new Error("the honest resting state left the page");
+    }
+    if (!pageSource.includes("comm.attachments.map")) {
+      throw new Error("the timeline's draft entry no longer shows attachment state");
+    }
+    if (!pageSource.includes("RouteReclassifyControl")) {
+      throw new Error("the human reclassify control left the enquiry page");
     }
   });
 
