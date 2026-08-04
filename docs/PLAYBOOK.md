@@ -248,6 +248,20 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   stay absent from the UI until the definition-approval pipeline's own
   session.
 
+- The **route-provenance door** (Session 27, 0042, D161): an enquiry's
+  `attributes.visa_route` and `visa_route_source` move ONLY through
+  `set_engagement_route()` — a guard trigger refuses any other write,
+  service role included, and no engagement is born with a route. The door
+  enforces the precedence ladder (human > form_answer > light >
+  form_default): Light writes only over unset or form_default (never over
+  a human, a form answer, or its own earlier read); a human-set route is
+  final against machine writes; a signed-in session may write source
+  `human` only, as its own human actor; a human actor never records
+  machine provenance and machine actors never record the human stamp; the
+  route must belong to the installed 0024 vocabulary where one is
+  declared. Ledger events stay app-side via the `setEngagementRoute()`
+  wrapper (law 11).
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail
