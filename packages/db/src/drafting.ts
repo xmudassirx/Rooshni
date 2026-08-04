@@ -164,6 +164,60 @@ export interface DraftAttestation {
   statement: string;
 }
 
+/**
+ * Session 27 (D158c): the returning-lead register — the prompt acknowledges
+ * prior contact, references the route, and forbids the cold introduction and
+ * any re-offer of an already-sent guide. Carried by both composers.
+ */
+export interface ReturningContext {
+  /** The route label (or key) of the contact's prior enquiry, when known. */
+  prior_route: string | null;
+  form_label: string | null;
+  resubmitted_at: string;
+  /** Human-readable changed-detail lines from the marker's diff. */
+  changed_lines: string[];
+  /** True when the firm's guide document already reached this contact —
+   * the draft must never offer or promise to send it again (no duplicate
+   * booklet). */
+  booklet_already_sent: boolean;
+}
+
+/** Session 27 (D161b): classification rides the existing drafting call —
+ * the caller passes the declared route vocabulary when the enquiry's route
+ * is unset or default-sourced, and the model's ONE response carries a
+ * confident key or an honest null. No extra model call, ever. */
+export interface RouteClassifyOption {
+  key: string;
+  label: string;
+}
+
+function returningRegisterLines(returning: ReturningContext): string[] {
+  return [
+    `- This enquirer has contacted the firm before${returning.prior_route ? ` about ${returning.prior_route}` : ""} and has just submitted the ${returning.form_label ?? "enquiry form"} again. Acknowledge their earlier contact naturally, in one phrase.`,
+    `- Never introduce the firm as if this were first contact. No cold introduction, no "thank you for your enquiry" opening as though they were new.`,
+    ...(returning.booklet_already_sent
+      ? [
+          `- The firm's guide document has already been sent to this enquirer. Never offer, promise or mention sending it again.`,
+        ]
+      : []),
+  ];
+}
+
+function returningFactsBlock(returning: ReturningContext): string[] {
+  return [
+    ``,
+    `Returning enquirer: submitted the ${returning.form_label ?? "enquiry form"} again on ${returning.resubmitted_at}.`,
+    ...(returning.changed_lines.length
+      ? [`Details changed since their previous submission:`, ...returning.changed_lines.map((l) => `- ${l}`)]
+      : [`No details changed since their previous submission.`]),
+  ];
+}
+
+function classificationInstruction(options: RouteClassifyOption[]): string {
+  const keys = options.map((o) => `${o.key} (${o.label})`).join(", ");
+  return `Separately from the message body, classify this enquiry's visa route in the "route" output field: set route.key to ONE of ${keys} only if the form and the enquirer's own words give you a confident read; otherwise set route.key to null. State your one-line reason either way. The classification never appears in the message body.`;
+}
+
 export interface GenerateRequest {
   model: string;
   system: string;
@@ -185,6 +239,9 @@ export interface GenerateResult {
    * recorded reason when the provider rejected cache_control and the call
    * fell back uncached — a draft never fails over caching. */
   cache?: { read_tokens: number; written_tokens: number; fallback_reason?: string };
+  /** Session 27 (D161b): the route classification riding the SAME call's
+   * output — a confident key from the declared vocabulary, or null. */
+  route?: { key: string | null; reason: string } | null;
 }
 
 export type GenerateFn = (request: GenerateRequest) => Promise<GenerateResult>;
@@ -275,6 +332,12 @@ export interface ComposeDraftInput {
    * email — the prompt may reference it naturally. Null = no guide published
    * for this route: the draft never mentions one (no placeholders, ever). */
   attachment?: { title: string; filename: string } | null;
+  /** Session 27 (D158c): the returning-lead register, when this enquirer is
+   * a returning contact. */
+  returning?: ReturningContext | null;
+  /** Session 27 (D161b): pass the declared vocabulary to request route
+   * classification riding this call's output; omit to request none. */
+  route_options?: RouteClassifyOption[] | null;
 }
 
 export interface ComposeDraftResult {
@@ -293,6 +356,25 @@ export interface ComposeDraftResult {
     cache?: { read_tokens: number; written_tokens: number; fallback_reason?: string };
   };
   usage: { input_tokens: number; output_tokens: number };
+  /** Session 27 (D161b): present only when the caller requested
+   * classification (route_options); a key outside the passed vocabulary is
+   * normalised to null — an undeclared route is never written. */
+  route_classification: { key: string | null; reason: string } | null;
+}
+
+/** Normalise the model's route read against the requested vocabulary —
+ * pure, harness-proven: no options = no classification; an undeclared key
+ * never survives. */
+export function normaliseRouteClassification(
+  options: RouteClassifyOption[] | null | undefined,
+  route: { key: string | null; reason: string } | null | undefined
+): { key: string | null; reason: string } | null {
+  if (!options || options.length === 0) return null;
+  if (!route) return { key: null, reason: "the model returned no classification" };
+  if (route.key !== null && !options.some((o) => o.key === route.key)) {
+    return { key: null, reason: `undeclared route "${route.key}" refused — ${route.reason}` };
+  }
+  return { key: route.key, reason: route.reason };
 }
 
 /** The lead's own words, flattened for escalation triggers and retrieval. */
@@ -322,7 +404,7 @@ export const REGISTER_PUNCTUATION_LINE =
 function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: string } {
   const rules = input.no_go_rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
   const system = [
-    `You are Light, the assistant at ${input.business_name}, a UK immigration advisory firm. You are drafting a short, professional ${input.task === "intro" ? "first reply to a new enquiry" : "gentle follow-up to an enquiry that has not yet replied"} for the firm to review and send by ${input.channel}.`,
+    `You are Light, the assistant at ${input.business_name}, a UK immigration advisory firm. You are drafting a short, professional ${input.returning ? "reply to a RETURNING enquirer who has submitted the firm's enquiry form again" : input.task === "intro" ? "first reply to a new enquiry" : "gentle follow-up to an enquiry that has not yet replied"} for the firm to review and send by ${input.channel}.`,
     ``,
     `Laws that bind this draft — breaching any is a failure:`,
     rules,
@@ -343,9 +425,15 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
       ? [
           `- The firm's guide "${input.attachment.title}" (${input.attachment.filename}) is attached to this email. Mention the attached guide in one natural phrase; never describe its contents beyond its title.`,
         ]
-      : []),
+      : [
+          // D159 (Session 27): the honesty instruction — the deterministic
+          // pre-flight (0043) is the braces; this line is the belt.
+          `- Nothing is attached to this message. Never write that anything is attached or enclosed, and never promise a document you are not sending.`,
+        ]),
+    ...(input.returning ? returningRegisterLines(input.returning) : []),
     `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
     ``,
+    ...(input.route_options?.length ? [classificationInstruction(input.route_options), ``] : []),
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
   ].join("\n");
 
@@ -364,11 +452,12 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     `- Enquiry: ${input.enquiry_title} (stage: ${input.stage_label}; source: ${input.source})`,
     `- Their form answers, verbatim:`,
     answers,
+    ...(input.returning ? returningFactsBlock(input.returning) : []),
     ``,
     `The firm's published knowledge (your only source of facts):`,
     knowledge,
     ``,
-    `Compose the ${input.task === "intro" ? "first reply" : "follow-up"} now.`,
+    `Compose the ${input.returning ? "returning-enquirer reply" : input.task === "intro" ? "first reply" : "follow-up"} now.`,
   ].join("\n");
 
   return { system, prompt };
@@ -467,6 +556,7 @@ export async function composeDraft(
       ...(result.cache ? { cache: result.cache } : {}),
     },
     usage: result.usage,
+    route_classification: normaliseRouteClassification(input.route_options, result.route),
   };
 }
 
@@ -498,6 +588,12 @@ export interface ComposeReplyInput {
   thread_messages: ThreadMessage[];
   /** How many client messages arrived since the last firm reply (the burst). */
   new_inbound_count: number;
+  /** Session 27 (D158c): the returning-lead register — the settled marker's
+   * facts; the reply acknowledges prior contact, no cold intro, no
+   * duplicate booklet. */
+  returning?: ReturningContext | null;
+  /** Session 27 (D161b): classification riding this call's output. */
+  route_options?: RouteClassifyOption[] | null;
 }
 
 /**
@@ -557,15 +653,24 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
         .join("\n---\n")
     : "(no prior messages)";
 
+  // Session 27 (D158c): the returning register and facts ride the UNCACHED
+  // tail — they vary per thread; the cached prefix (laws + knowledge) stays
+  // stable. Same for the classification instruction (D161b).
   const prompt = [
     `The enquiry: ${input.enquiry_title} (client: ${input.full_name}; stage: ${input.stage_label})`,
     `Their original enquiry form answers, verbatim:`,
     answers,
+    ...(input.returning
+      ? [``, `Returning-enquirer register — these lines bind this reply:`, ...returningRegisterLines(input.returning), ...returningFactsBlock(input.returning)]
+      : []),
     ``,
     `The conversation so far (oldest first; only messages actually sent or received):`,
     transcript,
     ``,
-    `The client's last ${input.new_inbound_count > 1 ? `${input.new_inbound_count} messages have` : "message has"} not been answered. Compose the firm's reply now — answer what was actually asked.`,
+    ...(input.route_options?.length ? [classificationInstruction(input.route_options), ``] : []),
+    input.returning && input.new_inbound_count === 0
+      ? `The client has not written a new message; their returning form submission (above) is what needs answering. Compose the firm's returning-enquirer reply now.`
+      : `The client's last ${input.new_inbound_count > 1 ? `${input.new_inbound_count} messages have` : "message has"} not been answered. Compose the firm's reply now — answer what was actually asked.`,
   ].join("\n");
 
   return {
@@ -670,6 +775,7 @@ export async function composeReplyDraft(
       ...(result.cache ? { cache: result.cache } : {}),
     },
     usage: result.usage,
+    route_classification: normaliseRouteClassification(input.route_options, result.route),
   };
 }
 
@@ -693,8 +799,24 @@ const DRAFT_OUTPUT_SCHEMA = {
       required: ["attested", "statement"],
       additionalProperties: false,
     },
+    // Session 27 (D161b): classification rides THIS call's output — no
+    // extra model call exists anywhere. key is null unless the prompt asked
+    // for a classification and the read is confident.
+    route: {
+      type: "object",
+      properties: {
+        key: {
+          type: ["string", "null"],
+          description:
+            "The enquiry's visa route from the offered vocabulary, ONLY when the prompt requested classification and the read is confident; otherwise null.",
+        },
+        reason: { type: "string", description: "One line: why this key, or why no confident read." },
+      },
+      required: ["key", "reason"],
+      additionalProperties: false,
+    },
   },
-  required: ["subject", "body", "attestation"],
+  required: ["subject", "body", "attestation", "route"],
   additionalProperties: false,
 };
 
@@ -755,7 +877,12 @@ export function createAnthropicGenerator(): GenerateFn | null {
       .filter((block) => block.type === "text")
       .map((block) => (block as { text: string }).text)
       .join("");
-    let parsed: { subject: string | null; body: string; attestation: { attested: boolean; statement: string } };
+    let parsed: {
+      subject: string | null;
+      body: string;
+      attestation: { attested: boolean; statement: string };
+      route?: { key: string | null; reason: string } | null;
+    };
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -771,6 +898,7 @@ export function createAnthropicGenerator(): GenerateFn | null {
       subject: parsed.subject,
       body: parsed.body,
       attestation: parsed.attestation,
+      route: parsed.route ?? null,
       usage: {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,

@@ -141,7 +141,13 @@ export async function POST(request: NextRequest) {
         const binding = await resolveMetaBusiness(db, pageId);
         const lead = await fetchMetaLead(leadgenId, accessToken);
         const result = await ingestMetaLead(db, binding, lead);
-        if (result.created) {
+        if (result.created && result.returning) {
+          // Session 27 (D158): a known contact's new submission — the
+          // returning path ran (marker + linkage); the closed fork's
+          // successor enrols via the tick below.
+          ingested += 1;
+          await stamp(`returning ${result.returning.mode}: engagement ${result.engagement_id}`);
+        } else if (result.created) {
           ingested += 1;
           await stamp(`ingested: engagement ${result.engagement_id}`);
         } else {

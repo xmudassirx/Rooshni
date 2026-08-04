@@ -30,6 +30,7 @@ import {
   type LightPerformance,
 } from "@rooshni/db";
 import { scaleDurationMs } from "@rooshni/config";
+import { parseReturningMarker } from "../returning-marker";
 import { getAppContext } from "./context";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1327,6 +1328,14 @@ export interface ThreadMessage {
   /** Defect-pair hotfix (2 Aug 2026): the recorded failure when status is
    * 'failed' — red at every surface, reason inline. */
   sendFailure: SendFailure | null;
+  /** Session 27 (D158a): set when this row is the returning-lead system
+   * marker — rendered as a centred neutral fact card, changed fields
+   * highlighted; never a bubble on either side. */
+  returningMarker: {
+    formLabel: string | null;
+    submittedAt: string | null;
+    answers: Array<{ label: string; value: string; previousValue: string | null; changed: boolean }>;
+  } | null;
 }
 
 export interface ThreadConsent {
@@ -1462,10 +1471,12 @@ interface CommWindowRow {
   drafted_by_actor_id: string | null;
   approved_by_actor_id: string | null;
   send_failure: unknown;
+  marker_kind?: string | null;
+  marker?: unknown;
 }
 
 const COMM_WINDOW_COLUMNS =
-  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id";
+  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, marker_kind:attributes->>kind, marker:attributes->marker, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id";
 
 function mapCommRow(
   c: CommWindowRow,
@@ -1492,6 +1503,7 @@ function mapCommRow(
     isPendingDraft: c.direction === "outbound" && c.status === "pending_approval",
     sentHtml: isHtml ? c.body : null,
     sendFailure: parseSendFailure(c.send_failure),
+    returningMarker: parseReturningMarker(c.marker_kind, c.marker),
   };
 }
 
@@ -2951,6 +2963,16 @@ export interface EnquiryComm {
   /** Defect-pair hotfix (2 Aug 2026): the recorded failure when status is
    * 'failed' — red on the timeline, reason inline, Retry for stamp-holders. */
   sendFailure: SendFailure | null;
+  /** Session 27 (D160): the declared attachments this message carries — the
+   * timeline's draft entry shows attachment state. */
+  attachments: Array<{ filename: string; sizeBytes: number }>;
+  /** Session 27 (D158a): set when this row is the returning-lead system
+   * marker — a fact in neutral chrome, changed fields highlighted. */
+  returningMarker: {
+    formLabel: string | null;
+    submittedAt: string | null;
+    answers: Array<{ label: string; value: string; previousValue: string | null; changed: boolean }>;
+  } | null;
 }
 
 export interface EnquiryTask {
@@ -2972,6 +2994,20 @@ export interface EnquiryDetail {
   outcome: string | null;
   valueEstimate: number | null;
   visaRoute: string | null;
+  /** Session 27 (D161): the route's provenance — human | form_answer |
+   * light | form_default — read beside the value it describes. */
+  visaRouteSource: string | null;
+  /** Session 27 (D160): true while classification may still arrive — a live
+   * run that has not yet drafted, or an armed settle timer — and the route
+   * is unset or default-sourced. The page says "classifying", never "not
+   * yet classified", while this holds. */
+  classifying: boolean;
+  /** Session 27 (D161c): the template's declared route vocabulary — the
+   * reclassify dropdown renders FROM the declaration, never from chrome. */
+  routeOptions: Array<{ key: string; label: string }>;
+  /** Session 27 (D158d): linkage, visible on both timelines. */
+  predecessor: { id: string; title: string } | null;
+  successors: Array<{ id: string; title: string }>;
   source: Record<string, unknown>;
   ownerName: string | null;
   stages: EnquiryStage[];
@@ -2996,7 +3032,7 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
   const { data: engagement, error: engError } = await db
     .from("engagements")
     .select(
-      "id, title, created_at, template_type_id, stage_id, stage_entered_at, outcome, value_estimate, attributes, attribution, owner_actor_id"
+      "id, title, created_at, template_type_id, stage_id, stage_entered_at, outcome, value_estimate, attributes, attribution, owner_actor_id, predecessor_engagement_id"
     )
     .eq("id", id)
     .eq("business_id", business.id)
@@ -3025,7 +3061,7 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
     db
       .from("communications")
       .select(
-        "id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, occurred_at, scheduled_for, drafted_by_actor_id, approved_by_actor_id, created_by, comm_threads(subject)"
+        "id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, attachments:attributes->attachments, marker_kind:attributes->>kind, marker:attributes->marker, occurred_at, scheduled_for, drafted_by_actor_id, approved_by_actor_id, created_by, comm_threads(subject)"
       )
       .eq("engagement_id", id)
       .is("archived_at", null)
@@ -3058,13 +3094,13 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
   // the timeline even though their events ride comm_thread / workflow_run
   // entities with no engagement_id in the payload — resolved through this
   // engagement's own threads and runs. Bounded (5e law).
+  const [threadRows, runRows] = await Promise.all([
+    db.from("comm_threads").select("id, draft_settle_due_at").eq("engagement_id", id).limit(50),
+    db.from("workflow_runs").select("id, status").eq("engagement_id", id).limit(50),
+  ]);
+  if (threadRows.error) throw new Error(`thread id query failed: ${threadRows.error.message}`);
+  if (runRows.error) throw new Error(`run id query failed: ${runRows.error.message}`);
   const refusalEvents = await (async () => {
-    const [threadRows, runRows] = await Promise.all([
-      db.from("comm_threads").select("id").eq("engagement_id", id).limit(50),
-      db.from("workflow_runs").select("id").eq("engagement_id", id).limit(50),
-    ]);
-    if (threadRows.error) throw new Error(`thread id query failed: ${threadRows.error.message}`);
-    if (runRows.error) throw new Error(`run id query failed: ${runRows.error.message}`);
     const entityIds = [...(threadRows.data ?? []), ...(runRows.data ?? [])].map((r) => r.id);
     if (entityIds.length === 0) return [];
     const { data, error } = await db
@@ -3077,6 +3113,51 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
       .limit(30);
     if (error) throw new Error(`draft refusal events query failed: ${error.message}`);
     return data ?? [];
+  })();
+
+  // Session 27 (D158d): the linkage, both directions, for the header links.
+  const [predecessorRow, successorRows] = await Promise.all([
+    engagement.predecessor_engagement_id
+      ? db
+          .from("engagements")
+          .select("id, title")
+          .eq("id", engagement.predecessor_engagement_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    db
+      .from("engagements")
+      .select("id, title")
+      .eq("predecessor_engagement_id", id)
+      .is("archived_at", null)
+      .limit(10),
+  ]);
+  if (predecessorRow.error) throw new Error(`predecessor lookup failed: ${predecessorRow.error.message}`);
+  if (successorRows.error) throw new Error(`successor lookup failed: ${successorRows.error.message}`);
+
+  // Session 27 (D161c): the declared route vocabulary for the reclassify
+  // dropdown — rendered FROM the declaration (0024), never from chrome.
+  const routeOptions = await (async () => {
+    const { data: biz, error: bizError } = await db
+      .from("businesses")
+      .select("template_id")
+      .eq("id", business.id)
+      .maybeSingle();
+    if (bizError || !biz?.template_id) return [];
+    const { data, error } = await db
+      .from("field_definitions")
+      .select("validation")
+      .eq("template_id", biz.template_id)
+      .eq("entity", "content")
+      .eq("key", "visa_route")
+      .is("archived_at", null)
+      .limit(1);
+    if (error) return [];
+    const allowed = (data?.[0]?.validation as { allowed?: Array<{ key?: string; label?: string }> } | null)
+      ?.allowed;
+    if (!Array.isArray(allowed)) return [];
+    return allowed
+      .filter((a) => typeof a.key === "string" && a.key !== "")
+      .map((a) => ({ key: String(a.key), label: String(a.label ?? a.key) }));
   })();
 
   // Approval/rejection detail lives on the communication events.
@@ -3162,6 +3243,23 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
   }
 
   const attributes = (engagement.attributes ?? {}) as Record<string, unknown>;
+  const visaRoute = typeof attributes.visa_route === "string" ? attributes.visa_route : null;
+  const visaRouteSource =
+    typeof attributes.visa_route_source === "string" ? attributes.visa_route_source : null;
+  // JUDGMENT: D160's "while a run is in flight" reads as "while a
+  // classification may still ARRIVE" — a live run that has not yet produced
+  // an agent draft, or an armed settle timer. A run that drafted and
+  // abstained leaves the honest resting truth "not yet classified"; a
+  // 12-day nudge run would otherwise say "classifying" about a read Light
+  // already declined (Session 27 pre-flight).
+  const agentDrafted = (comms.data ?? []).some((c) => {
+    const by = c.drafted_by_actor_id ? actors.get(c.drafted_by_actor_id) : undefined;
+    return by?.type === "agent";
+  });
+  const liveRun = (runRows.data ?? []).some((r) => ["waiting", "running"].includes(String(r.status)));
+  const settleArmed = (threadRows.data ?? []).some((t) => t.draft_settle_due_at !== null);
+  const classifying =
+    (!visaRoute || visaRouteSource === "form_default") && (settleArmed || (liveRun && !agentDrafted));
 
   return {
     id: engagement.id,
@@ -3171,7 +3269,14 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
     stageEnteredAt: engagement.stage_entered_at,
     outcome: engagement.outcome,
     valueEstimate: engagement.value_estimate === null ? null : Number(engagement.value_estimate),
-    visaRoute: typeof attributes.visa_route === "string" ? attributes.visa_route : null,
+    visaRoute,
+    visaRouteSource,
+    classifying,
+    routeOptions,
+    predecessor: predecessorRow.data
+      ? { id: predecessorRow.data.id as string, title: predecessorRow.data.title as string }
+      : null,
+    successors: (successorRows.data ?? []).map((s) => ({ id: s.id as string, title: s.title as string })),
     source: (engagement.attribution ?? {}) as Record<string, unknown>,
     ownerName: actors.get(engagement.owner_actor_id)?.name ?? null,
     stages: (stages.data ?? []).map((s) => ({
@@ -3222,6 +3327,24 @@ export async function getEnquiryDetail(id: string): Promise<EnquiryDetail | null
         approvedAt: approval?.at ?? null,
         rejection: rejections.get(c.id) ?? null,
         sendFailure: parseSendFailure((c as { send_failure?: unknown }).send_failure),
+        // Session 27 (D160): attachment state on the timeline's entries.
+        attachments: (() => {
+          const declared = (c as { attachments?: unknown }).attachments;
+          if (!Array.isArray(declared)) return [];
+          return declared.flatMap((a) => {
+            if (!a || typeof a !== "object") return [];
+            const filename = (a as { filename?: unknown }).filename;
+            const size = (a as { size_bytes?: unknown }).size_bytes;
+            return typeof filename === "string"
+              ? [{ filename, sizeBytes: typeof size === "number" ? size : 0 }]
+              : [];
+          });
+        })(),
+        // Session 27 (D158a): the returning-lead system marker's facts.
+        returningMarker: parseReturningMarker(
+          (c as { marker_kind?: string | null }).marker_kind,
+          (c as { marker?: unknown }).marker
+        ),
       };
     }),
     events: (() => {
@@ -3804,6 +3927,65 @@ export async function getKnowledgeVocab(): Promise<KnowledgeVocab | null> {
   const categories = allowed("knowledge_category");
   if (!categories.length) return null;
   return { categories, routes: allowed("visa_route") };
+}
+
+// --- Session 27 (D161a): per-form default route mapping --------------------
+
+export interface MetaFormRouteRow {
+  formId: string;
+  route: string;
+  label: string | null;
+}
+
+export interface MetaFormRoutesState {
+  rows: MetaFormRouteRow[];
+  routeOptions: Array<{ key: string; label: string }>;
+}
+
+/** The per-form default route mapping (businesses.settings.meta
+ * .form_route_defaults) plus the declared route vocabulary for the editor's
+ * dropdown — a form with no route question ingests its default. */
+export async function getMetaFormRoutesState(): Promise<MetaFormRoutesState> {
+  const { db, business } = await getAppContext();
+  const { data: biz, error } = await db
+    .from("businesses")
+    .select("settings, template_id")
+    .eq("id", business.id)
+    .maybeSingle();
+  if (error) throw new Error(`settings read failed: ${error.message}`);
+  const settings = (biz?.settings ?? {}) as Record<string, unknown>;
+  const meta = (settings.meta ?? {}) as Record<string, unknown>;
+  const defaults = (meta.form_route_defaults ?? {}) as Record<string, unknown>;
+  const rows: MetaFormRouteRow[] = Object.entries(defaults).flatMap(([formId, entry]) => {
+    if (typeof entry === "string" && entry !== "") return [{ formId, route: entry, label: null }];
+    if (entry && typeof entry === "object") {
+      const route = (entry as { route?: unknown }).route;
+      if (typeof route === "string" && route !== "") {
+        const label = (entry as { label?: unknown }).label;
+        return [{ formId, route, label: typeof label === "string" && label !== "" ? label : null }];
+      }
+    }
+    return [];
+  });
+
+  let routeOptions: Array<{ key: string; label: string }> = [];
+  if (biz?.template_id) {
+    const { data: fields } = await db
+      .from("field_definitions")
+      .select("validation")
+      .eq("template_id", biz.template_id)
+      .eq("entity", "content")
+      .eq("key", "visa_route")
+      .is("archived_at", null)
+      .limit(1);
+    const list = (fields?.[0]?.validation as { allowed?: unknown } | null)?.allowed;
+    if (Array.isArray(list)) {
+      routeOptions = list
+        .filter((o): o is { key: string; label: string } => Boolean(o && typeof o === "object" && "key" in o))
+        .map((o) => ({ key: String(o.key), label: String(o.label) }));
+    }
+  }
+  return { rows: rows.sort((a, b) => a.formId.localeCompare(b.formId)), routeOptions };
 }
 
 export interface KnowledgeEntryRow {

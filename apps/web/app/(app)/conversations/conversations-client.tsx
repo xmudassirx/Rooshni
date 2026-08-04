@@ -36,6 +36,7 @@ import {
 import { sendNowAction, type SendNowState } from "../inbox/actions";
 import { RetrySendControl } from "../inbox/retry-send-control";
 import { formatSendsAt } from "@/lib/held-until";
+import { parseReturningMarker } from "@/lib/returning-marker";
 import { DraftStampPanel } from "./draft-stamp-panel";
 
 /*
@@ -178,6 +179,39 @@ function Bubble({
 }) {
   // PR-iii (Session 19): the "as sent" HTML view for dispatched emails.
   const [showSentHtml, setShowSentHtml] = useState(false);
+  /*
+   * Session 27 (D158a): the returning-lead system marker — a FACT, not
+   * Light's act and not a human's, so it renders as a centred neutral card
+   * (the call-logged precedent): form name, date, submitted details with
+   * changed fields highlighted. Never gold, never red, never a side.
+   */
+  if (message.returningMarker) {
+    const marker = message.returningMarker;
+    return (
+      <div className="glass w-[90%] self-center rounded-lg px-3 py-2 text-xs">
+        <span className="font-bold">⇤ Form submitted again</span>
+        {marker.formLabel ? <> — {marker.formLabel}</> : null}
+        <div className="mt-1.5 flex flex-col gap-0.5">
+          {marker.answers.map((a) => (
+            <span key={`${a.label}-${a.value}`} className="font-mono text-[10px] tracking-wide">
+              <span className="text-ink-faint uppercase">{a.label}:</span>{" "}
+              <span className={a.changed ? "rounded-sm bg-accent/12 px-1 font-semibold text-accent" : "text-ink"}>
+                {a.value || "(blank)"}
+              </span>
+              {a.changed && a.previousValue !== null ? (
+                <span className="text-ink-faint"> (was {a.previousValue})</span>
+              ) : a.changed ? (
+                <span className="text-ink-faint"> (new)</span>
+              ) : null}
+            </span>
+          ))}
+        </div>
+        <span className="mt-1 block font-mono text-[8.5px] tracking-wide text-ink-faint">
+          {formatWhen(marker.submittedAt ?? message.occurredAt)} · system marker · internal, never sent to the client
+        </span>
+      </div>
+    );
+  }
   if (message.channel === "call") {
     return (
       <div className="glass w-[90%] self-center rounded-lg px-3 py-2 text-xs">
@@ -687,6 +721,12 @@ export function ConversationsClient({
                 // (only approved rows fail, 0021); the reconciling refresh
                 // carries any later failure with its recorded reason.
                 sendFailure: null,
+                // Session 27 (D158a): a live-arriving marker renders its
+                // neutral card immediately; the parse mirrors the server's.
+                returningMarker: parseReturningMarker(
+                  typeof row.attributes?.kind === "string" ? row.attributes.kind : null,
+                  row.attributes?.marker
+                ),
               },
             ]
       );

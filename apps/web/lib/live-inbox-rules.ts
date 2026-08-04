@@ -11,13 +11,17 @@
 export interface CommChangeRow {
   status?: string;
   direction?: string;
+  attributes?: { kind?: string } | null;
 }
 
 /**
  * What a communications change means for the shell. TONE rings for a draft
- * ARRIVING at pending (a stamp newly owed — Session 16 PR-G) and for an
- * inbound client message (Session 23 WS1c, founder-ruled) — not for edits,
- * not for decisions. Every change still reconciles the server render.
+ * ARRIVING at pending (a stamp newly owed — Session 16 PR-G), for an
+ * inbound client message (Session 23 WS1c, founder-ruled), and for a
+ * returning-lead system marker (Session 27, D158a: "thread to top, unread
+ * badge, arrival sound" — the marker is direction 'internal', so the
+ * inbound test alone would stay silent) — not for edits, not for
+ * decisions. Every change still reconciles the server render.
  *
  * Realtime's old record carries only the primary key (REPLICA IDENTITY
  * default), so `prev.status` is usually undefined — the arrival test treats
@@ -30,7 +34,11 @@ export function classifyCommChange(
 ): { tone: boolean } {
   const draftArrived = next?.status === "pending_approval" && prev?.status !== "pending_approval";
   const inboundArrived = eventType === "INSERT" && next?.direction === "inbound";
-  return { tone: draftArrived || inboundArrived };
+  const markerArrived =
+    eventType === "INSERT" &&
+    next?.direction === "internal" &&
+    next?.attributes?.kind === "returning_lead_marker";
+  return { tone: draftArrived || inboundArrived || markerArrived };
 }
 
 /** Channel states that mean the subscription is DEAD and must be rejoined —

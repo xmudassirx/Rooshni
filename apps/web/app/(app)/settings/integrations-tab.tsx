@@ -1,9 +1,15 @@
 import { Mail, MessageCircle, LayoutGrid, CalendarClock, PoundSterling, Radar } from "lucide-react";
 
 import { HonestButton } from "@/components/ui/honest-button";
-import { getConversionsState, getIntegrationStates, getMailPipeState } from "@/lib/server/queries";
+import {
+  getConversionsState,
+  getIntegrationStates,
+  getMailPipeState,
+  getMetaFormRoutesState,
+} from "@/lib/server/queries";
 import { ConversionsControl } from "./conversions-control";
 import { MailProviderControl } from "./mail-provider-control";
+import { MetaFormRoutesControl } from "./meta-form-routes-control";
 
 /*
  * Settings → Integrations (Session 11; mockup: onboarding-wizard Pass 4 v2;
@@ -74,10 +80,11 @@ const ROWS: {
 ];
 
 export async function IntegrationsTab() {
-  const [states, mailPipe, conversions] = await Promise.all([
+  const [states, mailPipe, conversions, formRoutes] = await Promise.all([
     getIntegrationStates(),
     getMailPipeState(),
     getConversionsState(),
+    getMetaFormRoutesState(),
   ]);
   const stateByKey = new Map(states.map((s) => [s.key, s]));
 
@@ -140,6 +147,9 @@ export async function IntegrationsTab() {
             </div>
             {/* Session 20: the mail pipe is chosen HERE — one door. */}
             {row.key === "mail" ? <MailProviderControl pipe={mailPipe} /> : null}
+            {/* Session 27 (D161a): per-form default routes live under the
+                Meta row — the one door; ingest reads this mapping. */}
+            {row.key === "meta" ? <MetaFormRoutesControl state={formRoutes} /> : null}
           </div>
         );
       })}

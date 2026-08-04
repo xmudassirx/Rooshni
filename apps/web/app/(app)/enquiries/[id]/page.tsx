@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Paperclip } from "lucide-react";
 
 
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +18,7 @@ import {
 } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
 import { RetrySendControl } from "../../inbox/retry-send-control";
+import { RouteReclassifyControl } from "../route-control";
 
 export const dynamic = "force-dynamic";
 
@@ -107,6 +109,49 @@ function CommCard({
   const failed = comm.status === "failed";
   const tone = failed ? "red" : pending || byLight ? "gold" : "neutral";
 
+  // Session 27 (D158a): the returning-lead system marker — a fact in
+  // NEUTRAL chrome (not Light's act, not a human's), changed fields
+  // highlighted.
+  if (comm.returningMarker) {
+    const marker = comm.returningMarker;
+    return (
+      <div className="relative py-3 pl-10.5">
+        <Pin tone="neutral" />
+        <When>
+          {formatWhen(marker.submittedAt ?? comm.occurredAt)} · system marker
+        </When>
+        <div className="mt-0.5 text-[13.5px]">
+          <b>Form submitted again</b>
+          {marker.formLabel ? <> — {marker.formLabel}</> : null}
+        </div>
+        <div className="glass mt-2 rounded-lg p-3 text-[12.5px]">
+          <div className="flex flex-col gap-0.5 font-mono text-[10.5px] tracking-wide">
+            {marker.answers.map((a) => (
+              <span key={`${a.label}-${a.value}`}>
+                <span className="text-ink-faint uppercase">{a.label}:</span>{" "}
+                <span
+                  className={
+                    a.changed ? "rounded-sm bg-accent/12 px-1 font-semibold text-accent" : "text-ink"
+                  }
+                >
+                  {a.value || "(blank)"}
+                </span>
+                {a.changed && a.previousValue !== null ? (
+                  <span className="text-ink-faint"> (was {a.previousValue})</span>
+                ) : a.changed ? (
+                  <span className="text-ink-faint"> (new)</span>
+                ) : null}
+              </span>
+            ))}
+          </div>
+          <div className="mt-1.5 font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+            internal marker — never sent to the client
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative py-3 pl-10.5">
       <Pin tone={tone} />
@@ -146,6 +191,14 @@ function CommCard({
           {comm.scheduledFor ? (
             <Badge variant="time">scheduled {formatWhen(comm.scheduledFor)}</Badge>
           ) : null}
+          {/* Session 27 (D160): the timeline's draft entry shows attachment
+              state — the same fact the inbox card shows at the stamp. */}
+          {comm.attachments.map((a) => (
+            <Badge key={a.filename} variant="source">
+              <Paperclip className="mr-1 inline size-3" aria-hidden />
+              {a.filename}
+            </Badge>
+          ))}
         </div>
         <div className="whitespace-pre-wrap text-ink">{comm.body}</div>
         {comm.rejection ? (
@@ -325,6 +378,26 @@ export default async function EnquiryDetailPage({
   const source = typeof detail.source.source === "string" ? detail.source.source : null;
   const consent = consentSummary(detail.clientChannels);
 
+  // Session 27 (D161): the route's story — value, provenance, and the last
+  // route_set event's recorded reason and actor.
+  const routeLabel = detail.visaRoute
+    ? (detail.routeOptions.find((o) => o.key === detail.visaRoute)?.label ?? detail.visaRoute)
+    : null;
+  const lastRouteSet = [...detail.events].reverse().find((e) => e.action === "engagement.route_set");
+  const routeReason =
+    lastRouteSet && typeof lastRouteSet.payload.reason === "string" ? lastRouteSet.payload.reason : null;
+  const routeSetter = lastRouteSet?.actorName ?? null;
+  const routeSourceLine =
+    detail.visaRouteSource === "light"
+      ? `set by Light${routeReason ? ` — “${routeReason}”` : ""}`
+      : detail.visaRouteSource === "human"
+        ? `set by ${routeSetter ?? "a team member"}${routeReason ? ` — “${routeReason}”` : ""}`
+        : detail.visaRouteSource === "form_answer"
+          ? "from the form's own answer"
+          : detail.visaRouteSource === "form_default"
+            ? "form default"
+            : null;
+
   return (
     <>
       <div className="mb-3.5">
@@ -345,9 +418,20 @@ export default async function EnquiryDetailPage({
             {/* JUDGMENT: the mockup shows "ENQUIRY #0114" but the schema has no
                 sequence number and adding one is Session 6's fence — the first
                 block of the uuid stands in as the reference for now. */}
-            <div className="mt-0.5 font-mono text-xs font-semibold text-ledger uppercase">
-              {detail.visaRoute ?? "Route not yet classified"} · Enquiry{" "}
-              {detail.id.slice(0, 8)}
+            {/* Session 27 (D160/D161): the route line tells the truth of its
+                moment — "classifying" only while a read may still arrive; the
+                provenance chip wears gold ONLY for Light's hand (colour law). */}
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-xs font-semibold text-ledger uppercase">
+              <span>
+                {routeLabel ?? (detail.classifying ? "Classifying route…" : "Route not yet classified")} ·
+                Enquiry {detail.id.slice(0, 8)}
+              </span>
+              {routeSourceLine ? (
+                <Badge variant={detail.visaRouteSource === "light" ? "gold" : "source"}>
+                  {detail.visaRouteSource === "light" ? "✦ " : ""}
+                  {routeSourceLine}
+                </Badge>
+              ) : null}
             </div>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -435,6 +519,49 @@ export default async function EnquiryDetailPage({
                     </Link>
                   }
                   sub={p.type === "organisation" ? "organisation" : undefined}
+                />
+              ))}
+              {/* Session 27 (D161c): the route field, editable by any team
+                  member with enquiry access — the 0042 door enforces the
+                  ladder; a human-set route is final against machine writes. */}
+              <KvRow
+                k="Route"
+                v={
+                  <>
+                    {routeLabel ??
+                      (detail.classifying ? "Classifying…" : "Not yet classified")}
+                    <span className="ml-2 inline-block">
+                      <RouteReclassifyControl
+                        engagementId={detail.id}
+                        currentRoute={detail.visaRoute}
+                        options={detail.routeOptions}
+                      />
+                    </span>
+                  </>
+                }
+                sub={routeSourceLine ?? undefined}
+              />
+              {detail.predecessor ? (
+                <KvRow
+                  k="Previous"
+                  v={
+                    <Link href={`/enquiries/${detail.predecessor.id}`} className="hover:underline">
+                      {detail.predecessor.title}
+                    </Link>
+                  }
+                  sub="this enquiry was opened by a returning submission"
+                />
+              ) : null}
+              {detail.successors.map((s) => (
+                <KvRow
+                  key={s.id}
+                  k="Continued"
+                  v={
+                    <Link href={`/enquiries/${s.id}`} className="hover:underline">
+                      {s.title}
+                    </Link>
+                  }
+                  sub="a returning submission opened this newer enquiry"
                 />
               ))}
               <KvRow

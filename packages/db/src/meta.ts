@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emitEvent } from "./events";
 import { SEND_EVENT_KINDS } from "./event-kinds";
 import { META_GRAPH_API_BASE } from "./whatsapp";
+import { findKnownContactId, ingestSubmissionRoute, processReturningLead } from "./returning-leads";
 
 /**
  * Meta Lead Ads — inbound (Session 10). The webhook ping carries ids only;
@@ -210,6 +211,13 @@ export interface IngestResult {
   contact_id: string | null;
   engagement_id: string | null;
   thread_id: string | null;
+  /** Session 27 (D158): set when the submission resolved to a known contact
+   * and took the returning-lead path instead of creating a fresh contact. */
+  returning?: {
+    mode: "resubmission" | "successor";
+    predecessor_engagement_id: string | null;
+    marker_communication_id: string | null;
+  };
 }
 
 async function q<T>(p: PromiseLike<{ data: T | null; error: { message: string } | null }>, what: string): Promise<T> {
@@ -261,6 +269,32 @@ export async function ingestMetaLead(
   const phone = normalisePhone(fields.get("phone_number") ?? "");
   const email = (fields.get("email") ?? "").toLowerCase();
   const [givenName, ...familyParts] = fullName.split(/\s+/);
+
+  // Session 27 (D158): the frontier's ruled unit — the same-leadgen guard
+  // above blocks only the SAME submission; a NEW leadgen id resolving to a
+  // known contact is a returning-lead event, always processed (marker into
+  // the existing thread, linkage per fork, the returning-context draft).
+  const knownContactId = await findKnownContactId(db, binding.business_id, email || null, phone || null);
+  if (knownContactId) {
+    const returning = await processReturningLead(
+      db,
+      binding,
+      lead,
+      knownContactId,
+      formAnswersFromFieldData(lead.field_data)
+    );
+    return {
+      created: true,
+      contact_id: knownContactId,
+      engagement_id: returning.engagement_id,
+      thread_id: returning.thread_id,
+      returning: {
+        mode: returning.mode,
+        predecessor_engagement_id: returning.predecessor_engagement_id,
+        marker_communication_id: returning.marker_communication_id,
+      },
+    };
+  }
 
   const attribution = {
     source: "meta",
@@ -438,6 +472,19 @@ export async function ingestMetaLead(
     entity_id: engagementId,
     payload: { stage: "new_lead", attribution },
   });
+
+  // Session 27 (D161a): the route ingests WITH the lead — the form's own
+  // route answer (source form_answer) when one exists, else the per-form
+  // default mapping from Settings (source form_default). A form with
+  // neither leaves the route honestly unset for Light or a human.
+  await ingestSubmissionRoute(
+    db,
+    binding,
+    engagementId,
+    null,
+    formAnswersFromFieldData(lead.field_data),
+    lead.form_id ?? null
+  );
 
   return { created: true, contact_id: contactId, engagement_id: engagementId, thread_id: threads[0]!.id };
 }

@@ -449,3 +449,20 @@ Add to this list during build; check items off only at go-live.
       ordered Session 26 ladder smoke). Live runs mid-flight on v3 finish
       on v3; new leads enrol on v4. This chore is the C4 DoD witness: after
       the run, Automation shows v4 active carrying the ruled ladder.
+- [ ] **Apply migrations 0041-0043 after merging `ui/session-27-returning-leads`**
+      (introduced Session 27, D158-D161): 0041 returning-leads structures
+      (contact_channels lookup index + engagements.predecessor_engagement_id),
+      0042 the route-provenance door (set_engagement_route + the guard
+      trigger - the precedence ladder becomes structural), 0043 the
+      attachment-honesty pre-flight re-issue (mismatch named). check-local
+      green at 336 from zero with all three applied. Until the apply, a
+      returning submission still takes the duplicate-contact path and the
+      route field stays machine-unwritable.
+- [ ] **Map the live Spouse Visa 23/04/2024 form to its route default**
+      (introduced Session 27, D161a): after deploy, in Settings ->
+      Integrations under the Meta row, add form id 751097307189312 with
+      label "Spouse Visa 23/04/2024" mapped to route Spouse/Family
+      (spouse_family). Owner's pen; evented as settings.updated. This is
+      the DoD(2) precondition: a fresh Spouse-form lead then wears its
+      route chip with provenance form_default (or light, when Light
+      refines it with a stated reason).
