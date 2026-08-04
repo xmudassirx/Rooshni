@@ -1743,3 +1743,42 @@ quoted-approval precedent).
      click target. The expansion shows the entry's register facts —
      recorded instant, entry id, concerned entity, cost, payload verbatim —
      in the ledger's own face.
+
+## Session 27 close rulings (4 August 2026)
+
+Entries 172–173 are the founder-approved wordings from the Session 27 close
+review, appended by docs chore on in-prompt authority (the entry-113
+quoted-approval precedent).
+
+172. RECORDED FACT — the D160/D161(d) diagnosis: enquiry 019fc32a's route
+     field was never written because no classifier existed; nothing in the
+     codebase wrote visa_route before Session 27 — every surface only read
+     it. The intro draft's route-matched appearance was matchRoutes()
+     text-matching for retrieval and guide selection, living only on the
+     credit line. The page was neither stale nor early: it honestly
+     rendered a field no machinery would populate. Additionally recorded:
+     before Session 27, a new leadgen id from a known contact created a
+     duplicate contact, enquiry and thread — the returning-leads engine
+     replaces exactly that path.
+
+173. Session 27's eight Lane B calls, approved as one entry: (a) the
+     closed fork's returning draft IS the successor run's intro step
+     composed with returning context — the run drives, no cold intro may
+     compose, nudges anchor on its stamp (48); (b) ambiguous contact
+     matches resolve to no one — email exact then phone, two-plus contacts
+     behind a channel falls through, still-ambiguous processes as a fresh
+     lead; identities never merge on a guess; (c) "the contact's existing
+     thread" resolves as the target enquiry's ingest-created email thread
+     first, else the contact's most recently active thread; (d) open-fork
+     form_answers move to the newest submission; the ledger event keeps
+     the previous values; (e) the WhatsApp companion stands down for
+     returning leads — it carries the approved cold-intro template
+     verbatim (118/119); recorded in the step outcome (146); (f) the
+     marker rides the 0008 internal direction with no schema change;
+     predecessor_engagement_id is a first-class column; route provenance
+     rides attributes.visa_route_source guarded by trigger, value key
+     unchanged; (g) "while a run is in flight" reads as "while a
+     classification may still arrive" — a run that drafted and abstained
+     shows "not yet classified", never an indefinite "classifying";
+     (h) D161(a)'s "spouse" maps to the declared key spouse_family — the
+     installed vocabulary wins over the ruling's shorthand.
