@@ -91,6 +91,7 @@ import {
 import {
   buildMarkerBody,
   diffFormAnswers,
+  planChannelEnrichment,
   resolveFormRouteDefault,
   resolveKnownContactId,
   routeFromFormAnswers,
@@ -5988,6 +5989,298 @@ async function main() {
     if (!pageSource.includes("RouteReclassifyControl")) {
       throw new Error("the human reclassify control left the enquiry page");
     }
+  });
+
+  // ---------------------------------------------------------------------
+  console.log("\nSession 28 — returning-lead channel refinement (D174) + whole-set contact search:");
+
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await db.exec(`set request.jwt.claims = ''`);
+
+  await expectOk("same email, new phone: the match stands and the phone is planned as an additional channel", async () => {
+    const rows = [
+      { contact_id: "c1", channel: "email", value: "amina@x.test" },
+      { contact_id: "c1", channel: "phone", value: "+441111" },
+    ];
+    if (resolveKnownContactId(rows, "amina@x.test", "+447999") !== "c1") {
+      throw new Error("a new phone value blocked an email resolution");
+    }
+    const plan = planChannelEnrichment(rows, "amina@x.test", "+447999");
+    if (plan.length !== 1 || plan[0]!.channel !== "phone" || plan[0]!.value !== "+447999") {
+      throw new Error("the new phone was not planned as enrichment");
+    }
+    // The orchestration writes it with the form's consent and events it with
+    // provenance (tripwires — the write path is TS over Supabase).
+    const returningSource = readFileSync(resolve(import.meta.dirname, "../src/returning-leads.ts"), "utf8");
+    if (!returningSource.includes(`source: "meta_lead_form"`) || !returningSource.includes("enrichment channel insert")) {
+      throw new Error("the enrichment write lost the form-carried consent");
+    }
+    if (!returningSource.includes("RETURNING_EVENT_KINDS.channelAdded")) {
+      throw new Error("the enrichment write is no longer evented");
+    }
+    const metaSource = readFileSync(resolve(import.meta.dirname, "../src/meta.ts"), "utf8");
+    if (!metaSource.includes("known.enrich")) {
+      throw new Error("ingest no longer hands the enrichment plan to the returning path");
+    }
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    if (!kinds.includes(`"contact.channel_added"`)) {
+      throw new Error("the declared vocabulary lost contact.channel_added");
+    }
+    // The schema accepts exactly the write the engine issues: an additional
+    // channel row with the form's consent, and its ledger event.
+    const enrichContact = await db.query<{ id: string }>(
+      `insert into public.contacts (business_id, created_by, type, display_name)
+       values ($1, $2, 'person', 'Enrichment Lead') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'phone', '+447999', false,
+               '{"marketing": true, "transactional": true, "granted_at": "2026-08-04T09:00:00Z", "source": "meta_lead_form"}'::jsonb)`,
+      [f.business_id, f.agent_id, enrichContact.rows[0]!.id]
+    );
+    const evt = await db.query<{ id: string }>(
+      `insert into public.events (business_id, actor_id, action, entity_type, entity_id, payload)
+       values ($1, $2, 'contact.channel_added', 'contact', $3,
+               '{"channel":"phone","value":"+447999","lead_id":"s28_lead_1","form_id":"751097307189312","consent_source":"meta_lead_form"}'::jsonb)
+       returning id`,
+      [f.business_id, f.agent_id, enrichContact.rows[0]!.id]
+    );
+    if (!evt.rows[0]!.id) throw new Error("the channel_added event did not land");
+  });
+
+  await expectOk("same phone, new email: the mirror resolves and plans the email, lower-cased", async () => {
+    const rows = [
+      { contact_id: "c1", channel: "email", value: "amina@x.test" },
+      { contact_id: "c1", channel: "phone", value: "+441111" },
+    ];
+    if (resolveKnownContactId(rows, "fresh@x.test", "+441111") !== "c1") {
+      throw new Error("a new email value blocked a phone resolution");
+    }
+    const plan = planChannelEnrichment(rows, "FRESH@X.TEST", "+441111");
+    if (plan.length !== 1 || plan[0]!.channel !== "email" || plan[0]!.value !== "fresh@x.test") {
+      throw new Error("the new email was not planned (lower-cased) as enrichment");
+    }
+  });
+
+  await expectOk("a cross-channel conflict resolves to no one — fresh lead, deterministically, identities never merged", async () => {
+    const rows = [
+      { contact_id: "c1", channel: "email", value: "amina@x.test" },
+      { contact_id: "c2", channel: "phone", value: "+442222" },
+    ];
+    // D174(c): email → c1, phone → c2 — twice, same answer, no one.
+    for (let i = 0; i < 2; i += 1) {
+      if (resolveKnownContactId(rows, "amina@x.test", "+442222") !== null) {
+        throw new Error("a cross-channel conflict resolved to a contact");
+      }
+    }
+    // D174(d): the other value shared by SEVERAL other contacts is equally
+    // conflict — belonging to another contact, not enrichment.
+    const shared = [
+      ...rows,
+      { contact_id: "c3", channel: "phone", value: "+442222" },
+    ];
+    if (resolveKnownContactId(shared, "amina@x.test", "+442222") !== null) {
+      throw new Error("a value on several other contacts did not read as conflict");
+    }
+    // A value the MATCHED contact also holds is no conflict — the match stands.
+    const withMatched = [
+      { contact_id: "c1", channel: "email", value: "amina@x.test" },
+      { contact_id: "c1", channel: "phone", value: "+443333" },
+      { contact_id: "c2", channel: "phone", value: "+443333" },
+    ];
+    if (resolveKnownContactId(withMatched, "amina@x.test", "+443333") !== "c1") {
+      throw new Error("a shared value including the matched contact broke the match");
+    }
+    // The s27 ambiguity ladder stands unchanged (173b).
+    const clash = [
+      { contact_id: "c1", channel: "email", value: "shared@x.test" },
+      { contact_id: "c2", channel: "email", value: "shared@x.test" },
+      { contact_id: "c2", channel: "phone", value: "+444444" },
+    ];
+    if (resolveKnownContactId(clash, "shared@x.test", "+444444") !== "c2") {
+      throw new Error("ambiguous email no longer falls through to the phone match");
+    }
+  });
+
+  await expectOk("a changed name never blocks resolution — channels only — and the marker highlights it as a changed field", async () => {
+    // The resolver's signature takes channel values only; ingest hands it
+    // exactly those (tripwire), so the submitted name cannot participate.
+    const metaSource = readFileSync(resolve(import.meta.dirname, "../src/meta.ts"), "utf8");
+    if (!metaSource.includes("findKnownContactId(db, binding.business_id, email || null, phone || null)")) {
+      throw new Error("ingest no longer resolves on channel values alone");
+    }
+    const diff = diffFormAnswers(
+      [
+        { name: "full_name", label: "Full name", value: "Mudassir Mukhtar" },
+        { name: "email", label: "Email", value: "amina@x.test" },
+      ],
+      [
+        { name: "full_name", label: "Full name", value: "Mudassir M." },
+        { name: "email", label: "Email", value: "amina@x.test" },
+      ]
+    );
+    const nameRow = diff.find((d) => d.name === "full_name");
+    if (!nameRow?.changed || nameRow.previous_value !== "Mudassir Mukhtar") {
+      throw new Error("a changed name is not highlighted with its previous value");
+    }
+    if (diff.find((d) => d.name === "email")?.changed) {
+      throw new Error("an unchanged channel read as changed");
+    }
+    if (!/was Mudassir Mukhtar/.test(buildMarkerBody({ form_label: "Enquiry form", submitted_at: "2026-08-04", diff }))) {
+      throw new Error("the marker body does not carry the name change");
+    }
+  });
+
+  await expectOk("enrichment is idempotent — the same new value on a later submission finds its own row and stands down", async () => {
+    // After the first enrichment the rows the resolver reads INCLUDE the
+    // added value — the second plan is empty; one row, ever.
+    const afterFirst = [
+      { contact_id: "c1", channel: "email", value: "amina@x.test" },
+      { contact_id: "c1", channel: "phone", value: "+447999" },
+    ];
+    if (planChannelEnrichment(afterFirst, "amina@x.test", "+447999").length !== 0) {
+      throw new Error("an already-held value was planned again");
+    }
+    if (planChannelEnrichment(afterFirst, null, "+447999").length !== 0) {
+      throw new Error("a phone-only resubmission planned a duplicate");
+    }
+  });
+
+  // --- Whole-set contact search (Workstream B) ---------------------------
+  // Fixture: 25 alphabetically-early contacts push the target past the
+  // first window (20); the target matches by name, email and phone.
+  await db.query(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     select $1, $2, 'person', 'Aaaa Lead ' || lpad(n::text, 2, '0') from generate_series(1, 25) n`,
+    [f.business_id, f.agent_id]
+  );
+  const s28Target = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Mudassir Mukhtar') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s28TargetId = s28Target.rows[0]!.id;
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'mudassir@example.test', true, '{"transactional": true}'::jsonb),
+            ($1, $2, $3, 'phone', '+447700900123', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s28TargetId]
+  );
+  // A second business holding a look-alike contact — the RLS wall's probe.
+  const s28Other = await db.query<{ contact_id: string }>(
+    `
+    with u as (
+      insert into auth.users (id, email) values ('00000000-0000-4000-8000-000000000028', 'other-owner@example.test') returning id
+    ), acc as (
+      insert into public.accounts (name, owner_user_id) select 'Other Account', id from u returning id
+    ), biz as (
+      insert into public.businesses (account_id, name) select id, 'Other Business' from acc returning id, account_id
+    ), actor as (
+      insert into public.actors (account_id, actor_type, display_name, user_id)
+      select account_id, 'human', 'Other Owner', '00000000-0000-4000-8000-000000000028' from biz returning id
+    ), c as (
+      insert into public.contacts (business_id, created_by, type, display_name)
+      select biz.id, actor.id, 'person', 'Mudassir Other' from biz, actor returning id
+    ), ch as (
+      insert into public.contact_channels (business_id, created_by, contact_id, channel, value)
+      select biz.id, actor.id, c.id, 'email', 'mudassir@other.test' from biz, actor, c returning id
+    )
+    select (select id from c) as contact_id
+    `
+  );
+  const s28OtherContactId = s28Other.rows[0]!.contact_id;
+
+  await expectOk("the first page of the book does not hold the target — the founder-found live shape", async () => {
+    const pageOne = await db.query<{ id: string }>(
+      `select id from public.contacts
+       where business_id = $1 and archived_at is null
+       order by display_name asc limit 20 offset 0`,
+      [f.business_id]
+    );
+    if (pageOne.rows.some((r) => r.id === s28TargetId)) {
+      throw new Error("the fixture no longer pushes the target off page 1 — the smoke proves nothing");
+    }
+  });
+
+  await expectOk("search finds the off-page contact by name, by email and by phone — the whole set, never the loaded page", async () => {
+    // The exact legs getContacts issues: name ilike + channel value ilike
+    // (email and phone channels), business-scoped, live rows only, then the
+    // windowed read filtered by the resolved id set.
+    const legs = async (q: string) => {
+      const names = await db.query<{ id: string }>(
+        `select id from public.contacts
+         where business_id = $1 and archived_at is null and display_name ilike $2 limit 50`,
+        [f.business_id, `%${q}%`]
+      );
+      const channels = await db.query<{ contact_id: string }>(
+        `select contact_id from public.contact_channels
+         where business_id = $1 and archived_at is null and channel in ('email', 'phone') and value ilike $2 limit 50`,
+        [f.business_id, `%${q}%`]
+      );
+      const idSet = [...new Set([...names.rows.map((r) => r.id), ...channels.rows.map((r) => r.contact_id)])];
+      if (idSet.length === 0) return [];
+      const windowed = await db.query<{ id: string }>(
+        `select id from public.contacts
+         where business_id = $1 and archived_at is null and id = any($2::uuid[])
+         order by display_name asc limit 20 offset 0`,
+        [f.business_id, idSet]
+      );
+      return windowed.rows.map((r) => r.id);
+    };
+    for (const [probe, q] of [
+      ["name", "Mudassir"],
+      ["email", "mudassir@example"],
+      ["phone", "7700900123"],
+    ] as const) {
+      const found = await legs(q);
+      if (!found.includes(s28TargetId)) throw new Error(`the ${probe} search missed the off-page contact`);
+    }
+    // The read layer and the surface carry the shape (tripwires): server-side
+    // legs in getContacts, the page passing q, the client debouncing into the
+    // URL instead of filtering the loaded page.
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    if (!queriesSource.includes("CONTACT_SEARCH_BOUND")) {
+      throw new Error("getContacts lost its bounded search legs");
+    }
+    const listSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/contacts-list.tsx"),
+      "utf8"
+    );
+    if (listSource.includes("ch.value.toLowerCase().includes")) {
+      throw new Error("the contacts search filters the loaded page again — the founder-found defect");
+    }
+    if (!listSource.includes("router.replace") || !listSource.includes("setTimeout")) {
+      throw new Error("the contacts search is no longer debounced into the URL");
+    }
+    const pageSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/page.tsx"),
+      "utf8"
+    );
+    if (!pageSource.includes("getContacts(Number(params.page ?? \"1\"), q)")) {
+      throw new Error("the contacts page no longer hands the query to the server read");
+    }
+  });
+
+  await expectOk("search never returns another business's contacts — the RLS wall holds without the business filter", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    // No business_id filter at all: RLS alone must scope the read.
+    const names = await db.query<{ id: string }>(
+      `select id from public.contacts where archived_at is null and display_name ilike '%Mudassir%'`
+    );
+    const channels = await db.query<{ contact_id: string }>(
+      `select contact_id from public.contact_channels
+       where archived_at is null and channel in ('email', 'phone') and value ilike '%mudassir@%'`
+    );
+    await db.exec(`reset role`);
+    const seen = new Set([...names.rows.map((r) => r.id), ...channels.rows.map((r) => r.contact_id)]);
+    if (!seen.has(s28TargetId)) throw new Error("the member cannot find their own business's contact");
+    if (seen.has(s28OtherContactId)) throw new Error("another business's contact leaked through the search");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

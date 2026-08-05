@@ -274,18 +274,23 @@ export async function ingestMetaLead(
   // above blocks only the SAME submission; a NEW leadgen id resolving to a
   // known contact is a returning-lead event, always processed (marker into
   // the existing thread, linkage per fork, the returning-context draft).
-  const knownContactId = await findKnownContactId(db, binding.business_id, email || null, phone || null);
-  if (knownContactId) {
+  // Session 28 (D174): resolution keys on channel values only; a match
+  // carrying a new value on the other channel enriches the contact, and a
+  // cross-channel conflict resolves to no one — this falls to the fresh
+  // path below.
+  const known = await findKnownContactId(db, binding.business_id, email || null, phone || null);
+  if (known) {
     const returning = await processReturningLead(
       db,
       binding,
       lead,
-      knownContactId,
-      formAnswersFromFieldData(lead.field_data)
+      known.contact_id,
+      formAnswersFromFieldData(lead.field_data),
+      known.enrich
     );
     return {
       created: true,
-      contact_id: knownContactId,
+      contact_id: known.contact_id,
       engagement_id: returning.engagement_id,
       thread_id: returning.thread_id,
       returning: {

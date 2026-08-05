@@ -198,6 +198,11 @@ export const RETURNING_EVENT_KINDS = {
   /** The system marker posted into the contact's existing thread (D158a) —
    * a fact, not Light's act and not a human's; neutral chrome everywhere. */
   returningMarkerPosted: "communication.returning_marker_posted",
+  /** Session 28 (D174b): a returning submission presented a NEW value on
+   * the other channel — added to the matched contact as an additional
+   * channel, consent carried from the form; provenance (leadgen id, form
+   * id, consent source) in the payload. */
+  channelAdded: "contact.channel_added",
 } as const satisfies Record<string, EventAction>;
 
 /** Session 27 (D158a): the marker's kind marker on the communications row
