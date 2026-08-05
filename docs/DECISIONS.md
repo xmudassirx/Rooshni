@@ -1812,4 +1812,16 @@ quoted-approval precedent).
      only the page. Additionally recorded: Conversations carries
      the same page-local search defect (found at s28 pre-close,
      Lane C); queued, not fixed here.
-     
+
+176. Close bookkeeping, amended (5 August 2026): a session prompt
+     may carry standing authority for the builder to append ONE
+     consolidated DECISIONS entry at close recording that session's
+     Lane B judgement calls, worded as the close report's
+     recommendations and marked "(provisional — the founder's merge
+     is the stamp, D152 pattern)". The founder reads the close
+     report, amends or strikes any call, and the hand-merge
+     finalises the entry; an unmerged provisional entry has no
+     force. Entries carrying founder rulings made in chat continue
+     to require quoted in-prompt authority (the entry-113
+     precedent). The direction of authority is unchanged: nothing
+     becomes a ruling without the founder's hand.
