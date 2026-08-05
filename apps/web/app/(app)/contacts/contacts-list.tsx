@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
@@ -64,21 +64,34 @@ function TypeChip({ row }: { row: ContactListRow }) {
   );
 }
 
-export function ContactsList({ contacts }: { contacts: ContactListRow[] }) {
+export function ContactsList({
+  contacts,
+  query: serverQuery,
+}: {
+  contacts: ContactListRow[];
+  query: string;
+}) {
   const [advanced, setAdvanced] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(serverQuery);
   const [notice, setNotice] = useState<string | null>(null);
   const router = useRouter();
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.channels.some((ch) => ch.value.toLowerCase().includes(q))
-    );
-  }, [contacts, query]);
+  // Session 28: the search queries the business's ENTIRE contact set
+  // server-side (founder-found live, 4 Aug 2026: page-1 filtering hid
+  // contacts on later pages). Debounced into the URL — the server read
+  // resolves the whole-set match; a new query always restarts at page 1.
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (query === serverQuery) return;
+    debounce.current = setTimeout(() => {
+      router.replace(query.trim() ? `/contacts?q=${encodeURIComponent(query.trim())}` : "/contacts");
+    }, 300);
+    return () => {
+      if (debounce.current) clearTimeout(debounce.current);
+    };
+  }, [query, serverQuery, router]);
+
+  const visible = contacts;
 
   return (
     <>
@@ -246,7 +259,7 @@ export function ContactsList({ contacts }: { contacts: ContactListRow[] }) {
       )}
 
       {visible.length === 0 ? (
-        contacts.length === 0 ? (
+        !serverQuery.trim() ? (
           // Session 11 true empty state — consent law up front, no invented rows.
           <div className="glass mx-auto mt-6 max-w-[560px] rounded-2xl border-dashed p-8 text-center">
             <div className="mb-2 text-[28px]">◉</div>

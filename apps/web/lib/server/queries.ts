@@ -3431,29 +3431,77 @@ export interface ContactsPage {
   pageCount: number;
 }
 
+/** Session 28: the contact search's bounded candidate read — name or
+ * channel-value match, server-side, each leg capped (the WS4f precedent). */
+const CONTACT_SEARCH_BOUND = 50;
+
 /**
  * Session 22 (WS5d): the contacts list reads a WINDOW — server-side
  * pagination (default 20), hydration scoped to the PAGE's contact ids, the
  * total a COUNT aggregate. The demo-era read fetched every contact, every
  * channel, every relationship and EVERY communication row on each render.
+ *
+ * Session 28: search queries the business's ENTIRE contact set server-side
+ * — display name, email channel value, phone channel value — never just
+ * the loaded page (founder-found live, 4 Aug 2026). Bounded legs resolve
+ * an id set the windowed read then filters by, the WS4f pattern.
  */
-export async function getContacts(page = 1): Promise<ContactsPage> {
+export async function getContacts(page = 1, search = ""): Promise<ContactsPage> {
   const { db, business } = await getAppContext();
   const range = pageRange(page, DEFAULT_LIST_WINDOW);
 
+  const query = search.trim().replace(/[%_\\]/g, "").slice(0, 80);
+  let searchIds: string[] | null = null;
+  if (query) {
+    const [nameHits, channelHits] = await Promise.all([
+      db
+        .from("contacts")
+        .select("id")
+        .eq("business_id", business.id)
+        .ilike("display_name", `%${query}%`)
+        .is("archived_at", null)
+        .limit(CONTACT_SEARCH_BOUND),
+      db
+        .from("contact_channels")
+        .select("contact_id")
+        .eq("business_id", business.id)
+        .in("channel", ["email", "phone"])
+        .ilike("value", `%${query}%`)
+        .is("archived_at", null)
+        .limit(CONTACT_SEARCH_BOUND),
+    ]);
+    if (nameHits.error) throw new Error(`contact search (names) failed: ${nameHits.error.message}`);
+    if (channelHits.error) throw new Error(`contact search (channels) failed: ${channelHits.error.message}`);
+    searchIds = [
+      ...new Set([
+        ...(nameHits.data ?? []).map((c) => c.id as string),
+        ...(channelHits.data ?? []).map((c) => c.contact_id as string),
+      ]),
+    ];
+    // A fruitless search is an honest empty page — no impossible filter.
+    if (searchIds.length === 0) {
+      return { rows: [], total: 0, page: 1, pageCount: 1 };
+    }
+  }
+
+  let windowQuery = db
+    .from("contacts")
+    .select("id, display_name, type, status, locale, first_touch")
+    .eq("business_id", business.id)
+    .is("archived_at", null);
+  let countQuery = db
+    .from("contacts")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", business.id)
+    .is("archived_at", null);
+  if (searchIds !== null) {
+    windowQuery = windowQuery.in("id", searchIds);
+    countQuery = countQuery.in("id", searchIds);
+  }
+
   const [contacts, totalResult] = await Promise.all([
-    db
-      .from("contacts")
-      .select("id, display_name, type, status, locale, first_touch")
-      .eq("business_id", business.id)
-      .is("archived_at", null)
-      .order("display_name", { ascending: true })
-      .range(range.from, range.to),
-    db
-      .from("contacts")
-      .select("id", { count: "exact", head: true })
-      .eq("business_id", business.id)
-      .is("archived_at", null),
+    windowQuery.order("display_name", { ascending: true }).range(range.from, range.to),
+    countQuery,
   ]);
   if (contacts.error) throw new Error(`contacts query failed: ${contacts.error.message}`);
   if (totalResult.error) throw new Error(`contacts count failed: ${totalResult.error.message}`);
