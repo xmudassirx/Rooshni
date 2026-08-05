@@ -1798,3 +1798,18 @@ quoted-approval precedent).
      one: fresh lead, identities never merged on a guess (173b). (d) A
      new value belonging to no contact is enrichment (b); a new value
      belonging to another contact is conflict (c)."
+
+## Session 28 close ruling (5 August 2026)
+
+175. Session 28's Lane B calls, approved as one entry: (a) D174(d)
+     reads literally — a new channel value belonging to one OR
+     several other contacts is conflict; only an unknown value or
+     one the matched contact already holds leaves the match
+     standing; (b) enrichment rows insert is_primary false — the
+     ruling grants an additional channel; primacy stays a human
+     call; (c) search legs cap at 50 surfaced matches each (WS4f
+     precedent) — the entire set is always queried, the cap bounds
+     only the page. Additionally recorded: Conversations carries
+     the same page-local search defect (found at s28 pre-close,
+     Lane C); queued, not fixed here.
+     
