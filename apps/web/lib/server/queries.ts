@@ -3432,7 +3432,11 @@ export interface ContactsPage {
 }
 
 /** Session 28: the contact search's bounded candidate read — name or
- * channel-value match, server-side, each leg capped (the WS4f precedent). */
+ * channel-value match, server-side, each leg capped.
+ * JUDGMENT: the cap follows the WS4f precedent (50 per leg, Session 23's
+ * pipeline search) — the ruled requirement is the ENTIRE set is queried,
+ * which holds; the cap bounds only how many matches one query surfaces
+ * (Session 28 pre-flight). */
 const CONTACT_SEARCH_BOUND = 50;
 
 /**
