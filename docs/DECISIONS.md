@@ -1782,3 +1782,19 @@ quoted-approval precedent).
      shows "not yet classified", never an indefinite "classifying";
      (h) D161(a)'s "spouse" maps to the declared key spouse_family — the
      installed vocabulary wins over the ruling's shorthand.
+
+174. **Returning-lead channel handling, refined.** In-prompt authority,
+     the entry-113 precedent — founder-ruled 4 August 2026, quoted
+     verbatim: "(a) resolution keys on channel values (email, phone)
+     only — the submitted name is never consulted and a changed name
+     never blocks resolution; the marker highlights it as a changed
+     field. (b) A returning match on one channel that presents a NEW
+     value on the other channel adds that value to the matched contact
+     as an additional channel — consent carried from the form, evented
+     with provenance — and the conversation continues on the existing
+     thread; successful resolution never opens a new thread. (c) A
+     cross-channel conflict — the email resolving to one contact and
+     the phone to a different contact — is ambiguity and resolves to no
+     one: fresh lead, identities never merged on a guess (173b). (d) A
+     new value belonging to no contact is enrichment (b); a new value
+     belonging to another contact is conflict (c)."
