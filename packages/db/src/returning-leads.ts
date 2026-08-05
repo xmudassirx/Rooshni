@@ -39,12 +39,21 @@ export interface KnownChannelRow {
 
 /**
  * Deterministic known-contact resolution: exact email match first, then
- * exact phone.
+ * exact phone. Resolution keys on channel VALUES only — the submitted name
+ * is never consulted (D174a).
  * JUDGMENT: an AMBIGUOUS match (two or more distinct contacts behind the
  * priority channel) falls to the next channel, and if still ambiguous
  * resolves to NO ONE — a regulated firm never merges identities on a
  * guess; the submission then processes as a fresh lead (Session 27
  * pre-flight, D158b).
+ * D174(c)/(d) — the cross-channel conflict guard: a match on one channel
+ * whose OTHER submitted value belongs to a different contact is ambiguity
+ * and resolves to no one — fresh lead, identities never merged on a guess.
+ * JUDGMENT: D174(d)'s "belonging to another contact" is read literally —
+ * the other value belonging to one other contact (c's canonical case) OR
+ * shared by several other contacts is equally conflict; only a value that
+ * is unknown, or already the matched contact's own, leaves the match
+ * standing (Session 28 pre-flight).
  */
 export function resolveKnownContactId(
   rows: KnownChannelRow[],
@@ -59,10 +68,44 @@ export function resolveKnownContactId(
     return [...new Set(ids)];
   };
   const byEmail = distinct("email", email ? email.toLowerCase() : null);
-  if (byEmail.length === 1) return byEmail[0]!;
   const byPhone = distinct("phone", phone);
-  if (byPhone.length === 1) return byPhone[0]!;
+  if (byEmail.length === 1) {
+    return byPhone.length === 0 || byPhone.includes(byEmail[0]!) ? byEmail[0]! : null;
+  }
+  if (byPhone.length === 1) {
+    return byEmail.length === 0 || byEmail.includes(byPhone[0]!) ? byPhone[0]! : null;
+  }
   return null;
+}
+
+export interface EnrichmentChannel {
+  channel: "email" | "phone";
+  value: string;
+}
+
+/**
+ * D174(b)/(d): which submitted channel values the matched contact gains as
+ * ADDITIONAL channels. A value is enrichment only when it belongs to NO
+ * contact in the rows read — a value already on the matched contact adds
+ * nothing (idempotent: the same new value on a later submission finds its
+ * own row and stands down), and a value on another contact never reaches
+ * here because the conflict guard resolved the submission to no one.
+ */
+export function planChannelEnrichment(
+  rows: KnownChannelRow[],
+  email: string | null,
+  phone: string | null
+): EnrichmentChannel[] {
+  const plan: EnrichmentChannel[] = [];
+  for (const entry of [
+    { channel: "email" as const, value: email ? email.toLowerCase() : null },
+    { channel: "phone" as const, value: phone },
+  ]) {
+    if (!entry.value) continue;
+    const known = rows.some((r) => r.channel === entry.channel && r.value === entry.value);
+    if (!known) plan.push({ channel: entry.channel, value: entry.value });
+  }
+  return plan;
 }
 
 export interface AnswerDiffEntry {
@@ -152,14 +195,22 @@ async function q<T>(p: PromiseLike<{ data: T | null; error: { message: string } 
   return (data ?? ([] as unknown)) as T;
 }
 
+export interface KnownContactMatch {
+  contact_id: string;
+  /** D174(b): submitted values the matched contact does not yet hold —
+   * written as additional channels by processReturningLead. */
+  enrich: EnrichmentChannel[];
+}
+
 /** Business-scoped lookup behind resolveKnownContactId — served by the 0041
- * index; reads only the channels that could match. */
+ * index; reads only the channels that could match. The same read feeds the
+ * enrichment plan (D174b): a submitted value matching no row is new. */
 export async function findKnownContactId(
   db: SupabaseClient,
   businessId: string,
   email: string | null,
   phone: string | null
-): Promise<string | null> {
+): Promise<KnownContactMatch | null> {
   const values = [email ? email.toLowerCase() : null, phone].filter((v): v is string => Boolean(v));
   if (values.length === 0) return null;
   const rows = await q<KnownChannelRow[]>(
@@ -172,7 +223,9 @@ export async function findKnownContactId(
       .is("archived_at", null),
     "known-contact lookup"
   );
-  return resolveKnownContactId(rows, email, phone);
+  const contactId = resolveKnownContactId(rows, email, phone);
+  if (!contactId) return null;
+  return { contact_id: contactId, enrich: planChannelEnrichment(rows, email, phone) };
 }
 
 export interface ReturningResult {
@@ -335,8 +388,52 @@ export async function processReturningLead(
   binding: MetaBusinessBinding,
   lead: MetaLeadDetail,
   contactId: string,
-  newAnswers: FormAnswer[]
+  newAnswers: FormAnswer[],
+  enrich: EnrichmentChannel[] = []
 ): Promise<ReturningResult> {
+  // -- D174(b): a new value on the other channel joins the matched contact
+  // as an ADDITIONAL channel — consent carried from the form (the ingest
+  // path's exact shape), evented with provenance. The plan was computed at
+  // resolution time from the same rows the resolver read: a value already
+  // held adds nothing (idempotent), a value on another contact never
+  // reaches here (the conflict guard resolved to no one).
+  // JUDGMENT: the added channel inserts with is_primary false — the ruling
+  // says "additional channel"; primacy is a human call, never a guess
+  // (Session 28 pre-flight).
+  for (const extra of enrich) {
+    await q(
+      db.from("contact_channels").insert({
+        business_id: binding.business_id,
+        created_by: binding.integration_actor_id,
+        contact_id: contactId,
+        channel: extra.channel,
+        value: extra.value,
+        is_primary: false,
+        consent: {
+          marketing: true,
+          transactional: true,
+          granted_at: lead.created_time,
+          source: "meta_lead_form",
+        },
+      }).select("id"),
+      "enrichment channel insert"
+    );
+    await emitEvent(db, {
+      business_id: binding.business_id,
+      actor_id: binding.integration_actor_id,
+      action: RETURNING_EVENT_KINDS.channelAdded,
+      entity_type: "contact",
+      entity_id: contactId,
+      payload: {
+        channel: extra.channel,
+        value: extra.value,
+        lead_id: lead.id,
+        form_id: lead.form_id ?? null,
+        consent_source: "meta_lead_form",
+      },
+    });
+  }
+
   const predecessor = await loadPredecessor(db, contactId);
   const previousAnswers =
     ((predecessor?.attributes ?? {}) as { form_answers?: FormAnswer[] }).form_answers ?? [];

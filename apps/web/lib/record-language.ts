@@ -53,6 +53,18 @@ export function describeEvent(action: string, payload: Record<string, unknown>):
       const form = str("form_label");
       return `system marker posted into the conversation${form ? ` — ${form}` : ""}`;
     }
+    // Session 28 (D174b): enrichment — a returning submission's new value.
+    case "contact.channel_added": {
+      const channel = str("channel");
+      const value = str("value");
+      return [
+        `returning submission added a new ${channel ?? "channel"}`,
+        value ? `— ${value}` : null,
+        "· consent carried from the form",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
     // Session 27 (D161): route classification, every source honestly named.
     case "engagement.route_set": {
       const route = str("route");
