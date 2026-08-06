@@ -11,6 +11,7 @@ import {
   quietHoursFromSendWindow,
   quietHoursHoldUntil,
   resolveQuietHours,
+  resolveQuietHoursWithSource,
   sendWindowFromQuietHours,
   QUIET_HOURS_DEFAULT,
 } from "../src/quiet-hours";
@@ -53,6 +54,7 @@ import {
 } from "../src/drafting";
 import {
   defaultSurfacesForFactKey,
+  healedCarriedSurfaces,
   memoryFactValue,
   memoryInstructionTokens,
   planFactSweep,
@@ -8222,6 +8224,138 @@ async function main() {
       "utf8"
     );
     if (/bulkApprove/i.test(actionsSource)) throw new Error("a bulk approve appeared — D113 forbids it, forever");
+  });
+
+  // ---------------------------------------------------------------------
+  // Quiet-window micro-fix (7 Aug 2026, D144 hotfix class): the Quiet
+  // hours row states the resolved window with its TRUE source and gains
+  // its own editor through the one shared door; the supersede fact-heal
+  // clause extends to the Memory edit door.
+  // ---------------------------------------------------------------------
+  console.log("\nQuiet-window micro-fix:");
+
+  await expectOk("the Quiet hours row names the TRUE source for every state — firm-set WINS the resolver, template default and off are named, the claimed derivation is gone", async () => {
+    const declared = { start: "20:00", end: "08:00" };
+    // A firm-set window wins (D170), and says so.
+    const firm = resolveQuietHoursWithSource({ quiet_hours: { start: "21:00", end: "07:30" } }, declared);
+    if (firm.source !== "firm" || firm.window?.start !== "21:00" || firm.window?.end !== "07:30") {
+      throw new Error("a firm-set window no longer wins the resolver as source 'firm'");
+    }
+    // Unset firm → the installed template's declared default, named.
+    const template = resolveQuietHoursWithSource({}, declared);
+    if (template.source !== "template" || template.window?.start !== "20:00") {
+      throw new Error("the template default no longer resolves as source 'template'");
+    }
+    // Install-less → the shipped constant, named as its own honest state
+    // (labelling it "template default" would repeat the witnessed defect).
+    const shipped = resolveQuietHoursWithSource({}, null);
+    if (shipped.source !== "shipped" || shipped.window !== QUIET_HOURS_DEFAULT) {
+      throw new Error("the install-less constant no longer resolves as source 'shipped'");
+    }
+    // Explicit null → off.
+    const off = resolveQuietHoursWithSource({ quiet_hours: null }, declared);
+    if (off.source !== "off" || off.window !== null) throw new Error("the explicit null no longer resolves as source 'off'");
+    // ONE resolution: the plain resolver is the with-source resolver minus
+    // provenance — display and enforcement cannot disagree.
+    for (const s of [{}, { quiet_hours: null }, { quiet_hours: { start: "21:00", end: "07:30" } }]) {
+      const a = resolveQuietHours(s, declared);
+      const b = resolveQuietHoursWithSource(s, declared).window;
+      if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error("the two resolvers diverged — one truth split");
+    }
+    // The row: honest provenance rendered, the false derivation gone.
+    const generalTabSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/general-tab.tsx"),
+      "utf8"
+    );
+    if (generalTabSource.includes("outside the business hours above")) {
+      throw new Error("the row still claims a derivation from business hours that does not exist");
+    }
+    if (!generalTabSource.includes("resolveQuietHoursWithSource(")) {
+      throw new Error("the row no longer resolves with provenance");
+    }
+    const quietControlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/quiet-hours-control.tsx"),
+      "utf8"
+    );
+    for (const label of ['"firm-set"', '"template default"', '"shipped default"', "Off — dispatch any hour"]) {
+      if (!quietControlSource.includes(label)) throw new Error(`the row lost a true-source state: ${label}`);
+    }
+  });
+
+  await expectOk("the quiet window's editor shares the ONE door — set_quiet is dispatch policy only (no fact write), and no-quiet-hours is the s33 disable arm, never a second implementation", async () => {
+    const settingsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/actions.ts"),
+      "utf8"
+    );
+    const setQuietAt = settingsSource.indexOf('} else if (mode === "set_quiet") {');
+    const finalElseAt = setQuietAt === -1 ? -1 : settingsSource.indexOf("} else {", setQuietAt);
+    if (setQuietAt === -1 || finalElseAt === -1) {
+      throw new Error("the set_quiet arm reshaped — re-pin the dispatch-only boundary");
+    }
+    const setQuietArm = settingsSource.slice(setQuietAt, finalElseAt);
+    if (setQuietArm.includes("setMemoryFact") || setQuietArm.includes("deactivateMemoryEntry")) {
+      throw new Error("the set_quiet arm touches the opening-hours fact — the s33 amendment severed dispatch policy from opening hours");
+    }
+    if (!settingsSource.includes("dispatch policy only; the opening-hours fact untouched")) {
+      throw new Error("the set_quiet save is no longer evented naming the change");
+    }
+    const quietControlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/quiet-hours-control.tsx"),
+      "utf8"
+    );
+    if (!quietControlSource.includes("setBusinessHoursAction")) {
+      throw new Error("the quiet editor grew its own door — one shared action is the law here");
+    }
+    if (!quietControlSource.includes('value="set_quiet"') || !quietControlSource.includes('value="disable"')) {
+      throw new Error("the quiet editor lost an act (set_quiet / the shared disable arm)");
+    }
+  });
+
+  await expectOk("the Memory-door supersede heals an empty, untouched surfaces list to the per-key defaults — the next sweep raises the GMB task; a deliberate list is never overridden", async () => {
+    const emptyHoursFact = {
+      kind: "fact" as const,
+      surfaces: [],
+      attributes: { fact_key: "opening_hours" },
+    };
+    // Untouched empty list → healed to the shared per-key defaults.
+    const healed = healedCarriedSurfaces(emptyHoursFact);
+    if (healed.length !== 1 || healed[0] !== GOOGLE_BUSINESS_PROFILE_SURFACE) {
+      throw new Error("an untouched empty list did not heal to the per-key defaults");
+    }
+    // …and the next sweep raises the GMB manual task from the healed list.
+    const plan = planFactSweep({
+      fact_title: "Opening hours",
+      old_value: "09:00 to 17:00 (Europe/London)",
+      new_value: "09:30 to 17:30 (Europe/London)",
+      carriers: healed.map((decl) => ({ decl })),
+    });
+    if (plan.tasks.length !== 1 || !/Google Business Profile/.test(plan.tasks[0]!.title)) {
+      throw new Error("the healed list did not sweep to the GMB task");
+    }
+    // The guards: a deliberately passed list — even empty — is never
+    // overridden; a non-empty predecessor list carries forward; a keyless
+    // fact and a non-fact heal nothing.
+    if (healedCarriedSurfaces(emptyHoursFact, []).length !== 0) {
+      throw new Error("a deliberately emptied list was overridden — the guard fell");
+    }
+    const declared = [{ surface: "knowledge_entry", label: "Booking policy", ref: "ci-x", in_platform: true }];
+    if (healedCarriedSurfaces(emptyHoursFact, declared) !== declared) {
+      throw new Error("a deliberately edited list was overridden — the guard fell");
+    }
+    const carried = healedCarriedSurfaces({ kind: "fact", surfaces: declared, attributes: { fact_key: "opening_hours" } });
+    if (carried !== declared) throw new Error("a non-empty predecessor list no longer carries forward");
+    if (healedCarriedSurfaces({ kind: "fact", surfaces: [], attributes: {} }).length !== 0) {
+      throw new Error("a keyless fact grew surfaces from nowhere");
+    }
+    if (healedCarriedSurfaces({ kind: "instruction", surfaces: [], attributes: {} }).length !== 0) {
+      throw new Error("a non-fact entry grew surfaces");
+    }
+    // The supersede door consumes the clause — the Memory edit form's
+    // value-only edit (surfaces untouched) heals through it.
+    const memorySource = readFileSync(resolve(import.meta.dirname, "../src/memory.ts"), "utf8");
+    if (!memorySource.includes("healedCarriedSurfaces(predecessor, input.surfaces)")) {
+      throw new Error("supersedeMemoryEntry no longer consumes the heal clause");
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

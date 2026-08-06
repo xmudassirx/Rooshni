@@ -40,22 +40,46 @@ export function declaredTemplateQuietHours(value: unknown): QuietHours | null {
   return null;
 }
 
+/** Where a resolved quiet window came from — the row's honest provenance
+ * (quiet-window micro-fix, 7 Aug 2026, founder-witnessed: the display
+ * claimed a derivation from business hours that does not exist). */
+export type QuietHoursSource = "firm" | "template" | "shipped" | "off";
+
+/** The D170 resolution WITH its true source: a firm-set window wins
+ * ("firm"); undefined → the installed template's declared default
+ * ("template", C5 founder-ruled), else the install-less constant
+ * ("shipped"); explicit null → disabled ("off").
+ * JUDGMENT: the micro-fix prompt names three states; the install-less
+ * constant is the resolver's real fourth arm and labelling it "template
+ * default" would repeat the dishonesty this fix removes — it names itself
+ * "shipped". Listed at close. */
+export function resolveQuietHoursWithSource(
+  settings: Record<string, unknown> | null | undefined,
+  templateDefault?: QuietHours | null
+): { window: QuietHours | null; source: QuietHoursSource } {
+  const raw = settings?.quiet_hours;
+  if (raw === null) return { window: null, source: "off" };
+  if (raw && typeof raw === "object") {
+    const candidate = raw as Partial<QuietHours>;
+    if (isHHMM(candidate.start) && isHHMM(candidate.end)) {
+      return { window: { start: candidate.start!, end: candidate.end! }, source: "firm" };
+    }
+  }
+  const declared = declaredTemplateQuietHours(templateDefault);
+  return declared
+    ? { window: declared, source: "template" }
+    : { window: QUIET_HOURS_DEFAULT, source: "shipped" };
+}
+
 /** businesses.settings.quiet_hours: a firm-set window wins; undefined →
  * the installed template's declared default (C5, founder-ruled), else the
- * install-less constant; explicit null → disabled. */
+ * install-less constant; explicit null → disabled. One resolution — this
+ * is the with-source resolver minus the provenance. */
 export function resolveQuietHours(
   settings: Record<string, unknown> | null | undefined,
   templateDefault?: QuietHours | null
 ): QuietHours | null {
-  const raw = settings?.quiet_hours;
-  if (raw === null) return null;
-  if (raw && typeof raw === "object") {
-    const candidate = raw as Partial<QuietHours>;
-    if (isHHMM(candidate.start) && isHHMM(candidate.end)) {
-      return { start: candidate.start!, end: candidate.end! };
-    }
-  }
-  return declaredTemplateQuietHours(templateDefault) ?? QUIET_HOURS_DEFAULT;
+  return resolveQuietHoursWithSource(settings, templateDefault).window;
 }
 
 function isHHMM(value: unknown): value is string {
