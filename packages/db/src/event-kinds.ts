@@ -223,4 +223,15 @@ export const ROUTE_EVENT_KINDS = {
   routeSet: "engagement.route_set",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 30 (177c) — the contact archive. Same JUDGMENT as above: kinds
+ * are TS constants, the single truth every emitter imports.
+ */
+export const CONTACT_EVENT_KINDS = {
+  /** An owner archived a contact — it leaves resolution and its channels
+   * leave consent while its history stands untouched; deletion does not
+   * exist. Payload: display_name, channels_archived, the optional reason. */
+  archived: "contact.archived",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

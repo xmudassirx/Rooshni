@@ -1,18 +1,22 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { canArchiveContact } from "@rooshni/db";
+
 import { Badge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
 import { formatWhen } from "@/lib/format";
-import { getContactDetail } from "@/lib/server/queries";
+import { getContactDetail, getViewerIsOwner } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
+import { ArchiveContactControl } from "./archive-control";
 
 export const dynamic = "force-dynamic";
 
 /*
  * Contact detail — identity, channels with per-channel consent, connected
  * enquiries and relationships. Linked both ways with enquiry detail, and
- * onwards to the Record for this contact's entries. Read-only.
+ * onwards to the Record for this contact's entries. Read-only, except the
+ * Session 30 (177c) owner-only ARCHIVE control.
  */
 
 function channelLabel(channel: string): string {
@@ -41,7 +45,7 @@ export default async function ContactDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const contact = await getContactDetail(id);
+  const [contact, isOwner] = await Promise.all([getContactDetail(id), getViewerIsOwner()]);
   if (!contact) notFound();
 
   const junk = contact.status === "junk";
@@ -85,6 +89,13 @@ export default async function ContactDetailPage({
             >
               View on the Record →
             </Link>
+            {/* Session 30 (177c): archive — owner-only for now, the pure
+                predicate the one render truth (decision 116). The detail
+                read already refuses archived contacts, so alreadyArchived
+                is false whenever this page renders. */}
+            {canArchiveContact({ isOwner, alreadyArchived: false }) ? (
+              <ArchiveContactControl contactId={contact.id} contactName={contact.name} />
+            ) : null}
           </div>
         </div>
       </div>
