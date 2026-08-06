@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { formatWhen } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { CorrectionControls } from "./correction-controls";
 import { DecisionControls } from "./decision-controls";
 import { TaskCancellationControls } from "./task-cancellation-controls";
 import { WithdrawControl } from "./withdraw-control";
@@ -106,6 +107,20 @@ export interface InboxCardProps {
   /** Session 12 — selection mode, for bulk REJECTION only. Approval never
    * takes a selection: the stamp is individual by constitution. */
   selection?: { selected: boolean; onToggle: () => void } | null;
+  /** Session 32 (D181a) — a ripple-sweep correction: the fact change and
+   * the deterministic before/after. Approval applies it; nothing
+   * auto-applies. Null on every other card. */
+  correction?: CardCorrection | null;
+}
+
+export interface CardCorrection {
+  surface: string;
+  label: string;
+  factTitle: string;
+  oldValue: string;
+  newValue: string;
+  bodyBefore: string;
+  bodyAfter: string;
 }
 
 /** Short names for the facts line, per pre-flight check key. */
@@ -503,6 +518,36 @@ export function InboxCard(props: InboxCardProps) {
               ? "Approve arrives with the definition-approval pipeline in a later session — withdrawing is the only act this card offers."
               : "The approve/reject pipeline for workflow definitions arrives in a later session — only the owner may withdraw this proposal."}
           </p>
+        </div>
+      ) : props.itemType === "content" && props.correction ? (
+        // Session 32 (D181a): a ripple-sweep correction — the fact change
+        // stated, the deterministic before/after shown, the stamp offered.
+        <div className="flex flex-col gap-2">
+          <div className="rounded-lg border border-rule bg-paper-deep px-3 py-2">
+            <div className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
+              Fact changed · {props.correction.factTitle}
+            </div>
+            <div className="mt-1 text-[13px]">
+              <span className="text-ink-soft line-through">{props.correction.oldValue}</span>
+              <span className="mx-1.5 text-ink-faint">now</span>
+              <span className="font-semibold text-ink">{props.correction.newValue}</span>
+            </div>
+          </div>
+          <div className="grid gap-2 min-[720px]:grid-cols-2">
+            <div className="rounded-lg border border-rule bg-paper px-3 py-2">
+              <div className="mb-1 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+                {props.correction.label} — today
+              </div>
+              <p className="text-[12.5px] whitespace-pre-wrap text-ink-soft">{props.correction.bodyBefore}</p>
+            </div>
+            <div className="rounded-lg border border-ledger/40 bg-paper px-3 py-2">
+              <div className="mb-1 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+                after your stamp — exactly this
+              </div>
+              <p className="text-[12.5px] whitespace-pre-wrap text-ink">{props.correction.bodyAfter}</p>
+            </div>
+          </div>
+          <CorrectionControls correctionId={props.itemId} />
         </div>
       ) : (
         <p className="text-[12.5px] text-ink-soft">

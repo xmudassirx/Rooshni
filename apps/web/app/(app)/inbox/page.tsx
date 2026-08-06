@@ -9,6 +9,7 @@ import { durationSince, formatWhen } from "@/lib/format";
 import { getAppContext } from "@/lib/server/context";
 import {
   getCommunicationDetail,
+  getCorrectionDetail,
   getInboxHistory,
   getInboxPage,
   getIsManager,
@@ -36,6 +37,9 @@ async function toCardProps(
 ): Promise<InboxCardProps> {
   const isComm = row.item_type === "communication";
   const detail = isComm ? await getCommunicationDetail(row.item_id) : null;
+  // Session 32 (D181a): a content row may be a ripple-sweep correction —
+  // its card shows the fact change and before/after, and offers the stamp.
+  const correction = row.item_type === "content" ? await getCorrectionDetail(row.item_id) : null;
   const scheduledNote =
     row.item_type === "task_cancellation"
       ? `Requested ${formatWhen(row.awaiting_since)} · the task stays open until you decide`
@@ -60,7 +64,9 @@ async function toCardProps(
         ? "Workflow"
         : row.item_type === "task_cancellation"
           ? "Task · cancellation request"
-          : channelLabel(row.channel),
+          : correction
+            ? "Memory · correction"
+            : channelLabel(row.channel),
     draftedBy: row.drafted_by,
     draftedByAgent: row.drafted_by_type === "agent",
     recipient: detail?.contactName ?? null,
@@ -101,6 +107,7 @@ async function toCardProps(
     attachmentNotes: (detail?.attachments ?? []).map(
       (a) => `${a.filename} · ${(a.sizeBytes / 1024 / 1024).toFixed(1)}MB`
     ),
+    correction,
   };
 }
 

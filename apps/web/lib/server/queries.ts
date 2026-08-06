@@ -512,6 +512,44 @@ export interface CommunicationDetail {
  * the total is a COUNT aggregate and the remainder is stated honestly. */
 const THEY_SAID_BOUND = 20;
 
+/** Session 32 (D181a) — a ripple-sweep correction's card payload: the fact
+ * change and the deterministic before/after. Null for plain content rows. */
+export async function getCorrectionDetail(id: string): Promise<{
+  surface: string;
+  label: string;
+  factTitle: string;
+  oldValue: string;
+  newValue: string;
+  bodyBefore: string;
+  bodyAfter: string;
+} | null> {
+  const { db, business } = await getAppContext();
+  const { data, error } = await db
+    .from("content_items")
+    .select("content_type, attributes")
+    .eq("id", id)
+    .eq("business_id", business.id)
+    .maybeSingle();
+  if (error) throw new Error(`correction detail query failed: ${error.message}`);
+  if (!data || !["template_correction", "knowledge_entry_correction"].includes(data.content_type)) {
+    return null;
+  }
+  const c = ((data.attributes ?? {}) as Record<string, unknown>).correction as
+    | Record<string, unknown>
+    | undefined;
+  if (!c) return null;
+  const s = (v: unknown) => (typeof v === "string" ? v : "");
+  return {
+    surface: s(c.surface),
+    label: s(c.label),
+    factTitle: s(c.fact_title),
+    oldValue: s(c.old_value),
+    newValue: s(c.new_value),
+    bodyBefore: s(c.body_before),
+    bodyAfter: s(c.body_after),
+  };
+}
+
 /** Full draft for the inbox detail panel — the view carries only a preview. */
 export async function getCommunicationDetail(
   id: string
