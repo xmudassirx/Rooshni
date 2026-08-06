@@ -1922,3 +1922,51 @@ quoted-approval precedent).
      numbered this ruling 178; entry 178 was already occupied by Session
      30's provisional entry, finalised by the founder's merge, so the
      ruling is recorded here as 179 — the ruling's text is untouched.
+
+## Session 32 (6 August 2026) — Light's Memory — recorded on in-prompt
+## authority
+
+180. Session 31's Lane B calls, approved as one entry: (a) the
+     drafting-quality ruling records as 179 (178 occupied); (b) the
+     pre-compose route read is its own floor-tier call, superseding
+     161b's ride-along clause — evented, priced, budget-guarded,
+     firing only over unset/form_default; (c) a form_default route
+     with an unconfident read stands; (d) published_fees is withdrawn
+     from retrieval; the lagging installed no-go rule 3 re-issue is
+     queued; (e) a fee breach takes the register retry-once lane;
+     (f) the runtime fee screen scopes to generated bodies,
+     founder-authored templates guarded by the pinned harness sweep;
+     the nudge sent-summary reads engagement-wide across channels.
+
+181. **LIGHT'S MEMORY, ruled (6 August 2026):** everything Light knows
+     that is not a database fact is a MEMORY ENTRY — readable,
+     editable, evented; nothing about how Light behaves lives
+     hardcoded. Memory has two parts:
+     (a) FACTS (proactive): business facts — opening hours, phone,
+     booking link, address and their kin — each carrying a declared
+     SURFACES LIST naming where the fact appears in the world:
+     in-platform surfaces Light can reach (message templates,
+     knowledge entries, and later the website) and external
+     surfaces it cannot (Google Business Profile, directories).
+     Editing a fact triggers the RIPPLE SWEEP: for every
+     in-platform surface carrying the stale value, Light drafts
+     the correction into the Approval Inbox — stamped as ever,
+     never auto-applied; for every external surface, a task is
+     raised naming the manual change owed. The sweep is evented as
+     one act ("hours changed: N corrections proposed, M manual
+     tasks raised"). A connected external surface later moves from
+     the task column to the draft column; the model is unchanged.
+     (b) BEHAVIOUR: standing instructions (tone, rules, signature)
+     and learned observations. Active instructions ride every
+     composition; the credit line records WHICH memory entries
+     rode, so The Record answers "why did Light say that" by name.
+     Rejection reasons surface in Memory as observations; PROMOTION
+     to a standing instruction is a human act, one click, evented —
+     Light never self-writes an instruction.
+     Memory edits take effect on the next draft — no build, no
+     re-issue. Memory history is append-only: an edit supersedes,
+     never overwrites. Standing instructions carry a token ceiling
+     (800 tokens ruled; the surface shows the count and refuses
+     past the cap rather than silently degrading every draft).
+     Knowledge packs remain route knowledge; Memory is behaviour
+     and facts, beside them.
