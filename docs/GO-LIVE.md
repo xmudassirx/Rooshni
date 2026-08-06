@@ -466,3 +466,28 @@ Add to this list during build; check items off only at go-live.
       the DoD(2) precondition: a fresh Spouse-form lead then wears its
       route chip with provenance form_default (or light, when Light
       refines it with a stated reason).
+- [ ] **Apply migration 0044 before merging `ui/session-32-lights-memory`**
+      (introduced Session 32, D181): the memory_entries store with its
+      enforcement — append-only supersede chain, human-only instructions,
+      the 800-token ceiling naming its count, one active fact per key.
+      The founder applies it to live per the 0040 precedent (SQL pasted at
+      close); check-local green at 376 from zero with it applied. Until
+      the apply, the Memory surface and the memory-riding compose paths
+      have no store to read and every memory door fails loudly.
+- [ ] **Run the memory seed backfill against live AFTER the merge, at the
+      founder's explicit go** (introduced Session 32, D181):
+      `npm run seed:memory --workspace=@rooshni/db` — seeds the fees rule
+      (D179a), the register rule (D142), signature, booking link, phone
+      and opening hours as memory entries through the evented app-side
+      door (law 11 — never migration SQL). Idempotent; facts with no
+      value in their pre-D181 home are visible skips. Until the run, the
+      compose paths fall back to businesses.settings (the transitional
+      fallback) and the Memory surface shows an empty day one.
+- [ ] **Retire the settings fallback for sign-off, booking link and
+      opening hours in a later session** (introduced Session 32, founder
+      rider on Q1): once the seed backfill has landed on live, every
+      listed fact has a row and the settings fallback in
+      resolveSignOffWithMemory / resolveBookingUrlWithMemory (and the
+      legacy settings keys email_sign_off / booking_url /
+      business_hours) is dead code in practice — a future session removes
+      it so Memory is the only home in code as well as in fact.
