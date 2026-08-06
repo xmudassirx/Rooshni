@@ -372,6 +372,33 @@ html:not([data-theme]) .sidebar-glass {
   border-color: rgba(180, 79, 216, 0.4);
 }
 
+/*
+ * Session 33 — the quiet-hours choice dialogue (D184c). Once-per-event
+ * surface (barakah-motion tier 3): a 200ms entrance on --motion-out,
+ * transform + opacity only. The named curve is declared here ONCE per the
+ * motion standards; the reduced-motion kill below neutralises the rule.
+ */
+:root {
+  --motion-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes quietchoicein {
+  /* Tailwind v4 centres the dialog via the native `translate` property;
+     this transform composes with it rather than replacing it. */
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.quiet-choice-in {
+  animation: quietchoicein 200ms var(--motion-out);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

@@ -2013,3 +2013,70 @@ quoted-approval precedent).
      human refusals); no stamp lives on that screen, so red would
      overclaim — sweep corrections take their red-adjacent stamp in
      the Approval Inbox.
+
+## Session 33 (7 August 2026) — quiet hours: the choice at the stamp —
+## recorded on in-prompt authority
+
+Entry 184 is quoted verbatim from the Session 33 prompt (7 August 2026 —
+the §8 quoted-approval pattern, the entry-113 in-prompt-authority
+precedent: founder-ruled, quoted verbatim). Builder bookkeeping (dated
+7 August 2026): the prompt numbers this ruling 184; no entry 183 exists at
+the time of writing — the number is recorded as ordered and 183 stays
+unassigned for the founder's pen.
+
+184. Quiet hours, re-ruled: (a) RECORDED FACT — drafting is never
+     gated by quiet hours and never was; the hold binds dispatch
+     only, after the stamp. (b) Quiet hours can be TURNED OFF
+     entirely: Settings → General offers "No quiet hours" as a
+     first-class choice (the 170 explicit-null path), owner-set,
+     evented — a firm working deportation cases at midnight sends
+     at midnight. (c) THE CHOICE AT THE STAMP: approving a
+     communication while the destination's quiet window is active
+     surfaces a dialogue naming the window ("Quiet hours until
+     08:00") with two acts: SEND NOW (the stamp plus the evented
+     override, as the s24 override today) or APPROVE AND SCHEDULE
+     (a time picker defaulting to the window's end, any future
+     time allowed; the stamp lands with scheduled_for set; dispatch
+     carries it at the chosen time). Nothing silent: the silent
+     hold-until-window is retired in favour of the explicit choice;
+     WYSIWYS holds — the scheduled body is the stamped body;
+     rejection needs no dialogue. (d) The thread's inline approve
+     and the inbox card share the one dialogue; bulk approve
+     continues not to exist.
+
+185. Session 33's Lane B calls, consolidated (provisional — the
+     founder's merge is the stamp, D152/D176 pattern): (a) D163 at the
+     marker: the 0040 retry door nulls scheduled_for but leaves
+     attributes untouched, so a pre-retry Send-now/schedule marker
+     would dodge the hold forever — "policy re-applies fresh at retry
+     time" is implemented as pure dispatcher logic
+     (honourQuietHoursOverride): a quiet_hours_override marker older
+     than the row's latest send_retry is SPENT, and a marker that
+     cannot prove it postdates the retry fails towards the hold; no
+     migration, both markers stand verbatim on the record. (b) The
+     schedule choice's write rides the SERVICE client immediately
+     after the DB-enforced stamp by the same actor (the dispatcher's
+     own hold-write lane): scheduled_for plus the 0039-shaped marker
+     ({by_actor_id, at, scheduled_for}) — ONE marker vocabulary, so
+     the dispatcher has one rule; timing only, the 0021 doors remain
+     the only status movers; evented as communication.scheduled (a
+     new TS kind under the decision 89d registry). (c) The D184c gate
+     sits BEFORE the sign-off resolution, so a withheld stamp writes
+     NOTHING — not even the fresh compliance check. (d) AMENDED by
+     founder fix-request at click-review (7 August 2026), superseding
+     the builder's original call: "No quiet hours" is a DISPATCH
+     choice only — it must NOT retire the client-facing opening-hours
+     memory fact; a firm may dispatch any hour and still open 9–5.
+     The fact ripples to Google Business Profile and stands until
+     edited or retired in Light's Memory itself; only the reset lane
+     retires it (the shipped default window is dispatch policy, not a
+     client-facing fact). The Settings row states both truths ("Quiet
+     hours off — stamped mail dispatches immediately, any hour ·
+     Opening hours unchanged: [fact value]").
+     (e) "The silent hold is retired" reads as retired ON THE STAMP
+     SURFACES: the dispatcher's hold branch remains the policy
+     backstop for rows arriving approved without a choice — retries
+     re-entering policy per D163, and any non-UI approval path — and
+     the s24 held-card (with its Send now) stays as the fallback for
+     the race where the window becomes active between the gate and
+     the inline dispatch.

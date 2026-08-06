@@ -88,7 +88,7 @@ import { whatsAppInboundConsent, mailClaimStaleCutoffIso, MAIL_CLAIM_STALE_AFTER
 import { whatsAppConnectionState } from "../src/whatsapp";
 import { canArchiveContact } from "../src/contacts";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
-import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
+import { honourQuietHoursOverride, resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
 import { rankGuideCandidates, storageSlug, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
 import {
   buildConversionPayload,
@@ -7974,6 +7974,254 @@ async function main() {
     if (!memoryActionsSource.includes('revalidatePath("/settings")')) {
       throw new Error("memory writes do not revalidate the Settings path — the one-way mirror stands");
     }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 33 — quiet hours: the choice at the stamp (D184). The silent
+  // hold-until-window is retired on the stamp surfaces in favour of the
+  // explicit choice; quiet hours can be turned OFF entirely (explicit
+  // null); a chosen timing rides the row and survives dispatch — but not
+  // a retry (D163: policy re-applies fresh).
+  // ---------------------------------------------------------------------
+  console.log("\nSession 33 — quiet hours: the choice at the stamp (D184):");
+  // An earlier smoke leaves the jwt-sub GUC pointing at the harness user;
+  // these smokes act through the pipeline doors as the activation owner.
+  await db.exec(`set request.jwt.claim.sub = ''`);
+
+  await expectOk("quiet hours OFF (D184b, the explicit null): no hold at ANY hour — a midnight stamp dispatches immediately", async () => {
+    const off = resolveQuietHours({ quiet_hours: null }, { start: "20:00", end: "08:00" });
+    if (off !== null) throw new Error("the explicit null did not turn quiet hours off");
+    for (const at of ["2026-08-07T00:30:00Z", "2026-08-07T03:00:00Z", "2026-08-07T22:15:00Z"]) {
+      if (quietHoursHoldUntil(new Date(at), "Europe/London", off)) {
+        throw new Error(`${at} was held with quiet hours off`);
+      }
+    }
+    // The Settings door writes the EXPLICIT null (a delete would resurrect
+    // the default window) as an owner-set first-class choice, evented.
+    const settingsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/actions.ts"),
+      "utf8"
+    );
+    if (!settingsSource.includes("settings.quiet_hours = null")) {
+      throw new Error("Settings lost the explicit-null off switch (D184b)");
+    }
+    if (!settingsSource.includes('mode === "disable"')) {
+      throw new Error("the No-quiet-hours mode left the settings door");
+    }
+    const controlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/business-hours-control.tsx"),
+      "utf8"
+    );
+    if (!controlSource.includes("no quiet hours")) {
+      throw new Error("the first-class No-quiet-hours choice left the Settings surface");
+    }
+    if (!controlSource.includes("Quiet hours off — stamped mail dispatches immediately, any hour")) {
+      throw new Error("the off state no longer renders honestly (D184b's own words)");
+    }
+  });
+
+  await expectOk("No quiet hours is a DISPATCH choice only (D184b as amended at click-review): the opening-hours fact stands, still sweeps GMB, and the row states both truths", async () => {
+    // The Settings door: the disable arm touches NO memory — only the reset
+    // arm retires the fact (the shipped default window is dispatch policy).
+    const settingsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/actions.ts"),
+      "utf8"
+    );
+    const disableAt = settingsSource.indexOf('if (mode === "disable") {');
+    const resetAt = settingsSource.indexOf('} else if (mode === "reset") {');
+    if (disableAt === -1 || resetAt === -1 || resetAt < disableAt) {
+      throw new Error("the disable/reset arms reshaped — re-pin the fact-retirement boundary");
+    }
+    const disableArm = settingsSource.slice(disableAt, resetAt);
+    if (disableArm.includes("deactivateMemoryEntry")) {
+      throw new Error("the disable arm retires the opening-hours fact — the amended ruling forbids it");
+    }
+    if (!settingsSource.slice(resetAt).includes("deactivateMemoryEntry")) {
+      throw new Error("the reset arm no longer retires the fact — the reset lane changed");
+    }
+    // Decoupled truths, pure: the hold is OFF while the fact lives on and a
+    // subsequent fact edit still raises the GMB manual task.
+    if (resolveQuietHours({ quiet_hours: null }, { start: "20:00", end: "08:00" }) !== null) {
+      throw new Error("the explicit null stopped turning the hold off");
+    }
+    const plan = planFactSweep({
+      fact_title: "Opening hours",
+      old_value: "09:00 to 17:00 (Europe/London)",
+      new_value: "10:00 to 16:00 (Europe/London)",
+      carriers: [{ decl: { surface: "google_business_profile", label: "Google Business Profile", ref: null, in_platform: false } }],
+    });
+    if (plan.tasks.length !== 1 || !/Google Business Profile/.test(plan.tasks[0]!.title)) {
+      throw new Error("an opening-hours edit no longer sweeps GMB — the fact's worldly ripple broke");
+    }
+    // The row states both truths.
+    const controlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/business-hours-control.tsx"),
+      "utf8"
+    );
+    if (!controlSource.includes("Opening hours unchanged:")) {
+      throw new Error("the off state no longer states the second truth (the standing fact)");
+    }
+  });
+
+  await expectOk("approve INSIDE the window without a choice is impossible — the gate withholds the stamp before ANY work; the dialogue is the only path", async () => {
+    const inboxSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/actions.ts"),
+      "utf8"
+    );
+    const gateAt = inboxSource.indexOf("quietChoiceRequired: { until:");
+    const signOffAt = inboxSource.indexOf("resolveSignOffAtStamp(db, business, actor, communicationId)");
+    const stampAt = inboxSource.indexOf("await approveCommunication(db, {");
+    if (gateAt === -1) throw new Error("the D184c gate left approveAction");
+    if (signOffAt === -1 || stampAt === -1) throw new Error("approveAction reshaped — re-pin the gate ordering");
+    if (!(gateAt < signOffAt && gateAt < stampAt)) {
+      throw new Error("the gate no longer precedes the stamp (and the sign-off compliance write)");
+    }
+    if (!inboxSource.includes("windowEnds && !quietChoice")) {
+      throw new Error("the gate's condition changed — an unchosen in-window approve must return the dialogue's facts");
+    }
+    // The gate reads the SAME resolver as the dispatch hold (the 170 law:
+    // display, dialogue and enforcement cannot disagree).
+    if (!inboxSource.includes("getInstalledQuietHoursDefault(db, business.id)")) {
+      throw new Error("the gate no longer resolves through the installed template's declaration");
+    }
+  });
+
+  await expectOk("SEND NOW at the stamp is the s24 override — the 0039 door plus the evented communication.quiet_hours_overridden; the schedule act is evented too", async () => {
+    const inboxSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/actions.ts"),
+      "utf8"
+    );
+    const branchAt = inboxSource.indexOf('quietChoice === "send_now" && heldUntil');
+    if (branchAt === -1) throw new Error("the send-now choice left approveAction");
+    const branch = inboxSource.slice(branchAt);
+    if (!branch.includes("override_quiet_hours_hold")) throw new Error("Send now no longer rides the 0039 door");
+    if (!branch.includes("SEND_EVENT_KINDS.communicationQuietHoursOverridden")) {
+      throw new Error("Send now no longer events the override");
+    }
+    if (!inboxSource.includes("SEND_EVENT_KINDS.communicationScheduled")) {
+      throw new Error("the schedule choice is no longer evented");
+    }
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    if (!kinds.includes(`"communication.scheduled"`)) {
+      throw new Error("the scheduled ledger kind left the declared vocabulary");
+    }
+  });
+
+  await expectOk("APPROVE AND SCHEDULE: the stamp lands with scheduled_for set; dispatch honours the chosen time and never re-holds a chosen timing", async () => {
+    const id = await trioHeldComm();
+    // The action's write, mirrored against a real stamped row: the chosen
+    // instant plus the 0039-shaped marker (who chose, when).
+    await db.query(
+      `update public.communications
+       set scheduled_for = now() + interval '3 hours',
+           attributes = coalesce(attributes, '{}'::jsonb)
+             || jsonb_build_object('quiet_hours_override',
+                  jsonb_build_object('by_actor_id', $2::text, 'at', now(), 'scheduled_for', (now() + interval '3 hours')))
+       where id = $1`,
+      [id, activation!.owner_actor_id]
+    );
+    const row = await db.query<{ status: string; future: boolean; attributes: Record<string, unknown> }>(
+      `select status, (scheduled_for > now()) as future, attributes from public.communications where id = $1`,
+      [id]
+    );
+    if (row.rows[0]!.status !== "approved") throw new Error("the schedule touched STATUS — timing only is the law");
+    if (!row.rows[0]!.future) throw new Error("scheduled_for did not land in the future");
+    // The dispatcher's machinery: due-ness by scheduled_for (the D163
+    // predicate + the per-row skip), and the marker rule keeps a chosen
+    // time from being re-held even when it falls inside the window.
+    const sendSource = readFileSync(resolve(import.meta.dirname, "../src/send.ts"), "utf8");
+    if (!sendSource.includes("scheduled_for.is.null,scheduled_for.lte.")) {
+      throw new Error("the dispatcher's due predicate changed — scheduled rows would be missed");
+    }
+    if (!sendSource.includes("new Date(comm.scheduled_for) > now")) {
+      throw new Error("the dispatcher's per-row future skip changed");
+    }
+    if (!sendSource.includes("honourQuietHoursOverride(comm.attributes)")) {
+      throw new Error("the dispatcher no longer consults the marker rule before holding");
+    }
+    if (!honourQuietHoursOverride(row.rows[0]!.attributes)) {
+      throw new Error("a standing chosen timing was not honoured — the dispatcher would re-hold it");
+    }
+    // The marker rule's edges, pure: no marker holds as policy; a marker
+    // that cannot prove it postdates a retry is spent (fail towards the hold).
+    if (honourQuietHoursOverride({})) throw new Error("no marker was honoured");
+    if (honourQuietHoursOverride(null)) throw new Error("null attributes were honoured");
+    if (
+      honourQuietHoursOverride({
+        quiet_hours_override: { by_actor_id: "x" },
+        send_retry: { by_actor_id: "x", at: "2026-08-07T01:00:00Z" },
+      })
+    ) {
+      throw new Error("an at-less marker beat a retry — it must fail towards the hold");
+    }
+  });
+
+  await expectOk("the retry ruling (163) stands: RETRY nulls scheduled_for AND spends the pre-retry timing choice — policy re-applies fresh", async () => {
+    const id = await pairFailedComm();
+    await db.query(
+      `update public.communications
+       set scheduled_for = now() + interval '5 hours',
+           attributes = coalesce(attributes, '{}'::jsonb)
+             || jsonb_build_object('quiet_hours_override',
+                  jsonb_build_object('by_actor_id', $2::text, 'at', (now() - interval '1 hour')))
+       where id = $1`,
+      [id, activation!.owner_actor_id]
+    );
+    await db.query(`select public.retry_failed_communication($1, $2)`, [id, activation!.owner_actor_id]);
+    const after = await db.query<{ sf: string | null; attributes: Record<string, unknown> }>(
+      `select scheduled_for as sf, attributes from public.communications where id = $1`,
+      [id]
+    );
+    if (after.rows[0]!.sf !== null) throw new Error("the retry did not null scheduled_for (D163)");
+    if (honourQuietHoursOverride(after.rows[0]!.attributes)) {
+      throw new Error("a pre-retry timing choice survived the retry — D163 says policy re-applies fresh");
+    }
+    // A FRESH choice made after the retry stands — the retry spends only
+    // what predates it.
+    if (
+      !honourQuietHoursOverride({
+        ...after.rows[0]!.attributes,
+        quiet_hours_override: { by_actor_id: "x", at: new Date(Date.now() + 60_000).toISOString() },
+      })
+    ) {
+      throw new Error("a post-retry choice was not honoured");
+    }
+  });
+
+  await expectOk("both approve surfaces share the ONE dialogue (D184d) — and the card states the truth after the choice; bulk approve still does not exist", async () => {
+    const controlsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/decision-controls.tsx"),
+      "utf8"
+    );
+    if (!controlsSource.includes("Quiet hours until")) throw new Error("the choice dialogue left DecisionControls");
+    for (const marker of ['value="send_now"', 'value="schedule"']) {
+      if (!controlsSource.includes(marker)) throw new Error(`the dialogue lost an act: ${marker}`);
+    }
+    if (
+      !controlsSource.includes("stamped · scheduled for") ||
+      !controlsSource.includes("stamped · sent now (quiet-hours override)")
+    ) {
+      throw new Error("the card no longer states the truth after the choice (D184, B4)");
+    }
+    const threadSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/conversations/draft-stamp-panel.tsx"),
+      "utf8"
+    );
+    if (!threadSource.includes("<DecisionControls")) {
+      throw new Error("the thread's inline approve no longer shares the component");
+    }
+    const cardSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/inbox-card.tsx"),
+      "utf8"
+    );
+    if (!cardSource.includes("<DecisionControls")) {
+      throw new Error("the inbox card no longer shares the component");
+    }
+    const actionsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/actions.ts"),
+      "utf8"
+    );
+    if (/bulkApprove/i.test(actionsSource)) throw new Error("a bulk approve appeared — D113 forbids it, forever");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

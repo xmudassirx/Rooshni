@@ -307,10 +307,19 @@ export async function setBusinessHoursAction(
   const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
   const timezone = (bizRow.timezone as string) || "Europe/London";
 
-  if (mode === "reset") {
+  if (mode === "disable") {
+    // Session 33, D184b — as AMENDED at click-review (founder-ruled
+    // 7 Aug 2026): NO QUIET HOURS is a DISPATCH choice only — the D170
+    // explicit null turns the hold off while the client-facing
+    // opening-hours fact LIVES ON in Light's Memory (a firm may dispatch
+    // any hour and still open 9–5; the fact ripples to Google Business
+    // Profile and retires only through Memory itself, or the reset).
+    settings.quiet_hours = null;
+    delete settings.business_hours;
+  } else if (mode === "reset") {
     // Back to the honest default — the field reads "default — not yet set
     // by you" again and the hold reads the shipped window. The opening-hours
-    // FACT retires too (the shipped default window is dispatch policy, not
+    // FACT retires here (the shipped default window is dispatch policy, not
     // a client-facing fact).
     delete settings.quiet_hours;
     delete settings.business_hours;
@@ -381,12 +390,17 @@ export async function setBusinessHoursAction(
     entity_id: business.id,
     payload: {
       keys: ["business_hours", "quiet_hours"],
-      ...(mode === "reset"
-        ? { business_hours: null, note: "reset to the shipped default window; the opening-hours memory fact retired" }
-        : {
-            quiet_hours: settings.quiet_hours,
-            note: "opening hours live in Light's Memory (D181) — this save wrote through the memory door",
-          }),
+      ...(mode === "disable"
+        ? {
+            quiet_hours: null,
+            note: "No quiet hours — the owner's recorded choice (D184b, dispatch only); stamped mail dispatches immediately, any hour; the opening-hours fact is untouched",
+          }
+        : mode === "reset"
+          ? { business_hours: null, note: "reset to the shipped default window; the opening-hours memory fact retired" }
+          : {
+              quiet_hours: settings.quiet_hours,
+              note: "opening hours live in Light's Memory (D181) — this save wrote through the memory door",
+            }),
     },
   });
 
