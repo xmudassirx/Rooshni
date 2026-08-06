@@ -16,13 +16,19 @@
 
 export const BOOKING_LINK_TOKEN = "[link]";
 
-/** The configured booking URL, or null. Only absolute http(s) URLs count —
- * anything else reads as unset (the honest state), never as a half-link. */
+/** Only absolute http(s) URLs count — anything else reads as unset (the
+ * honest state), never as a half-link. Session 32: shared with the memory
+ * fact reader (resolveBookingUrlWithMemory) so both homes judge alike. */
+export function isValidBookingUrl(raw: string): boolean {
+  return /^https?:\/\/\S+$/i.test(raw);
+}
+
+/** The configured booking URL, or null. */
 export function resolveBookingUrl(settings: Record<string, unknown> | null | undefined): string | null {
   const raw = settings?.booking_url;
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
-  if (!/^https?:\/\/\S+$/i.test(trimmed)) return null;
+  if (!isValidBookingUrl(trimmed)) return null;
   return trimmed;
 }
 

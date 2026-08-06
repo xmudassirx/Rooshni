@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { loadMemoryContext, memoryFactValue, MEMORY_FACT_KEYS } from "@rooshni/db";
+
 import { AppShell } from "@/components/shell/app-shell";
 import { FirstLight, type FirstLightBasicsProp } from "@/components/shell/first-light";
 import { LiveInbox } from "@/components/shell/live-inbox";
@@ -38,6 +40,11 @@ export default async function ShellLayout({ children }: { children: ReactNode })
   if (!firstLight.retired && !firstLight.absent) {
     const [template, config] = await Promise.all([getTemplateContent(), getBusinessConfig()]);
     const settings = config.settings;
+    // Session 32 (D181, Q1): opening hours read memory-first — the settings
+    // display string is only the pre-seed fallback.
+    const { db } = await getAppContext();
+    const memory = await loadMemoryContext(db, business.id);
+    const memoryHours = memoryFactValue(memory, MEMORY_FACT_KEYS.openingHours);
     const confirmedRaw = (settings.basics_confirmed ?? {}) as Record<
       string,
       { state?: "confirmed" | "not_applicable"; provenance?: string }
@@ -47,7 +54,8 @@ export default async function ShellLayout({ children }: { children: ReactNode })
       values: {
         regulated_status: typeof settings.regulated_status === "string" ? settings.regulated_status : "",
         address: typeof settings.address === "string" ? settings.address : "",
-        business_hours: typeof settings.business_hours === "string" ? settings.business_hours : "",
+        business_hours:
+          memoryHours ?? (typeof settings.business_hours === "string" ? settings.business_hours : ""),
         languages: typeof settings.languages === "string" ? settings.languages : "",
       },
       quietHours:

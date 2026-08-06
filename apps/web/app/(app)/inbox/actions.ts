@@ -10,6 +10,7 @@ import {
   emitEvent,
   rejectCommunication,
   withdrawWorkflowDefinition,
+  recordRejectionObservation,
   DRAFTING_EVENT_KINDS,
   SEND_EVENT_KINDS,
 } from "@rooshni/db";
@@ -83,6 +84,16 @@ async function recordRejectionFeedback(
         entity_type: "draft_feedback",
         entity_id: feedback.id,
         payload: { kind: "rejection", communication_id: comm.id, reason },
+      });
+      // Session 32 (D181): the rejection reason surfaces in Light's Memory
+      // as an observation, its provenance the feedback row — promotable to
+      // a standing instruction by a human hand, one click, there.
+      await recordRejectionObservation(db, {
+        business_id: businessId,
+        actor_id: actorId,
+        communication_id: comm.id,
+        draft_feedback_id: feedback.id,
+        reason,
       });
     }
   } catch (err) {

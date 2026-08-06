@@ -1,4 +1,11 @@
-import { isQuietHoursSet, resolveQuietHours, sendWindowFromQuietHours } from "@rooshni/db";
+import {
+  isQuietHoursSet,
+  loadMemoryContext,
+  memoryFactValue,
+  resolveQuietHours,
+  sendWindowFromQuietHours,
+  MEMORY_FACT_KEYS,
+} from "@rooshni/db";
 
 import { HonestButton } from "@/components/ui/honest-button";
 import { getAppContext } from "@/lib/server/context";
@@ -53,12 +60,16 @@ const EDIT_NOTICE =
 export async function GeneralTab() {
   // Session 11: vertical content (display name, pack categories, no-go
   // rules) renders FROM the installed template definition.
-  const [config, template, { business, membershipRole }] = await Promise.all([
+  const [config, template, { db, business, membershipRole }] = await Promise.all([
     getBusinessConfig(),
     getTemplateContent(),
     getAppContext(),
   ]);
   const s = config.settings;
+  // Session 32 (D181, Q1): sign-off text and booking URL read memory-first —
+  // the fields are faces over the facts; settings is the transitional
+  // pre-seed fallback.
+  const memory = await loadMemoryContext(db, business.id);
   // Session 26 (C5, founder-ruled): the unset-firm default resolves from the
   // installed template's declared quiet hours — the SAME resolver the
   // dispatch hold reads, so display and enforcement cannot disagree.
@@ -199,9 +210,9 @@ export async function GeneralTab() {
           JUDGMENT mark redeemed), sign-off mode (PR-F) and the reply settle
           window (PR-C). */}
       <DraftingSettings
-        signOffText={str(s, "email_sign_off")}
+        signOffText={memoryFactValue(memory, MEMORY_FACT_KEYS.signature) ?? str(s, "email_sign_off")}
         signOffMode={s.email_sign_off_mode === "approver" ? "approver" : "firm_name"}
-        bookingUrl={str(s, "booking_url")}
+        bookingUrl={memoryFactValue(memory, MEMORY_FACT_KEYS.bookingLink) ?? str(s, "booking_url")}
         settleMinutes={
           typeof s.draft_settle_minutes === "number" &&
           [0, 1, 3, 5].includes(s.draft_settle_minutes)

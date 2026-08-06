@@ -18,8 +18,7 @@ import {
 import type { FormAnswer } from "./meta";
 import { assessAiBudget, guardGenerationBudget, maybeEmitSoftCapCrossed } from "./ai-budget";
 import { priceGeneration } from "./model-router";
-import { resolveSignOffText } from "./sign-off";
-import { resolveBookingUrl } from "./booking-link";
+import { loadMemoryContext, resolveBookingUrlWithMemory, resolveSignOffWithMemory } from "./memory";
 import { plainTextOfBody } from "./email-html";
 
 /**
@@ -383,7 +382,10 @@ async function processSettledThread(
   // PR-F: the PENDING body always carries the configured sign-off (firm
   // display name by default) — approver mode resolves at render+stamp, never
   // at generation.
-  const signOff = resolveSignOffText(settings, businessName);
+  // Session 32 (D181, Q1 option A): the memory fact is the home for the
+  // sign-off and booking-link values; settings is the transitional fallback.
+  const memory = await loadMemoryContext(db, thread.business_id);
+  const signOff = resolveSignOffWithMemory(memory, settings, businessName);
 
   const contacts = await q<{ display_name: string; given_name: string | null }[]>(
     db.from("contacts").select("display_name, given_name").eq("id", thread.contact_id).limit(1),
@@ -523,10 +525,12 @@ async function processSettledThread(
       no_go_rules: noGoRules,
       retrieval,
       // PR-iv (Session 19): reply drafts carry the same booking-link law.
-      booking_url: resolveBookingUrl(settings),
+      booking_url: resolveBookingUrlWithMemory(memory, settings),
       thread_messages: messages,
       new_inbound_count: unanswered.length,
       returning,
+      // Session 32 (D181): memory rides the reply path in the cached prefix.
+      memory,
     };
     // Session 25 (register retry-once, founder-ordered): a register-screen
     // breach retries exactly ONCE with the violation fed back — evented on
