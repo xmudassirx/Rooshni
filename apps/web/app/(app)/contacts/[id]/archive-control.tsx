@@ -1,7 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useActionState, useState } from "react";
 import { Archive } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,13 +34,10 @@ export function ArchiveContactControl({
 }) {
   const [state, submit, submitting] = useActionState(archiveContactAction, initialState);
   const [open, setOpen] = useState(false);
-  const router = useRouter();
 
-  // Archived contacts leave the book — back to the list, which no longer
-  // holds the row.
-  useEffect(() => {
-    if (state.archived) router.push("/contacts");
-  }, [state.archived, router]);
+  // Workstream C: on success the ACTION redirects server-side to the
+  // Contacts book with its confirmation — this page never reloads (an
+  // archived contact's page honestly 404s).
 
   return (
     <div className="flex flex-col items-end gap-1.5">

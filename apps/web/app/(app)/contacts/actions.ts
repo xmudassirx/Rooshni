@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { archiveContact, canArchiveContact } from "@rooshni/db";
+import { archivedContactRedirect } from "@/lib/archive-redirect";
 import { getAppContext } from "@/lib/server/context";
 import { isUuid } from "@/lib/server/queries";
 
@@ -15,7 +17,6 @@ import { isUuid } from "@/lib/server/queries";
 
 export interface ArchiveContactState {
   error: string | null;
-  archived?: boolean;
 }
 
 export async function archiveContactAction(
@@ -31,18 +32,24 @@ export async function archiveContactAction(
     return { error: "Archiving a contact is the owner's act." };
   }
 
+  let displayName: string;
   try {
-    await archiveContact(db, {
+    const archived = await archiveContact(db, {
       business_id: business.id,
       contact_id: contactId,
       actor_id: actor.id,
       reason: reason || undefined,
     });
+    displayName = archived.displayName;
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
 
   revalidatePath("/contacts");
   revalidatePath("/record");
-  return { error: null, archived: true };
+  // Workstream C (founder-witnessed): the archived page honestly 404s once
+  // the read layer refuses the row — so the ACTION lands the browser on the
+  // Contacts book, server-side, with the once-per-event confirmation named
+  // in the URL. redirect() throws by design; it sits outside the catch.
+  redirect(archivedContactRedirect(displayName));
 }

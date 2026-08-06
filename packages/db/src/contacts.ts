@@ -38,7 +38,7 @@ export interface ArchiveContactInput {
 export async function archiveContact(
   db: SupabaseClient,
   input: ArchiveContactInput
-): Promise<{ channelsArchived: number }> {
+): Promise<{ channelsArchived: number; displayName: string }> {
   const archivedAt = new Date().toISOString();
   const { data: contact, error } = await db
     .from("contacts")
@@ -72,5 +72,5 @@ export async function archiveContact(
       ...(input.reason ? { reason: input.reason } : {}),
     },
   });
-  return { channelsArchived: channels?.length ?? 0 };
+  return { channelsArchived: channels?.length ?? 0, displayName: contact.display_name as string };
 }
