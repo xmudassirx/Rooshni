@@ -2062,9 +2062,17 @@ unassigned for the founder's pen.
      the only status movers; evented as communication.scheduled (a
      new TS kind under the decision 89d registry). (c) The D184c gate
      sits BEFORE the sign-off resolution, so a withheld stamp writes
-     NOTHING — not even the fresh compliance check. (d) Choosing "No
-     quiet hours" retires the opening-hours memory fact, the reset
-     lane applied — a window-derived fact cannot outlive its window.
+     NOTHING — not even the fresh compliance check. (d) AMENDED by
+     founder fix-request at click-review (7 August 2026), superseding
+     the builder's original call: "No quiet hours" is a DISPATCH
+     choice only — it must NOT retire the client-facing opening-hours
+     memory fact; a firm may dispatch any hour and still open 9–5.
+     The fact ripples to Google Business Profile and stands until
+     edited or retired in Light's Memory itself; only the reset lane
+     retires it (the shipped default window is dispatch policy, not a
+     client-facing fact). The Settings row states both truths ("Quiet
+     hours off — stamped mail dispatches immediately, any hour ·
+     Opening hours unchanged: [fact value]").
      (e) "The silent hold is retired" reads as retired ON THE STAMP
      SURFACES: the dispatcher's hold branch remains the policy
      backstop for rows arriving approved without a choice — retries
