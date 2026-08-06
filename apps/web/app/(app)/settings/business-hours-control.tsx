@@ -53,9 +53,14 @@ export function BusinessHoursControl({ value }: { value: BusinessHoursValue }) {
     return (
       <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]">
         {value.disabled ? (
-          // Session 33 (D184b): the off state, honestly worded.
+          // Session 33 (D184b, as amended at click-review): the off state
+          // states BOTH truths — dispatch is any-hour, while the
+          // client-facing opening-hours fact (when one stands) lives on.
           <span className="text-ink">
             Quiet hours off — stamped mail dispatches immediately, any hour
+            {value.memoryValue ? (
+              <span className="text-ink-soft"> · Opening hours unchanged: {value.memoryValue}</span>
+            ) : null}
           </span>
         ) : value.memoryValue ? (
           // Fact-surfaces micro-fix (defect B): the memory fact is the value

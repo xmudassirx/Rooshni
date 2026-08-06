@@ -307,21 +307,21 @@ export async function setBusinessHoursAction(
   const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
   const timezone = (bizRow.timezone as string) || "Europe/London";
 
-  if (mode === "reset" || mode === "disable") {
-    // reset: back to the honest default — the field reads "default — not
-    // yet set by you" again and the hold reads the shipped window.
-    // disable (Session 33, D184b): NO QUIET HOURS — the D170 explicit-null
-    // path, an owner's first-class choice; stamped mail dispatches
-    // immediately, any hour. Both retire the opening-hours FACT: the
-    // shipped default window is dispatch policy, not a client-facing fact,
-    // and with quiet hours off no window exists to state.
-    // JUDGMENT: (Lane B) disable retiring the fact is the reset lane
-    // applied — a window-derived fact cannot outlive its window.
-    if (mode === "disable") {
-      settings.quiet_hours = null;
-    } else {
-      delete settings.quiet_hours;
-    }
+  if (mode === "disable") {
+    // Session 33, D184b — as AMENDED at click-review (founder-ruled
+    // 7 Aug 2026): NO QUIET HOURS is a DISPATCH choice only — the D170
+    // explicit null turns the hold off while the client-facing
+    // opening-hours fact LIVES ON in Light's Memory (a firm may dispatch
+    // any hour and still open 9–5; the fact ripples to Google Business
+    // Profile and retires only through Memory itself, or the reset).
+    settings.quiet_hours = null;
+    delete settings.business_hours;
+  } else if (mode === "reset") {
+    // Back to the honest default — the field reads "default — not yet set
+    // by you" again and the hold reads the shipped window. The opening-hours
+    // FACT retires here (the shipped default window is dispatch policy, not
+    // a client-facing fact).
+    delete settings.quiet_hours;
     delete settings.business_hours;
     const { data: existingFact } = await db
       .from("memory_entries")
@@ -337,10 +337,7 @@ export async function setBusinessHoursAction(
           business_id: business.id,
           actor_id: actor.id,
           entry_id: existingFact.id,
-          reason:
-            mode === "disable"
-              ? "Quiet hours turned off — no send window exists to state (D184b)"
-              : "Business hours reset to the shipped default window",
+          reason: "Business hours reset to the shipped default window",
         });
       } catch (err) {
         return { error: err instanceof Error ? err.message : "The memory write failed." };
@@ -396,7 +393,7 @@ export async function setBusinessHoursAction(
       ...(mode === "disable"
         ? {
             quiet_hours: null,
-            note: "No quiet hours — the owner's recorded choice (D184b); stamped mail dispatches immediately, any hour",
+            note: "No quiet hours — the owner's recorded choice (D184b, dispatch only); stamped mail dispatches immediately, any hour; the opening-hours fact is untouched",
           }
         : mode === "reset"
           ? { business_hours: null, note: "reset to the shipped default window; the opening-hours memory fact retired" }

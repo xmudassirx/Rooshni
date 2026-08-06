@@ -8020,6 +8020,49 @@ async function main() {
     }
   });
 
+  await expectOk("No quiet hours is a DISPATCH choice only (D184b as amended at click-review): the opening-hours fact stands, still sweeps GMB, and the row states both truths", async () => {
+    // The Settings door: the disable arm touches NO memory — only the reset
+    // arm retires the fact (the shipped default window is dispatch policy).
+    const settingsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/actions.ts"),
+      "utf8"
+    );
+    const disableAt = settingsSource.indexOf('if (mode === "disable") {');
+    const resetAt = settingsSource.indexOf('} else if (mode === "reset") {');
+    if (disableAt === -1 || resetAt === -1 || resetAt < disableAt) {
+      throw new Error("the disable/reset arms reshaped — re-pin the fact-retirement boundary");
+    }
+    const disableArm = settingsSource.slice(disableAt, resetAt);
+    if (disableArm.includes("deactivateMemoryEntry")) {
+      throw new Error("the disable arm retires the opening-hours fact — the amended ruling forbids it");
+    }
+    if (!settingsSource.slice(resetAt).includes("deactivateMemoryEntry")) {
+      throw new Error("the reset arm no longer retires the fact — the reset lane changed");
+    }
+    // Decoupled truths, pure: the hold is OFF while the fact lives on and a
+    // subsequent fact edit still raises the GMB manual task.
+    if (resolveQuietHours({ quiet_hours: null }, { start: "20:00", end: "08:00" }) !== null) {
+      throw new Error("the explicit null stopped turning the hold off");
+    }
+    const plan = planFactSweep({
+      fact_title: "Opening hours",
+      old_value: "09:00 to 17:00 (Europe/London)",
+      new_value: "10:00 to 16:00 (Europe/London)",
+      carriers: [{ decl: { surface: "google_business_profile", label: "Google Business Profile", ref: null, in_platform: false } }],
+    });
+    if (plan.tasks.length !== 1 || !/Google Business Profile/.test(plan.tasks[0]!.title)) {
+      throw new Error("an opening-hours edit no longer sweeps GMB — the fact's worldly ripple broke");
+    }
+    // The row states both truths.
+    const controlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/business-hours-control.tsx"),
+      "utf8"
+    );
+    if (!controlSource.includes("Opening hours unchanged:")) {
+      throw new Error("the off state no longer states the second truth (the standing fact)");
+    }
+  });
+
   await expectOk("approve INSIDE the window without a choice is impossible — the gate withholds the stamp before ANY work; the dialogue is the only path", async () => {
     const inboxSource = readFileSync(
       resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/actions.ts"),
