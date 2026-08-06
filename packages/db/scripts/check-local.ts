@@ -16,7 +16,13 @@ import {
 } from "../src/quiet-hours";
 import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
 import { recordRowTarget } from "../../../apps/web/lib/record-row";
-import { carriesRuledLadder, reissueNudgeLadderSteps, ruledLadderDescription, type LadderStep } from "../src/nudge-ladder";
+import {
+  carriesRuledLadder,
+  chooseReissueAction,
+  reissueNudgeLadderSteps,
+  ruledLadderDescription,
+  type LadderStep,
+} from "../src/nudge-ladder";
 import { declaredTemplateQuietHours } from "../src/quiet-hours";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
@@ -58,6 +64,7 @@ import {
   resolveEmailIdentity,
 } from "../src/email-html";
 import { whatsAppInboundConsent, mailClaimStaleCutoffIso, MAIL_CLAIM_STALE_AFTER_MS } from "../src/inbound";
+import { whatsAppConnectionState } from "../src/whatsapp";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
 import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
 import { rankGuideCandidates, storageSlug, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
@@ -6281,6 +6288,201 @@ async function main() {
     const seen = new Set([...names.rows.map((r) => r.id), ...channels.rows.map((r) => r.contact_id)]);
     if (!seen.has(s28TargetId)) throw new Error("the member cannot find their own business's contact");
     if (seen.has(s28OtherContactId)) throw new Error("another business's contact leaked through the search");
+  });
+
+  console.log("\nSession 30 — honesty + controls sweep:");
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await db.exec(`set request.jwt.claims = ''`);
+
+  // --- WS B3: the chore-stamp decision (the v4/v5 incident, D169) --------
+  // A re-run whose earlier staging is still pending must STAMP that staging,
+  // never mint a duplicate version. Proven end-to-end in a dedicated
+  // business so the s26 ladder fixtures stand untouched.
+  await expectOk("a chore re-run finds its own pending staging and stamps it — no duplicate version is created", async () => {
+    const fix = await db.query<{ business_id: string; human_id: string; template_id: string }>(
+      `
+      with u as (
+        insert into auth.users (id, email) values ('00000000-0000-4000-8000-000000000030', 'ladder-owner@example.test') returning id
+      ), acc as (
+        insert into public.accounts (name, owner_user_id) select 'Ladder Account', id from u returning id
+      ), biz as (
+        insert into public.businesses (account_id, name) select id, 'Ladder Business' from acc returning id, account_id
+      ), human as (
+        insert into public.actors (account_id, actor_type, display_name, user_id)
+        select account_id, 'human', 'Ladder Owner', '00000000-0000-4000-8000-000000000030' from biz returning id
+      ), tpl as (
+        insert into public.templates (business_id, vertical) select id, 'test_vertical' from biz returning id
+      )
+      select
+        (select id from biz) as business_id,
+        (select id from human) as human_id,
+        (select id from tpl) as template_id
+      `
+    );
+    const b = fix.rows[0]!;
+
+    // v1 active with the pre-ruling waits (2/3/4 + close 3).
+    const v1 = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'meta_lead_to_consultation', 1, $3, '{"action":"s30.ladder_smoke"}'::jsonb, 'draft',
+               'Ladder smoke: the pre-ruling cadence.') returning id`,
+      [b.business_id, b.human_id, b.template_id]
+    );
+    const v1Id = v1.rows[0]!.id;
+    const V1_WAITS: [string, number, string][] = [
+      ["nurture_wait_t2", 1, '{"wait":{"days":2},"cancel_on_reply":true}'],
+      ["nurture_wait_t5", 2, '{"wait":{"days":3},"cancel_on_reply":true}'],
+      ["nurture_wait_t9", 3, '{"wait":{"days":4},"cancel_on_reply":true}'],
+      ["close_wait", 4, '{"wait":{"days":3},"cancel_on_reply":true}'],
+    ];
+    for (const [key, sort, config] of V1_WAITS) {
+      await db.query(
+        `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config, gate_level)
+         values ($1, $2, $3, $4, $5, 'wait', $6::jsonb, 0)`,
+        [b.business_id, b.human_id, v1Id, key, sort, config]
+      );
+    }
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [v1Id, b.human_id]);
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [v1Id, b.human_id]);
+
+    // The flag-swallowed first run: v2 staged through the pipeline and left
+    // at pending_approval — exactly what the chore's default mode produces.
+    const loadSteps = async (defId: string) =>
+      (
+        await db.query<LadderStep>(
+          `select key, sort_order, kind, config, gate_level from public.workflow_steps
+           where definition_id = $1 and archived_at is null order by sort_order`,
+          [defId]
+        )
+      ).rows;
+    const v2 = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'meta_lead_to_consultation', 2, $3, '{"action":"s30.ladder_smoke"}'::jsonb, 'draft', $4) returning id`,
+      [b.business_id, b.human_id, b.template_id, ruledLadderDescription()]
+    );
+    const v2Id = v2.rows[0]!.id;
+    for (const step of reissueNudgeLadderSteps(await loadSteps(v1Id))) {
+      await db.query(
+        `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config, gate_level)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+        [b.business_id, b.human_id, v2Id, step.key, step.sort_order, step.kind, JSON.stringify(step.config), step.gate_level]
+      );
+    }
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [v2Id, b.human_id]);
+
+    // The re-run's decision, on the rows as the chore reads them.
+    const versions = (
+      await db.query<{ id: string; version: number; status: string }>(
+        `select id, version, status from public.workflow_definitions
+         where business_id = $1 and key = 'meta_lead_to_consultation' and archived_at is null
+         order by version desc`,
+        [b.business_id]
+      )
+    ).rows;
+    const stepsById = new Map<string, LadderStep[]>();
+    for (const v of versions) stepsById.set(v.id, await loadSteps(v.id));
+    const decision = chooseReissueAction(versions, stepsById);
+    if (decision.action !== "stamp") {
+      throw new Error(`the re-run decided to ${decision.action} — it must stamp its own pending staging`);
+    }
+    if (decision.target.id !== v2Id) throw new Error("the stamp target is not the pending staging");
+
+    // The stamp, as the chore performs it: approve the staging, pause v1.
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [decision.target.id, b.human_id]);
+    await db.query(`select public.pause_workflow_definition($1, $2)`, [decision.active.id, b.human_id]);
+
+    const after = (
+      await db.query<{ version: number; status: string }>(
+        `select version, status from public.workflow_definitions
+         where business_id = $1 and key = 'meta_lead_to_consultation' and archived_at is null
+         order by version`,
+        [b.business_id]
+      )
+    ).rows;
+    if (after.length !== 2) throw new Error(`a duplicate version was created — ${after.length} versions exist, expected 2`);
+    if (after.find((r) => r.version === 2)?.status !== "active") throw new Error("the staged v2 did not become active");
+    if (after.find((r) => r.version === 1)?.status !== "paused") throw new Error("v1 did not pause");
+
+    // Once stamped, a further re-run stands down.
+    const stepsAfter = new Map<string, LadderStep[]>();
+    for (const v of versions) stepsAfter.set(v.id, await loadSteps(v.id));
+    const again = chooseReissueAction(
+      (
+        await db.query<{ id: string; version: number; status: string }>(
+          `select id, version, status from public.workflow_definitions
+           where business_id = $1 and key = 'meta_lead_to_consultation' and archived_at is null
+           order by version desc`,
+          [b.business_id]
+        )
+      ).rows,
+      stepsAfter
+    );
+    if (again.action !== "skip") throw new Error("a third run did not stand down after the stamp");
+
+    // A withdrawn staging is terminal — never stamped, always a fresh issue.
+    const oldSteps: LadderStep[] = V1_WAITS.map(([key, sort, config]) => ({
+      key,
+      sort_order: sort,
+      kind: "wait",
+      config: JSON.parse(config) as Record<string, unknown>,
+      gate_level: 0,
+    }));
+    const ruledSteps = reissueNudgeLadderSteps(oldSteps);
+    const withdrawnCase = chooseReissueAction(
+      [
+        { id: "def-active", version: 3, status: "active" },
+        { id: "def-withdrawn", version: 4, status: "withdrawn" },
+      ],
+      new Map([
+        ["def-active", oldSteps],
+        ["def-withdrawn", ruledSteps],
+      ])
+    );
+    if (withdrawnCase.action !== "issue" || withdrawnCase.version !== 5) {
+      throw new Error("a withdrawn staging must never be stamped — the decision must issue a fresh version");
+    }
+
+    // Tripwire: the chore consults the shared decision, not its own arithmetic.
+    const choreSource = readFileSync(resolve(import.meta.dirname, "reissue-nudge-ladder.ts"), "utf8");
+    if (!choreSource.includes("chooseReissueAction")) {
+      throw new Error("the chore no longer consults chooseReissueAction — the v4/v5 incident can recur");
+    }
+    if (choreSource.includes("Math.max(...versions.map")) {
+      throw new Error("the chore regrew its own version arithmetic beside the shared decision");
+    }
+  });
+
+  // --- WS B2: the WhatsApp card renders env-provenance truth -------------
+  await expectOk("the WhatsApp card tells the truth: a grant connects, env credentials connect via environment, absence alone is not-connected", async () => {
+    const grant = whatsAppConnectionState(true, true);
+    if (!grant.connected || grant.provenance !== "grant") {
+      throw new Error("a live grant must read as the grant-door connection");
+    }
+    const env = whatsAppConnectionState(false, true);
+    if (!env.connected || env.provenance !== "environment") {
+      throw new Error("env credentials must read as connected via environment — never an unearned negative");
+    }
+    const neither = whatsAppConnectionState(false, false);
+    if (neither.connected || neither.provenance !== null) {
+      throw new Error("no grant and no env credentials must read as not connected");
+    }
+    // Tripwires: the read layer consults live credential presence; the card
+    // names the provenance rather than inventing a grant.
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    if (!queriesSource.includes("readWhatsAppEnv() !== null") || !queriesSource.includes("whatsAppConnectionState(")) {
+      throw new Error("getIntegrationStates no longer reads live WhatsApp credential presence");
+    }
+    const tabSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/integrations-tab.tsx"),
+      "utf8"
+    );
+    if (!tabSource.includes('provenance === "environment"') || !tabSource.includes("connected · env")) {
+      throw new Error("the integrations card no longer names the environment provenance");
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
