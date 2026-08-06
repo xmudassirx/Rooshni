@@ -1893,3 +1893,32 @@ quoted-approval precedent).
      (ui-system frontmatter and "both themes"; the handover
      template's theme checkbox) under the same decision-62
      authority.
+
+## Session 31 (6 August 2026) — drafting quality: fees out, follow-up
+## nudges, route-coherent retrieval — recorded on in-prompt authority
+
+179. **Drafting quality, ruled.** In-prompt authority, the entry-113
+     precedent — founder-ruled 6 August 2026, quoted verbatim: "(a) FEES
+     NEVER APPEAR in machine-drafted client-facing messages — no
+     consultation prices, no service fees, no 'from £X'. Drafts invite
+     the next step ('if you would like to speak to our legal team, the
+     next step is booking a consultation') with the booking link; fees
+     live on the booking page and in human-written messages only. The
+     generation prompts forbid it, the templates carry no figure, and a
+     deterministic pre-flight screen refuses a draft body containing a
+     currency-amount pattern, mismatch named. (b) NUDGES ARE FOLLOW-UPS,
+     not re-introductions: nudge composition receives a summary of what
+     the thread has already been sent and is instructed — never
+     re-introduce the firm, shorter than the intro, acknowledge we wrote
+     before. (c) RETRIEVAL AND ATTACHMENTS FOLLOW THE RESOLVED ROUTE:
+     route resolution (including Light's confident read over an unset or
+     form_default source, per 161) completes BEFORE composition;
+     knowledge-pack retrieval and booklet selection key on the resolved
+     route, never on raw text-matching alone. When the route is unset
+     and Light's read is not confident, no route-specific booklet
+     attaches and the draft stays route-neutral — a missing booklet is
+     recoverable; a wrong one is not."
+     Builder bookkeeping (dated 6 August 2026): the Session 31 prompt
+     numbered this ruling 178; entry 178 was already occupied by Session
+     30's provisional entry, finalised by the founder's merge, so the
+     ruling is recorded here as 179 — the ruling's text is untouched.
