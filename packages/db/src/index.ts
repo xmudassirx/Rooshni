@@ -30,3 +30,4 @@ export * from "./light-performance";
 export * from "./read-policy";
 export * from "./returning-leads";
 export * from "./routes";
+export * from "./contacts";

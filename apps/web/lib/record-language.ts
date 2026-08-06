@@ -65,6 +65,17 @@ export function describeEvent(action: string, payload: Record<string, unknown>):
         .filter(Boolean)
         .join(" ");
     }
+    // Session 30 (177c): the owner's archive — resolution and consent end,
+    // history stands.
+    case "contact.archived": {
+      const reason = str("reason");
+      return [
+        "contact archived — leaves resolution, channels leave consent; history stands",
+        reason ? `— “${reason}”` : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
     // Session 27 (D161): route classification, every source honestly named.
     case "engagement.route_set": {
       const route = str("route");
@@ -89,11 +100,17 @@ export function describeEvent(action: string, payload: Record<string, unknown>):
     case "engagement.stage_changed": {
       const to = str("to_stage_key") ?? str("to_stage");
       const auto = str("reason") === "first_outbound_dispatched";
-      return (
-        "stage moved" +
-        (to ? ` → ${to.replace(/_/g, " ")}` : "") +
-        (auto ? " — first outbound reached the client (the template's transition law)" : "")
-      );
+      // Session 30 (177f): a human move names its hand and its reason.
+      const human = str("source") === "human";
+      const reason = human ? str("reason") : null;
+      return [
+        "stage moved" + (to ? ` → ${to.replace(/_/g, " ")}` : ""),
+        auto ? "— first outbound reached the client (the template's transition law)" : null,
+        human ? "· moved by hand" : null,
+        reason ? `— “${reason}”` : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
     }
     case "template.installed": {
       const note = str("note");
@@ -158,6 +175,12 @@ export function describeEvent(action: string, payload: Record<string, unknown>):
     }
     case "grant.revoked":
       return "permission revoked";
+    // Session 30 (177d): a cancelled run says why — "enquiry disqualified"
+    // when the human stage move stood it down.
+    case "workflow.run_cancelled": {
+      const reason = str("reason");
+      return `workflow run cancelled${reason ? ` — ${reason}` : ""}`;
+    }
     default:
       // "workflow.run_started" → "workflow run started"
       return action.replace(".", " ").replace(/_/g, " ");

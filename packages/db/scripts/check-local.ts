@@ -16,7 +16,14 @@ import {
 } from "../src/quiet-hours";
 import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
 import { recordRowTarget } from "../../../apps/web/lib/record-row";
-import { carriesRuledLadder, reissueNudgeLadderSteps, ruledLadderDescription, type LadderStep } from "../src/nudge-ladder";
+import { buildTimeline } from "../../../apps/web/lib/enquiry-timeline";
+import {
+  carriesRuledLadder,
+  chooseReissueAction,
+  reissueNudgeLadderSteps,
+  ruledLadderDescription,
+  type LadderStep,
+} from "../src/nudge-ladder";
 import { declaredTemplateQuietHours } from "../src/quiet-hours";
 import { evaluateAutoClose } from "../src/auto-close";
 import { dueNurtureStep, type NurtureStamps } from "../src/onboarding";
@@ -58,6 +65,8 @@ import {
   resolveEmailIdentity,
 } from "../src/email-html";
 import { whatsAppInboundConsent, mailClaimStaleCutoffIso, MAIL_CLAIM_STALE_AFTER_MS } from "../src/inbound";
+import { whatsAppConnectionState } from "../src/whatsapp";
+import { canArchiveContact } from "../src/contacts";
 import { buildGmailMime, extractGmailBodyText } from "../src/gmail";
 import { resolveMailProvider, selectEmailCarrier, type OutboundProviders, type SendResult } from "../src/send";
 import { rankGuideCandidates, storageSlug, ATTACHMENT_MAX_BYTES } from "../src/route-guides";
@@ -6281,6 +6290,734 @@ async function main() {
     const seen = new Set([...names.rows.map((r) => r.id), ...channels.rows.map((r) => r.contact_id)]);
     if (!seen.has(s28TargetId)) throw new Error("the member cannot find their own business's contact");
     if (seen.has(s28OtherContactId)) throw new Error("another business's contact leaked through the search");
+  });
+
+  console.log("\nSession 30 — honesty + controls sweep:");
+  await db.exec(`reset role`);
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await db.exec(`set request.jwt.claims = ''`);
+
+  // --- WS B3: the chore-stamp decision (the v4/v5 incident, D169) --------
+  // A re-run whose earlier staging is still pending must STAMP that staging,
+  // never mint a duplicate version. Proven end-to-end in a dedicated
+  // business so the s26 ladder fixtures stand untouched.
+  await expectOk("a chore re-run finds its own pending staging and stamps it — no duplicate version is created", async () => {
+    const fix = await db.query<{ business_id: string; human_id: string; template_id: string }>(
+      `
+      with u as (
+        insert into auth.users (id, email) values ('00000000-0000-4000-8000-000000000030', 'ladder-owner@example.test') returning id
+      ), acc as (
+        insert into public.accounts (name, owner_user_id) select 'Ladder Account', id from u returning id
+      ), biz as (
+        insert into public.businesses (account_id, name) select id, 'Ladder Business' from acc returning id, account_id
+      ), human as (
+        insert into public.actors (account_id, actor_type, display_name, user_id)
+        select account_id, 'human', 'Ladder Owner', '00000000-0000-4000-8000-000000000030' from biz returning id
+      ), tpl as (
+        insert into public.templates (business_id, vertical) select id, 'test_vertical' from biz returning id
+      )
+      select
+        (select id from biz) as business_id,
+        (select id from human) as human_id,
+        (select id from tpl) as template_id
+      `
+    );
+    const b = fix.rows[0]!;
+
+    // v1 active with the pre-ruling waits (2/3/4 + close 3).
+    const v1 = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'meta_lead_to_consultation', 1, $3, '{"action":"s30.ladder_smoke"}'::jsonb, 'draft',
+               'Ladder smoke: the pre-ruling cadence.') returning id`,
+      [b.business_id, b.human_id, b.template_id]
+    );
+    const v1Id = v1.rows[0]!.id;
+    const V1_WAITS: [string, number, string][] = [
+      ["nurture_wait_t2", 1, '{"wait":{"days":2},"cancel_on_reply":true}'],
+      ["nurture_wait_t5", 2, '{"wait":{"days":3},"cancel_on_reply":true}'],
+      ["nurture_wait_t9", 3, '{"wait":{"days":4},"cancel_on_reply":true}'],
+      ["close_wait", 4, '{"wait":{"days":3},"cancel_on_reply":true}'],
+    ];
+    for (const [key, sort, config] of V1_WAITS) {
+      await db.query(
+        `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config, gate_level)
+         values ($1, $2, $3, $4, $5, 'wait', $6::jsonb, 0)`,
+        [b.business_id, b.human_id, v1Id, key, sort, config]
+      );
+    }
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [v1Id, b.human_id]);
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [v1Id, b.human_id]);
+
+    // The flag-swallowed first run: v2 staged through the pipeline and left
+    // at pending_approval — exactly what the chore's default mode produces.
+    const loadSteps = async (defId: string) =>
+      (
+        await db.query<LadderStep>(
+          `select key, sort_order, kind, config, gate_level from public.workflow_steps
+           where definition_id = $1 and archived_at is null order by sort_order`,
+          [defId]
+        )
+      ).rows;
+    const v2 = await db.query<{ id: string }>(
+      `insert into public.workflow_definitions (business_id, created_by, key, version, template_id, trigger, status, description_plain)
+       values ($1, $2, 'meta_lead_to_consultation', 2, $3, '{"action":"s30.ladder_smoke"}'::jsonb, 'draft', $4) returning id`,
+      [b.business_id, b.human_id, b.template_id, ruledLadderDescription()]
+    );
+    const v2Id = v2.rows[0]!.id;
+    for (const step of reissueNudgeLadderSteps(await loadSteps(v1Id))) {
+      await db.query(
+        `insert into public.workflow_steps (business_id, created_by, definition_id, key, sort_order, kind, config, gate_level)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+        [b.business_id, b.human_id, v2Id, step.key, step.sort_order, step.kind, JSON.stringify(step.config), step.gate_level]
+      );
+    }
+    await db.query(`select public.submit_workflow_definition($1, $2)`, [v2Id, b.human_id]);
+
+    // The re-run's decision, on the rows as the chore reads them.
+    const versions = (
+      await db.query<{ id: string; version: number; status: string }>(
+        `select id, version, status from public.workflow_definitions
+         where business_id = $1 and key = 'meta_lead_to_consultation' and archived_at is null
+         order by version desc`,
+        [b.business_id]
+      )
+    ).rows;
+    const stepsById = new Map<string, LadderStep[]>();
+    for (const v of versions) stepsById.set(v.id, await loadSteps(v.id));
+    const decision = chooseReissueAction(versions, stepsById);
+    if (decision.action !== "stamp") {
+      throw new Error(`the re-run decided to ${decision.action} — it must stamp its own pending staging`);
+    }
+    if (decision.target.id !== v2Id) throw new Error("the stamp target is not the pending staging");
+
+    // The stamp, as the chore performs it: approve the staging, pause v1.
+    await db.query(`select public.approve_workflow_definition($1, $2)`, [decision.target.id, b.human_id]);
+    await db.query(`select public.pause_workflow_definition($1, $2)`, [decision.active.id, b.human_id]);
+
+    const after = (
+      await db.query<{ version: number; status: string }>(
+        `select version, status from public.workflow_definitions
+         where business_id = $1 and key = 'meta_lead_to_consultation' and archived_at is null
+         order by version`,
+        [b.business_id]
+      )
+    ).rows;
+    if (after.length !== 2) throw new Error(`a duplicate version was created — ${after.length} versions exist, expected 2`);
+    if (after.find((r) => r.version === 2)?.status !== "active") throw new Error("the staged v2 did not become active");
+    if (after.find((r) => r.version === 1)?.status !== "paused") throw new Error("v1 did not pause");
+
+    // Once stamped, a further re-run stands down.
+    const stepsAfter = new Map<string, LadderStep[]>();
+    for (const v of versions) stepsAfter.set(v.id, await loadSteps(v.id));
+    const again = chooseReissueAction(
+      (
+        await db.query<{ id: string; version: number; status: string }>(
+          `select id, version, status from public.workflow_definitions
+           where business_id = $1 and key = 'meta_lead_to_consultation' and archived_at is null
+           order by version desc`,
+          [b.business_id]
+        )
+      ).rows,
+      stepsAfter
+    );
+    if (again.action !== "skip") throw new Error("a third run did not stand down after the stamp");
+
+    // A withdrawn staging is terminal — never stamped, always a fresh issue.
+    const oldSteps: LadderStep[] = V1_WAITS.map(([key, sort, config]) => ({
+      key,
+      sort_order: sort,
+      kind: "wait",
+      config: JSON.parse(config) as Record<string, unknown>,
+      gate_level: 0,
+    }));
+    const ruledSteps = reissueNudgeLadderSteps(oldSteps);
+    const withdrawnCase = chooseReissueAction(
+      [
+        { id: "def-active", version: 3, status: "active" },
+        { id: "def-withdrawn", version: 4, status: "withdrawn" },
+      ],
+      new Map([
+        ["def-active", oldSteps],
+        ["def-withdrawn", ruledSteps],
+      ])
+    );
+    if (withdrawnCase.action !== "issue" || withdrawnCase.version !== 5) {
+      throw new Error("a withdrawn staging must never be stamped — the decision must issue a fresh version");
+    }
+
+    // Tripwire: the chore consults the shared decision, not its own arithmetic.
+    const choreSource = readFileSync(resolve(import.meta.dirname, "reissue-nudge-ladder.ts"), "utf8");
+    if (!choreSource.includes("chooseReissueAction")) {
+      throw new Error("the chore no longer consults chooseReissueAction — the v4/v5 incident can recur");
+    }
+    if (choreSource.includes("Math.max(...versions.map")) {
+      throw new Error("the chore regrew its own version arithmetic beside the shared decision");
+    }
+  });
+
+  // --- WS B2: the WhatsApp card renders env-provenance truth -------------
+  await expectOk("the WhatsApp card tells the truth: a grant connects, env credentials connect via environment, absence alone is not-connected", async () => {
+    const grant = whatsAppConnectionState(true, true);
+    if (!grant.connected || grant.provenance !== "grant") {
+      throw new Error("a live grant must read as the grant-door connection");
+    }
+    const env = whatsAppConnectionState(false, true);
+    if (!env.connected || env.provenance !== "environment") {
+      throw new Error("env credentials must read as connected via environment — never an unearned negative");
+    }
+    const neither = whatsAppConnectionState(false, false);
+    if (neither.connected || neither.provenance !== null) {
+      throw new Error("no grant and no env credentials must read as not connected");
+    }
+    // Tripwires: the read layer consults live credential presence; the card
+    // names the provenance rather than inventing a grant.
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    if (!queriesSource.includes("readWhatsAppEnv() !== null") || !queriesSource.includes("whatsAppConnectionState(")) {
+      throw new Error("getIntegrationStates no longer reads live WhatsApp credential presence");
+    }
+    const tabSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/integrations-tab.tsx"),
+      "utf8"
+    );
+    if (!tabSource.includes('provenance === "environment"') || !tabSource.includes("connected · env")) {
+      throw new Error("the integrations card no longer names the environment provenance");
+    }
+  });
+
+  // --- WS B1: whole-set conversation search (the s28 pattern, D175) ------
+  // Fixture: 20 filler threads with future activity own page 1; the target
+  // thread sits a year back — findable only by querying the whole set.
+  const s30Filler = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Filler Correspondent') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s30FillerId = s30Filler.rows[0]!.id;
+  await db.query(
+    `insert into public.comm_threads (business_id, created_by, contact_id, channel, last_activity_at)
+     select $1, $2, $3, 'email', now() + interval '1 hour' + (n || ' minutes')::interval
+     from generate_series(1, 20) n`,
+    [f.business_id, f.agent_id, s30FillerId]
+  );
+  const s30Contact = await db.query<{ id: string }>(
+    `insert into public.contacts (business_id, created_by, type, display_name)
+     values ($1, $2, 'person', 'Sadia Winterbourne') returning id`,
+    [f.business_id, f.agent_id]
+  );
+  const s30ContactId = s30Contact.rows[0]!.id;
+  await db.query(
+    `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+     values ($1, $2, $3, 'email', 'sadia@wintermail.test', true, '{"transactional": true}'::jsonb),
+            ($1, $2, $3, 'phone', '+447700900456', true, '{"transactional": true}'::jsonb),
+            ($1, $2, $3, 'whatsapp', '447700900987', true, '{"transactional": true}'::jsonb)`,
+    [f.business_id, f.agent_id, s30ContactId]
+  );
+  const s30Thread = await db.query<{ id: string }>(
+    `insert into public.comm_threads (business_id, created_by, contact_id, channel, last_activity_at)
+     values ($1, $2, $3, 'email', now() - interval '365 days') returning id`,
+    [f.business_id, f.agent_id, s30ContactId]
+  );
+  const s30ThreadId = s30Thread.rows[0]!.id;
+  // A second business holding a look-alike conversation — the RLS probe.
+  const s30Other = await db.query<{ thread_id: string }>(
+    `
+    with u as (
+      insert into auth.users (id, email) values ('00000000-0000-4000-8000-000000000031', 'convo-owner@example.test') returning id
+    ), acc as (
+      insert into public.accounts (name, owner_user_id) select 'Convo Account', id from u returning id
+    ), biz as (
+      insert into public.businesses (account_id, name) select id, 'Convo Business' from acc returning id, account_id
+    ), actor as (
+      insert into public.actors (account_id, actor_type, display_name, user_id)
+      select account_id, 'human', 'Convo Owner', '00000000-0000-4000-8000-000000000031' from biz returning id
+    ), c as (
+      insert into public.contacts (business_id, created_by, type, display_name)
+      select biz.id, actor.id, 'person', 'Sadia Other' from biz, actor returning id
+    ), ch as (
+      insert into public.contact_channels (business_id, created_by, contact_id, channel, value)
+      select biz.id, actor.id, c.id, 'email', 'sadia@othermail.test' from biz, actor, c returning id
+    ), th as (
+      insert into public.comm_threads (business_id, created_by, contact_id, channel, last_activity_at)
+      select biz.id, actor.id, c.id, 'email', now() from biz, actor, c returning id
+    )
+    select (select id from th) as thread_id
+    `
+  );
+  const s30OtherThreadId = s30Other.rows[0]!.thread_id;
+
+  await expectOk("the first page of conversations does not hold the target thread — the s28 defect's live shape", async () => {
+    const pageOne = await db.query<{ id: string }>(
+      `select id from public.comm_threads
+       where business_id = $1 and archived_at is null and last_activity_at is not null
+       order by last_activity_at desc limit 20 offset 0`,
+      [f.business_id]
+    );
+    if (pageOne.rows.some((r) => r.id === s30ThreadId)) {
+      throw new Error("the fixture no longer pushes the target thread off page 1 — the smoke proves nothing");
+    }
+  });
+
+  await expectOk("search finds the off-page conversation by contact name, email, phone and whatsapp value — the whole set, never the loaded page", async () => {
+    // The exact legs getConversationList issues: contact name ilike + channel
+    // value ilike (email/phone/whatsapp), business-scoped, live rows only,
+    // then the thread window filtered by the resolved contact ids.
+    const legs = async (q: string) => {
+      const names = await db.query<{ id: string }>(
+        `select id from public.contacts
+         where business_id = $1 and archived_at is null and display_name ilike $2 limit 50`,
+        [f.business_id, `%${q}%`]
+      );
+      const channels = await db.query<{ contact_id: string }>(
+        `select contact_id from public.contact_channels
+         where business_id = $1 and archived_at is null and channel in ('email', 'phone', 'whatsapp') and value ilike $2 limit 50`,
+        [f.business_id, `%${q}%`]
+      );
+      const idSet = [...new Set([...names.rows.map((r) => r.id), ...channels.rows.map((r) => r.contact_id)])];
+      if (idSet.length === 0) return [];
+      const windowed = await db.query<{ id: string }>(
+        `select id from public.comm_threads
+         where business_id = $1 and archived_at is null and last_activity_at is not null and contact_id = any($2::uuid[])
+         order by last_activity_at desc limit 20 offset 0`,
+        [f.business_id, idSet]
+      );
+      return windowed.rows.map((r) => r.id);
+    };
+    for (const [probe, q] of [
+      ["name", "Winterbourne"],
+      ["email", "wintermail"],
+      ["phone", "7700900456"],
+      ["whatsapp", "7700900987"],
+    ] as const) {
+      const found = await legs(q);
+      if (!found.includes(s30ThreadId)) throw new Error(`the ${probe} search missed the off-page conversation`);
+    }
+    // Tripwires: the read layer carries the bounded legs; the page hands the
+    // query to the server; the client debounces into the URL instead of
+    // filtering the loaded page (the s28-recorded defect).
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    if (!queriesSource.includes("CONVERSATION_SEARCH_BOUND")) {
+      throw new Error("getConversationList lost its bounded search legs");
+    }
+    const clientSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/conversations/conversations-client.tsx"),
+      "utf8"
+    );
+    if (clientSource.includes("t.contactName.toLowerCase().includes")) {
+      throw new Error("the conversations search filters the loaded page again — the s28-recorded defect");
+    }
+    if (!clientSource.includes("router.replace") || !clientSource.includes("setTimeout")) {
+      throw new Error("the conversations search is no longer debounced into the URL");
+    }
+    const pageSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/conversations/page.tsx"),
+      "utf8"
+    );
+    if (!pageSource.includes("getConversationList(Number.isFinite(listPage) ? listPage : 1, q)")) {
+      throw new Error("the conversations page no longer hands the query to the server read");
+    }
+  });
+
+  await expectOk("conversation search never crosses the business wall — RLS holds without the business filter", async () => {
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    // No business_id filter at all: RLS alone must scope every leg.
+    const names = await db.query<{ id: string }>(
+      `select id from public.contacts where archived_at is null and display_name ilike '%Sadia%'`
+    );
+    const channels = await db.query<{ contact_id: string }>(
+      `select contact_id from public.contact_channels
+       where archived_at is null and channel in ('email', 'phone', 'whatsapp') and value ilike '%sadia@%'`
+    );
+    const contactIds = [...new Set([...names.rows.map((r) => r.id), ...channels.rows.map((r) => r.contact_id)])];
+    const threads = contactIds.length
+      ? await db.query<{ id: string }>(
+          `select id from public.comm_threads
+           where archived_at is null and last_activity_at is not null and contact_id = any($1::uuid[])`,
+          [contactIds]
+        )
+      : { rows: [] as { id: string }[] };
+    await db.exec(`reset role`);
+    const seen = new Set(threads.rows.map((r) => r.id));
+    if (!seen.has(s30ThreadId)) throw new Error("the member cannot find their own business's conversation");
+    if (seen.has(s30OtherThreadId)) throw new Error("another business's conversation leaked through the search");
+  });
+
+  // --- 177a: the gold pending-stamp indicator ----------------------------
+  // Back to the trusted-server posture after the RLS probe above.
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await db.exec(`set request.jwt.claims = ''`);
+  let s30RejectedDraftId = "";
+  await expectOk("the gold pending-stamp indicator derives from a pending draft and clears on decision (177a)", async () => {
+    const draft = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, 'email', 'outbound', 'draft', 'Thank you for your patience. Mudassir will be in touch shortly.', $2) returning id`,
+      [f.business_id, f.agent_id, s30ThreadId, s30ContactId]
+    );
+    const draftId = draft.rows[0]!.id;
+    s30RejectedDraftId = draftId;
+    await recordCompliance(draftId);
+    await db.query(`select public.submit_communication($1, $2)`, [draftId, f.agent_id]);
+
+    // The exact probe getConversationList issues for the row's indicator.
+    const pendingProbe = async () =>
+      (
+        await db.query<{ thread_id: string }>(
+          `select thread_id from public.communications
+           where thread_id = $1 and direction = 'outbound' and status = 'pending_approval' and archived_at is null`,
+          [s30ThreadId]
+        )
+      ).rows.length;
+    if ((await pendingProbe()) !== 1) throw new Error("a submitted draft did not read as awaiting the stamp");
+
+    // The client renders the STATIC gold dot from that fact — beside, never
+    // instead of, the accent unread dot (both may coexist, 177a).
+    const clientSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/conversations/conversations-client.tsx"),
+      "utf8"
+    );
+    if (!/item\.hasPendingDraft \?[\s\S]{0,400}?bg-gold/.test(clientSource)) {
+      throw new Error("the thread row no longer renders the gold pending-stamp dot");
+    }
+    if (!/item\.unread \?[\s\S]{0,400}?bg-accent/.test(clientSource)) {
+      throw new Error("the accent unread dot vanished — 177a keeps both indicators");
+    }
+    if (/animate|transition/.test(clientSource.match(/aria-label="Draft awaiting your stamp"[\s\S]{0,200}/)?.[0] ?? "")) {
+      throw new Error("the pending-stamp dot animates — the thread list is a tier-1 surface and never animates");
+    }
+
+    // The decision clears it: a rejection returns the row to draft.
+    await db.query(`select public.reject_communication($1, $2, $3)`, [
+      draftId,
+      f.human_id,
+      "Session 30 smoke: rejected to prove the indicator clears.",
+    ]);
+    if ((await pendingProbe()) !== 0) throw new Error("the indicator did not clear on rejection");
+  });
+
+  // --- 177b: the rejected state at both surfaces -------------------------
+  await expectOk("a rejected draft renders its rejection at both surfaces — stamp red, recorded reason (177b)", async () => {
+    // The 0017 all-or-none triple stands on the row the surfaces read.
+    const row = await db.query<{ status: string; rejected_at: string | null; rejection_reason: string | null; rejected_by_actor_id: string | null }>(
+      `select status, rejected_at, rejection_reason, rejected_by_actor_id
+       from public.communications where id = $1`,
+      [s30RejectedDraftId]
+    );
+    const r = row.rows[0]!;
+    if (r.status !== "draft" || !r.rejected_at || !r.rejection_reason || !r.rejected_by_actor_id) {
+      throw new Error("the rejection triple is not recorded on the row");
+    }
+    // The thread window read carries the rejection columns — the bubble
+    // cannot tell the truth it cannot see (the s28-class defect).
+    const queriesSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/lib/server/queries.ts"),
+      "utf8"
+    );
+    if (!queriesSource.includes("rejected_at, rejected_by_actor_id, rejection_reason")) {
+      throw new Error("COMM_WINDOW_COLUMNS no longer selects the rejection triple");
+    }
+    // Both surfaces render the ruled grammar in the stamp's colour.
+    const clientSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/conversations/conversations-client.tsx"),
+      "utf8"
+    );
+    if (!clientSource.includes("Rejected by {message.rejection.byName} · {message.rejection.reason}")) {
+      throw new Error("the thread bubble no longer renders the ruled rejection grammar");
+    }
+    if (!clientSource.includes('message.status === "draft" && message.rejection')) {
+      throw new Error("the thread bubble lost its rejected-draft branch");
+    }
+    const enquirySource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/enquiries/[id]/page.tsx"),
+      "utf8"
+    );
+    if (!enquirySource.includes("Rejected by {comm.rejection.byName} · {comm.rejection.reason}")) {
+      throw new Error("the enquiry timeline no longer renders the ruled rejection grammar");
+    }
+  });
+
+  // --- 177e: the timeline renders newest first, at component level -------
+  await expectOk("the enquiry timeline orders newest first — every kind in the one sort, suppressions intact (177e)", async () => {
+    const items = buildTimeline({
+      stages: [{ id: "s1", label: "Qualified" }],
+      events: [
+        { occurredAt: "2026-08-01T10:00:00Z", action: "engagement.created" },
+        { occurredAt: "2026-08-03T10:00:00Z", action: "light.route_classified" },
+        // Suppressed: the message cards tell the comms story.
+        { occurredAt: "2026-08-02T10:00:00Z", action: "communication.rejected" },
+      ],
+      stageHistory: [
+        // Suppressed: the opening move is told by engagement.created.
+        { movedAt: "2026-08-01T10:00:01Z", fromStageId: null, toStageId: "s1" },
+        { movedAt: "2026-08-04T10:00:00Z", fromStageId: "s0", toStageId: "s1" },
+      ],
+      comms: [
+        { occurredAt: "2026-08-02T09:00:00Z", channel: "email" },
+        { occurredAt: "2026-08-05T10:00:00Z", channel: "whatsapp" },
+        // Suppressed: internal notes render in their own panel.
+        { occurredAt: "2026-08-06T10:00:00Z", channel: "internal_note" },
+      ],
+    });
+    const ats = items.map((i) => i.at);
+    if (ats.length !== 5) throw new Error(`suppressions broke: ${ats.length} items, expected 5`);
+    for (let i = 1; i < ats.length; i++) {
+      if (ats[i - 1]! < ats[i]!) throw new Error(`the timeline is not newest-first at index ${i}`);
+    }
+    if (items[0]!.kind !== "comm" || items[0]!.at !== "2026-08-05T10:00:00Z") {
+      throw new Error("the newest item does not lead the timeline");
+    }
+    if (items[ats.length - 1]!.at !== "2026-08-01T10:00:00Z") {
+      throw new Error("the opening event is not at the bottom");
+    }
+    // No surface renders both orders: the page consumes the ONE pure sort
+    // and keeps no ascending compare of its own.
+    const enquirySource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/enquiries/[id]/page.tsx"),
+      "utf8"
+    );
+    if (!enquirySource.includes('from "@/lib/enquiry-timeline"')) {
+      throw new Error("the enquiry page no longer consumes the pure timeline module");
+    }
+    if (enquirySource.includes("a.at.localeCompare(b.at)")) {
+      throw new Error("the enquiry page regrew an ascending sort beside the newest-first law");
+    }
+  });
+
+  // --- 177f + 177d: the human stage move and disqualify-cancels-run ------
+  const s30Stages = await db.query<{ id: string; key: string }>(
+    `insert into public.stage_definitions (engagement_type_id, key, label, sort_order, is_terminal, terminal_outcome)
+     values ($1, 'qualified', 'Qualified', 3, false, null),
+            ($1, 'disqualified', 'Disqualified', 10, true, 'disqualified')
+     returning id, key`,
+    [f.type_id]
+  );
+  const s30QualifiedId = s30Stages.rows.find((r) => r.key === "qualified")!.id;
+  const s30DisqualifiedId = s30Stages.rows.find((r) => r.key === "disqualified")!.id;
+  const s30Eng = await db.query<{ id: string }>(
+    `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+     values ($1, $2, $3, 'Session 30 stage-control enquiry', $4, $5) returning id`,
+    [f.business_id, f.agent_id, f.type_id, f.stage_id, f.human_id]
+  );
+  const s30EngId = s30Eng.rows[0]!.id;
+
+  await expectOk("a human stage move rides the 0016 door and disqualify CANCELS the live run — mid-flight steps stand down (177f + 177d)", async () => {
+    // The active ladder definition (the s26 re-issue) drives a live run.
+    const activeDef = await db.query<{ id: string }>(
+      `select id from public.workflow_definitions
+       where business_id = $1 and key = 'meta_lead_to_consultation' and status = 'active' and archived_at is null
+       limit 1`,
+      [f.business_id]
+    );
+    if (!activeDef.rows[0]) throw new Error("no active ladder definition — the fixture moved");
+    const run = await db.query<{ id: string }>(
+      `select public.start_workflow_run($1, $2, $3) as id`,
+      [activeDef.rows[0]!.id, s30EngId, f.agent_id]
+    );
+    const runId = run.rows[0]!.id;
+    const liveSteps = async () =>
+      (
+        await db.query<{ n: number }>(
+          `select count(*)::int as n from public.step_runs
+           where run_id = $1 and status in ('scheduled', 'running', 'awaiting_approval')`,
+          [runId]
+        )
+      ).rows[0]!.n;
+    if ((await liveSteps()) === 0) throw new Error("the run scheduled no first step — the fixture proves nothing");
+
+    // The human moves the stage — the door records the hand on stage_history.
+    await db.query(`select public.move_engagement_stage($1, $2, $3)`, [s30EngId, s30QualifiedId, f.human_id]);
+    const lastMove = await db.query<{ actor_type: string }>(
+      `select a.actor_type from public.stage_history h join public.actors a on a.id = h.moved_by
+       where h.engagement_id = $1 order by h.moved_at desc limit 1`,
+      [s30EngId]
+    );
+    if (lastMove.rows[0]?.actor_type !== "human") {
+      throw new Error("the human move is not the engagement's latest recorded stage fact");
+    }
+
+    // Disqualify, then cancel the live run exactly as the wrapper does.
+    await db.query(`select public.move_engagement_stage($1, $2, $3)`, [s30EngId, s30DisqualifiedId, f.human_id]);
+    const eng = await db.query<{ outcome: string | null }>(
+      `select outcome from public.engagements where id = $1`,
+      [s30EngId]
+    );
+    if (eng.rows[0]?.outcome !== "disqualified") throw new Error("the terminal move did not record the outcome");
+    await db.query(`select public.cancel_workflow_run($1, $2, $3)`, [
+      runId,
+      f.human_id,
+      "enquiry disqualified: smoke reason",
+    ]);
+    const runRow = await db.query<{ status: string; context: Record<string, unknown> }>(
+      `select status, context from public.workflow_runs where id = $1`,
+      [runId]
+    );
+    if (runRow.rows[0]?.status !== "cancelled") throw new Error("the run is not cancelled");
+    if (runRow.rows[0]?.context?.cancelled_reason !== "enquiry disqualified: smoke reason") {
+      throw new Error("the cancellation reason is not recorded on the run");
+    }
+    if ((await liveSteps()) !== 0) throw new Error("mid-flight step runs did not stand down with the run");
+
+    // The wrapper wires disqualify → cancel, the action holds the pen, and
+    // the control speaks the template's vocabulary (tripwires).
+    const workflowSource = readFileSync(resolve(import.meta.dirname, "../src/workflow.ts"), "utf8");
+    if (
+      !workflowSource.includes("moveEngagementStageAsHuman") ||
+      !workflowSource.includes(`terminal_outcome === "disqualified"`) ||
+      !workflowSource.includes(`source: "human"`)
+    ) {
+      throw new Error("moveEngagementStageAsHuman lost its evented disqualify-cancels-run wiring");
+    }
+    const actionsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/enquiries/actions.ts"),
+      "utf8"
+    );
+    if (!actionsSource.includes("moveEngagementStageAsHuman")) {
+      throw new Error("the enquiry stage action no longer calls the shared wrapper");
+    }
+    const controlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/enquiries/stage-control.tsx"),
+      "utf8"
+    );
+    if (!controlSource.includes("stages.map") || !controlSource.includes("disqualified")) {
+      throw new Error("the stage control no longer speaks the installed template's vocabulary");
+    }
+  });
+
+  await expectError("a cancelled run is terminal — it never resumes, no further step can generate a draft", /terminal|paused/, async () => {
+    const runId = (
+      await db.query<{ id: string }>(
+        `select id from public.workflow_runs where engagement_id = $1 limit 1`,
+        [s30EngId]
+      )
+    ).rows[0]!.id;
+    await db.query(`select public.resume_workflow_run($1, $2)`, [runId, f.human_id]);
+  });
+
+  await expectOk("a machine stage move stands down when the stage was last moved by a human hand (177f)", async () => {
+    // The engagement's recorded truth: the latest mover is human (asserted
+    // above); the engine consults exactly that fact before moving.
+    const engineSource = readFileSync(resolve(import.meta.dirname, "../src/workflow.ts"), "utf8");
+    if (!engineSource.includes("human_stage_move_stands")) {
+      throw new Error("executeMoveStage lost the 177f stand-down");
+    }
+    const guardAt = engineSource.indexOf("human_stage_move_stands");
+    const before = engineSource.slice(Math.max(0, guardAt - 2000), guardAt);
+    if (!before.includes(`from("stage_history")`) || !before.includes(`actor_type === "human"`)) {
+      throw new Error("the stand-down no longer reads the engagement's latest stage mover");
+    }
+    // And the guard sits BEFORE the door call in executeMoveStage.
+    const moveAt = engineSource.indexOf("executeMoveStage");
+    const rpcAt = engineSource.indexOf(`rpc("move_engagement_stage"`, moveAt);
+    if (!(moveAt < guardAt && guardAt < rpcAt)) {
+      throw new Error("the stand-down does not precede the machine's stage move");
+    }
+  });
+
+  // --- 177c: the contact archive ------------------------------------------
+  await expectOk("an archived contact leaves resolution and its channels leave consent — history untouched (177c)", async () => {
+    const c = await db.query<{ id: string }>(
+      `insert into public.contacts (business_id, created_by, type, display_name)
+       values ($1, $2, 'person', 'Archie Chamberlain') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    const contactId = c.rows[0]!.id;
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'email', 'archie@chamberlain.test', true, '{"transactional": true}'::jsonb),
+              ($1, $2, $3, 'phone', '+447700900777', true, '{"transactional": true}'::jsonb)`,
+      [f.business_id, f.agent_id, contactId]
+    );
+    const th = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel, last_activity_at)
+       values ($1, $2, $3, 'email', now()) returning id`,
+      [f.business_id, f.agent_id, contactId]
+    );
+    const threadId = th.rows[0]!.id;
+    await db.query(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body)
+       values ($1, $2, $3, $4, 'email', 'inbound', 'received', 'Hello, I would like some help please.')`,
+      [f.business_id, f.agent_id, threadId, contactId]
+    );
+
+    // BEFORE: the resolver's own query finds the contact; consent holds.
+    const resolverRows = async () =>
+      (
+        await db.query<{ contact_id: string; channel: string; value: string }>(
+          `select contact_id, channel, value from public.contact_channels
+           where business_id = $1 and channel in ('email', 'phone')
+             and value in ('archie@chamberlain.test', '+447700900777')
+             and archived_at is null`,
+          [f.business_id]
+        )
+      ).rows;
+    const before = resolveKnownContactId(await resolverRows(), "archie@chamberlain.test", "+447700900777");
+    if (before !== contactId) throw new Error("the live contact did not resolve — the fixture proves nothing");
+    const consentCheck = async () => {
+      const r = await db.query<{ out: { checks: Array<{ key: string; pass: boolean }> } }>(
+        `select private.comm_preflight($1, $2, 'email', 'Thank you for your message.', null, '{}'::jsonb, false) as out`,
+        [f.business_id, contactId]
+      );
+      return r.rows[0]!.out.checks.find((ch) => ch.key === "consent")!;
+    };
+    if (!(await consentCheck()).pass) throw new Error("consent did not hold before the archive");
+
+    // The archive, exactly as archiveContact performs it: the contact and
+    // every live channel row stamp archived_at; nothing is deleted.
+    await db.query(
+      `update public.contacts set archived_at = now() where id = $1 and archived_at is null`,
+      [contactId]
+    );
+    await db.query(
+      `update public.contact_channels set archived_at = now() where contact_id = $1 and archived_at is null`,
+      [contactId]
+    );
+
+    // AFTER: resolution finds no one; consent refuses; history stands.
+    const after = resolveKnownContactId(await resolverRows(), "archie@chamberlain.test", "+447700900777");
+    if (after !== null) throw new Error("an archived contact still resolves — 177c broken");
+    if ((await consentCheck()).pass) throw new Error("an archived contact's channels still hold consent");
+    const history = await db.query<{ contact: number; thread: number; comm: number }>(
+      `select
+         (select count(*)::int from public.contacts where id = $1) as contact,
+         (select count(*)::int from public.comm_threads where id = $2) as thread,
+         (select count(*)::int from public.communications where thread_id = $2) as comm`,
+      [contactId, threadId]
+    );
+    const h = history.rows[0]!;
+    if (h.contact !== 1 || h.thread !== 1 || h.comm !== 1) {
+      throw new Error("archive touched history — a row vanished");
+    }
+
+    // The render/act truth and the wrapper's wiring (tripwires).
+    if (!canArchiveContact({ isOwner: true, alreadyArchived: false })) {
+      throw new Error("the owner cannot archive a live contact");
+    }
+    if (canArchiveContact({ isOwner: false, alreadyArchived: false })) {
+      throw new Error("a non-owner may archive — owner-only for now (177c)");
+    }
+    if (canArchiveContact({ isOwner: true, alreadyArchived: true })) {
+      throw new Error("an archived contact re-archives — the control must not render");
+    }
+    const kinds = readFileSync(resolve(import.meta.dirname, "../src/event-kinds.ts"), "utf8");
+    if (!kinds.includes('"contact.archived"')) {
+      throw new Error("the contact.archived event kind is gone from the registry");
+    }
+    const contactsSource = readFileSync(resolve(import.meta.dirname, "../src/contacts.ts"), "utf8");
+    if (!contactsSource.includes("CONTACT_EVENT_KINDS.archived") || !contactsSource.includes("contact_channels")) {
+      throw new Error("archiveContact no longer events the act or no longer cascades to the channels");
+    }
+    const archiveActionSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/actions.ts"),
+      "utf8"
+    );
+    if (!archiveActionSource.includes("canArchiveContact") || !archiveActionSource.includes('membershipRole === "owner"')) {
+      throw new Error("the archive action lost its owner gate");
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

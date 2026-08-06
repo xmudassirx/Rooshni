@@ -1,6 +1,6 @@
 ---
 name: ui-system
-description: Use when building any UI in apps/web — the theme/token architecture, Ledger and Frost, the semantic colour invariants, shadcn conventions, and the signed design amendments in force. Keep current as the UI grows.
+description: Use when building any UI in apps/web — the theme/token architecture (Frost, Ledger, Mono), the semantic colour invariants, shadcn conventions, and the signed design amendments in force. Keep current as the UI grows.
 ---
 
 # UI system (as implemented after Sessions 4–5)
@@ -14,7 +14,7 @@ Precedence on conflict: AMENDMENTS-PASS3 > in-file amendments > mockup pixels. I
 All theming lives in `apps/web/app/globals.css`:
 
 - **CSS custom properties on `:root`** define the palette — paper/ink neutrals, `--ledger` (register green), `--stamp` (red), `--gold`, their `-tint` pairs, rules/borders, sidebar surfaces, `--font-display`.
-- **`[data-theme="frost"]` overrides** the same variables. There are exactly two themes: **Ledger** (the shipping default — paper, ink, Bitter display face, solid panels) and **Frost** (glass: translucent panels, backdrop blur, gradient background, Public Sans display face). Absence of the attribute IS Ledger; only `"frost"` is ever written.
+- **`[data-theme]` overrides** the same variables. There are exactly three themes (decision 62): **Frost** (the default — glass: translucent panels, backdrop blur, gradient background, Public Sans display face), **Ledger** (paper, ink, Bitter display face, solid panels) and **Mono** (white/black luxury; chrome collapses to black while the semantic colours never move). Absence of the attribute IS Frost; only `"ledger"` and `"mono"` are ever written. Each theme defines its complete variable set — a partial set leaks another theme's tint (the frost cream-leak incident, decision 62).
 - **`@theme inline`** bridges every variable into Tailwind v4 utilities (`text-ink`, `bg-paper`, `text-ledger`, `bg-stamp`, `font-display`, `shadow-panel`…). Components consume tokens only — never raw hex, never a colour that bypasses the vocabulary.
 - **`.glass`** is the shared surface class: solid panel in Ledger, blur in Frost. Sidebar adds `.sidebar-glass`.
 - **Modals are never glass** (founder-ordered chore, 30 Jul 2026): every modal uses the shared pair `.modal-scrim` (dimmed + lightly blurred backdrop) and `.modal-surface` (OPAQUE paper in every theme) from `globals.css` — never a per-modal scrim or a translucent panel, so backdrop bleed cannot recur. Popovers, drawers and the First Light panel are not modals and keep their own treatments.
@@ -25,7 +25,7 @@ Fonts (loaded in `app/layout.tsx` via `next/font`): Public Sans (body/sans), Bit
 ## Semantic invariants — law in every theme
 
 - **Gold = Light acted.** **Red (`--stamp`) = human stamp required/withheld.** **Green (`--ledger`) = done.**
-- **The monospace register face never changes** — metadata lines, pre-flight facts, section labels are IBM Plex Mono in both themes.
+- **The monospace register face never changes** — metadata lines, pre-flight facts, section labels are IBM Plex Mono in every theme.
 - Never render an unearned tick (decision 19 caveat): checks the database has not run display as *pending*, never green — see the `NOT_YET_RUN` pattern in `apps/web/app/(app)/inbox/inbox-card.tsx`.
 - A screen is done only when it holds in **both** themes (see `preview-verification`).
 

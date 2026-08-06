@@ -1825,3 +1825,71 @@ quoted-approval precedent).
      to require quoted in-prompt authority (the entry-113
      precedent). The direction of authority is unchanged: nothing
      becomes a ruling without the founder's hand.
+
+## Session 30 (6 August 2026) — thread-list, rejection, contact and
+## enquiry controls — recorded on in-prompt authority
+
+177. **Thread-list, rejection, contact and enquiry controls, ruled.**
+     In-prompt authority, the entry-113 precedent — founder-ruled
+     6 August 2026, quoted verbatim: "(a) a Conversations thread row
+     carrying a draft awaiting the stamp shows a GOLD pending-stamp
+     indicator, distinct from the accent unread badge for client
+     inbounds — a glance distinguishes 'a client waits on you' from
+     'Light waits on you'; both may coexist on one row. (b) A rejected
+     draft renders its rejection wherever the draft appears — thread
+     bubble and enquiry timeline — in the stamp red with the recorded
+     reason ('Rejected by [name] · [reason]'); rejection is the stamp
+     withheld and wears the stamp's colour. (c) Contacts gain an
+     ARCHIVE control — owner-only for now, evented with optional
+     reason; an archived contact leaves resolution and its channels
+     leave consent, while its history stands untouched; deletion does
+     not exist (append-only). (d) Disqualifying an enquiry CANCELS its
+     live workflow run — drafts stop being generated, not merely
+     blocked at pre-flight. (e) The enquiry timeline renders NEWEST
+     FIRST — the timeline answers 'what just happened'; the opening
+     events belong at the bottom once history exists. (f) The enquiry
+     stage becomes HUMAN-MOVABLE: the enquiry page gains a stage
+     control — any team member with enquiry access moves the stage,
+     evented with optional reason; the vocabulary is the installed
+     template's stages plus its terminal states (disqualified with
+     reason among them). A human move is a recorded fact the workflow
+     respects; machine stage moves continue as today and never
+     overwrite a later human move."
+
+178. Session 30's Lane B calls, consolidated (provisional — the
+     founder's merge is the stamp, D152 pattern): (a) the
+     Conversations search's channel leg includes 'whatsapp' beside
+     email and phone — Conversations is the surface where a
+     WhatsApp-held number IS the identity (inbound matching already
+     treats whatsapp+phone as one family); the s28 Contacts legs
+     stay email/phone. (b) 177f's "never overwrite a later human
+     move" reads as WHO SPOKE LAST: when the engagement's latest
+     stage move was made by a human hand, a machine move_stage/close
+     step stands down (skipped, its reason on the step outcome —
+     the decision-15 visibility); enforced in the engine because the
+     rule weighs the machine's intent against the human's recorded
+     act — the 0016 door and 0015 grant check stay the database
+     truth beneath; the 0022 contacted trigger is untouched (it
+     moves only new_lead→contacted). (c) 177c's owner-only gate is
+     app-level for now (pure canArchiveContact + the action's
+     membershipRole check — the 0037 manager-gate precedent);
+     archived_at cascades to every live channel row so every
+     resolver and the 0043 consent pre-flight exclude the contact
+     with zero query changes; a database door for the owner gate is
+     a natural later hardening if ordered. (d) the WhatsApp
+     env-provenance state wears the green connected chip reading
+     "connected · env" — a real, working connection earned by a
+     live credential-presence read (boolean, never a value — the
+     s20 wiring-state law); a grant, when one exists, outranks env
+     as the named provenance. (e) in Conversations, an explicitly
+     opened thread stays open across a search change; a new query
+     restarts the list at page 1 (the s28 pattern). (f) the stage
+     control renders for any signed-in member (the D161c
+     route-control precedent on the same page — the 0015 grant
+     check refuses ungranted actors regardless); the vocabulary is
+     the full installed set, moves out of a terminal stage
+     permitted wherever the 0016 door permits them. (g) WS B4 swept
+     two adjacent stale two-theme lines in the same files
+     (ui-system frontmatter and "both themes"; the handover
+     template's theme checkbox) under the same decision-62
+     authority.

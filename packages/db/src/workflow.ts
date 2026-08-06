@@ -163,6 +163,99 @@ export async function cancelWorkflowRun(db: SupabaseClient, input: RunActInput):
   });
 }
 
+/** Run statuses a cancellation reaches — everything not already terminal
+ * (the chore-cancel-replay-runs set). */
+export const LIVE_RUN_STATUSES = ["running", "waiting", "blocked", "paused"] as const;
+
+export interface HumanStageMoveInput {
+  business_id: string;
+  engagement_id: string;
+  /** The target stage_definitions row — the installed template's vocabulary,
+   * terminal states included (177f). */
+  to_stage_id: string;
+  /** The signed-in human's own actor. */
+  actor_id: string;
+  reason?: string;
+}
+
+export interface HumanStageMoveResult {
+  stageKey: string;
+  terminalOutcome: string | null;
+  cancelledRunIds: string[];
+}
+
+/**
+ * Session 30 (177f + 177d) — the human stage move. The 0016 door is the
+ * enforcement (stage_id moves only through move_engagement_stage; the 0015
+ * stage_history trigger refuses an actor without enquiry access); this
+ * wrapper is the pen: it moves, events the act with the optional reason and
+ * source "human", and — when the target is the DISQUALIFIED terminal —
+ * CANCELS the enquiry's live workflow runs through their own gated door
+ * (177d: drafts stop being GENERATED, not merely blocked at pre-flight;
+ * cancel_workflow_run stands the mid-flight step runs down with the run).
+ */
+export async function moveEngagementStageAsHuman(
+  db: SupabaseClient,
+  input: HumanStageMoveInput
+): Promise<HumanStageMoveResult> {
+  const stages = await q<{ key: string; is_terminal: boolean; terminal_outcome: string | null }[]>(
+    db
+      .from("stage_definitions")
+      .select("key, is_terminal, terminal_outcome")
+      .eq("id", input.to_stage_id)
+      .is("archived_at", null)
+      .limit(1),
+    "human stage-move stage lookup"
+  );
+  if (!stages[0]) throw new Error("The target stage does not exist");
+  const stage = stages[0];
+
+  const { error } = await db.rpc("move_engagement_stage", {
+    p_engagement: input.engagement_id,
+    p_to_stage: input.to_stage_id,
+    p_moved_by: input.actor_id,
+  });
+  if (error) throw new Error(`move_engagement_stage failed: ${error.message}`);
+
+  await emitEvent(db, {
+    business_id: input.business_id,
+    actor_id: input.actor_id,
+    action: "engagement.stage_changed",
+    entity_type: "engagement",
+    entity_id: input.engagement_id,
+    payload: {
+      to_stage: stage.key,
+      source: "human",
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(stage.is_terminal ? { terminal: true, outcome: stage.terminal_outcome } : {}),
+    },
+  });
+
+  const cancelledRunIds: string[] = [];
+  if (stage.terminal_outcome === "disqualified") {
+    const runs = await q<{ id: string }[]>(
+      db
+        .from("workflow_runs")
+        .select("id")
+        .eq("engagement_id", input.engagement_id)
+        .in("status", [...LIVE_RUN_STATUSES]),
+      "disqualify live-run lookup"
+    );
+    for (const run of runs) {
+      await cancelWorkflowRun(db, {
+        business_id: input.business_id,
+        run_id: run.id,
+        actor_id: input.actor_id,
+        reason: input.reason
+          ? `enquiry disqualified: ${input.reason}`
+          : "enquiry disqualified",
+      });
+      cancelledRunIds.push(run.id);
+    }
+  }
+  return { stageKey: stage.key, terminalOutcome: stage.terminal_outcome, cancelledRunIds };
+}
+
 // ---------------------------------------------------------------------------
 // The definition escape hatch (Session 21, founder-ruled): an OWNER may
 // withdraw a definition at pending_approval — terminal, reason required,
@@ -1534,6 +1627,48 @@ async function executeMoveStage(
     "stage lookup"
   );
   if (!stages[0]) throw new Error(`Stage "${stageKey}" not found for this engagement type`);
+
+  /*
+   * Session 30 (177f), JUDGMENT (Lane B): a human stage move is a recorded
+   * fact the workflow respects — when the engagement's stage was LAST moved
+   * by a human hand, the machine stands down rather than overwrite it. The
+   * comparison is "who spoke last": a stage the machine set (or an enquiry
+   * no human ever touched) behaves exactly as before. Enforced here because
+   * the rule weighs the machine's intent against the human's recorded act —
+   * the 0016 door and the 0015 grant check stay the database truth beneath.
+   */
+  const lastMoves = await q<{ moved_by: string }[]>(
+    db
+      .from("stage_history")
+      .select("moved_by")
+      .eq("engagement_id", run.engagement_id)
+      .order("moved_at", { ascending: false })
+      .limit(1),
+    "last stage-move lookup"
+  );
+  if (lastMoves[0]) {
+    const movers = await q<{ actor_type: string }[]>(
+      db.from("actors").select("actor_type").eq("id", lastMoves[0].moved_by).limit(1),
+      "last stage-mover lookup"
+    );
+    if (movers[0]?.actor_type === "human") {
+      // The stand-down is recorded on the step run's outcome — the same
+      // visibility the decision-15 refusal carries.
+      await completeStep(
+        db,
+        bundle,
+        stepRun,
+        "skipped",
+        {
+          reason: "a human stage move stands — a machine move never overwrites it (177f)",
+          condition: "human_stage_move_stands",
+        },
+        advanceArgs(bundle.steps, step.id, now),
+        report
+      );
+      return;
+    }
+  }
 
   if (engagements[0].stage_id !== stages[0].id) {
     const { error } = await db.rpc("move_engagement_stage", {

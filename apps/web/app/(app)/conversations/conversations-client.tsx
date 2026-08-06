@@ -55,11 +55,14 @@ import { DraftStampPanel } from "./draft-stamp-panel";
  * a refetch (the shell's debounced server refresh reconciles over windowed
  * reads).
  *
- * JUDGMENT (reference-pattern gaps, marked per the prompt): Messenger's
- * search is global; ours filters the loaded page by name/snippet — global
- * message search is its own bounded-read session. The All/Awaiting/Light
- * filter chips are not part of Messenger's shape but carry this product's
- * stamp semantics, so they stay, scoped to the visible page.
+ * Session 30 (WS B1): the search queries the business's ENTIRE conversation
+ * set server-side — debounced into the URL (?q=), answered by
+ * getConversationList's bounded contact-name + channel-value legs (the s28
+ * Contacts pattern; the s28 close recorded this surface's page-local search
+ * as the defect, D175). Message-BODY search remains its own bounded-read
+ * session. The All/Awaiting/Light filter chips are not part of Messenger's
+ * shape but carry this product's stamp semantics, so they stay, scoped to
+ * the visible page.
  */
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -240,6 +243,29 @@ function Bubble({
       </div>
     );
   }
+  /*
+   * Session 30 (177b): a rejected draft renders its rejection wherever the
+   * draft appears — rejection is the stamp withheld and wears the stamp's
+   * colour (the defect-pair fail-loud grammar: red chrome, the RECORDED
+   * reason inline). The row sits at status draft with the 0017 all-or-none
+   * rejection triple; it previously fell through to sent-looking chrome.
+   */
+  if (message.direction === "outbound" && message.status === "draft" && message.rejection) {
+    return (
+      <div className="max-w-[72%] self-end rounded-xl rounded-br-sm border border-stamp bg-stamp-tint px-2.5 py-2 text-[12.5px] leading-normal shadow-panel">
+        <span className="mb-1 block font-mono text-[8.5px] font-semibold tracking-[.08em] text-stamp uppercase">
+          ✗ rejected — the stamp withheld, never sent
+        </span>
+        <span className="whitespace-pre-wrap">{message.body}</span>
+        <span className="mt-1 block border-t border-dashed border-stamp/40 pt-1 text-[11.5px] text-stamp">
+          Rejected by {message.rejection.byName} · {message.rejection.reason}
+        </span>
+        <span className="mt-1 block text-right font-mono text-[8.5px] tracking-wide text-ink-faint">
+          returned to Light&rsquo;s queue · {formatWhen(message.rejection.at)}
+        </span>
+      </div>
+    );
+  }
   if (message.isPendingDraft) {
     // Session 23 (WS1b): the bubble shows the render-resolved WYSIWYS body
     // when the viewer holds stamp authority — the same words the inbox card
@@ -377,24 +403,51 @@ function ThreadListPane({
   list,
   selectedId,
   onOpen,
+  serverQuery,
+  explicitThreadId,
 }: {
   list: ConversationListPage;
   selectedId: string | null;
   onOpen: (id: string) => void;
+  /** The search the server already answered — the URL's ?q= (WS B1). */
+  serverQuery: string;
+  /** The explicitly opened thread, preserved across a search change. */
+  explicitThreadId: string | null;
 }) {
+  const router = useRouter();
   const [filter, setFilter] = useState<"all" | "you" | "light">("all");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(serverQuery);
+
+  // Session 30 (WS B1): the query debounces into the URL and the SERVER
+  // answers it against the whole set — never a filter over the loaded page
+  // (the s28 Contacts pattern). A new query restarts at page 1; an
+  // explicitly opened thread stays open beside the filtered list.
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (query === serverQuery) return;
+    debounce.current = setTimeout(() => {
+      const q = query.trim();
+      const parts = [
+        ...(q ? [`q=${encodeURIComponent(q)}`] : []),
+        ...(explicitThreadId ? [`thread=${explicitThreadId}`] : []),
+      ];
+      router.replace(parts.length ? `/conversations?${parts.join("&")}` : "/conversations");
+    }, 300);
+    return () => {
+      if (debounce.current) clearTimeout(debounce.current);
+    };
+  }, [query, serverQuery, explicitThreadId, router]);
 
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
     return list.rows.filter((t) => {
       if (filter === "you" && !t.awaitingYou) return false;
       if (filter === "light" && !(t.lightHandling || t.hasPendingDraft)) return false;
-      if (q && !t.contactName.toLowerCase().includes(q) && !t.snippet.toLowerCase().includes(q))
-        return false;
       return true;
     });
-  }, [list.rows, filter, query]);
+  }, [list.rows, filter]);
+
+  const listHref = (page: number) =>
+    `/conversations?${serverQuery ? `q=${encodeURIComponent(serverQuery)}&` : ""}lpage=${page}`;
 
   return (
     <div className="flex min-h-0 w-full flex-col">
@@ -404,7 +457,7 @@ function ThreadListPane({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search these conversations…"
+            placeholder="Search name, phone, email…"
             className="w-full bg-transparent text-ink outline-none placeholder:text-ink-faint"
           />
         </label>
@@ -438,20 +491,21 @@ function ThreadListPane({
         ))}
         {!visible.length ? (
           <p className="p-4 text-center font-mono text-[10.5px] text-ink-faint uppercase">
-            No conversations match
+            {serverQuery ? "No conversations match the search" : "No conversations match"}
           </p>
         ) : null}
         {/* 5c: the list is windowed — older pages are one tap away, with the
-            total an aggregate, never a full fetch. */}
+            total an aggregate, never a full fetch; the query rides along. */}
         {list.pageCount > 1 ? (
           <div className="flex items-center justify-between gap-2 px-3.5 py-3 font-mono text-[10px] tracking-wide text-ink-faint uppercase">
             <span>
               page {list.page} of {list.pageCount} · {list.total} conversations
+              {serverQuery ? ` matching “${serverQuery}”` : ""}
             </span>
             <span className="flex gap-3">
               {list.page > 1 ? (
                 <Link
-                  href={`/conversations?lpage=${list.page - 1}`}
+                  href={listHref(list.page - 1)}
                   className="min-h-9 content-center text-accent hover:underline"
                 >
                   ← newer
@@ -459,7 +513,7 @@ function ThreadListPane({
               ) : null}
               {list.page < list.pageCount ? (
                 <Link
-                  href={`/conversations?lpage=${list.page + 1}`}
+                  href={listHref(list.page + 1)}
                   className="min-h-9 content-center text-accent hover:underline"
                 >
                   older →
@@ -504,6 +558,17 @@ function ThreadListRow({
           {item.unread ? (
             <span aria-label="Unread" className="size-2 shrink-0 rounded-full bg-accent" />
           ) : null}
+          {/* Session 30 (177a): a draft awaiting the stamp wears a STATIC
+              gold dot — Light waits on you — distinct from the accent unread
+              dot (a client waits on you); both may coexist on one row. The
+              thread list is a tier-1 surface (barakah-motion): it never
+              animates. */}
+          {item.hasPendingDraft ? (
+            <span
+              aria-label="Draft awaiting your stamp"
+              className="size-2 shrink-0 rounded-full bg-gold"
+            />
+          ) : null}
           <span className="ml-auto shrink-0 font-mono text-[9.5px] text-ink-faint">
             {formatWhen(item.lastAt)}
           </span>
@@ -543,6 +608,7 @@ export function ConversationsClient({
   list,
   thread,
   explicitThread,
+  searchQuery = "",
   draftStamps = {},
   viewerCanStamp = false,
 }: {
@@ -552,6 +618,8 @@ export function ConversationsClient({
   /** True when the URL names the thread — on a phone only an explicit open
    * shows (and reads) the thread; desktop auto-opens the newest. */
   explicitThread: boolean;
+  /** The server-answered whole-set search (WS B1) — the URL's ?q=. */
+  searchQuery?: string;
   draftStamps?: Record<string, ThreadDraftStampData>;
   /** Defect-trio hotfix (2 Aug 2026, item 2): stamp authority gates the
    * Send now control on held messages (decision 116 — no control that
@@ -622,9 +690,14 @@ export function ConversationsClient({
   // read); on a phone this switches the full-screen surface, Messenger-like.
   const openThread = useCallback(
     (id: string) => {
-      router.push(`/conversations?thread=${id}${list.page > 1 ? `&lpage=${list.page}` : ""}`);
+      const parts = [
+        `thread=${id}`,
+        ...(searchQuery ? [`q=${encodeURIComponent(searchQuery)}`] : []),
+        ...(list.page > 1 ? [`lpage=${list.page}`] : []),
+      ];
+      router.push(`/conversations?${parts.join("&")}`);
     },
-    [router, list.page]
+    [router, list.page, searchQuery]
   );
 
   // Session 23 (WS1c): opening a thread clears its unread state. On a phone
@@ -727,6 +800,10 @@ export function ConversationsClient({
                   typeof row.attributes?.kind === "string" ? row.attributes.kind : null,
                   row.attributes?.marker
                 ),
+                // 177b: a live-appended INSERT cannot be born rejected — the
+                // reconciling refresh carries a later rejection with its
+                // recorded reason.
+                rejection: null,
               },
             ]
       );
@@ -833,7 +910,13 @@ export function ConversationsClient({
       >
         {/* Thread list — full-screen on a phone until a thread is opened. */}
         <div style={{ width: listWidth }} className={cn("flex min-h-0 shrink-0", "max-[900px]:!w-full", explicitThread && "max-[900px]:hidden")}>
-          <ThreadListPane list={list} selectedId={thread?.id ?? null} onOpen={openThread} />
+          <ThreadListPane
+            list={list}
+            selectedId={thread?.id ?? null}
+            onOpen={openThread}
+            serverQuery={searchQuery}
+            explicitThreadId={explicitThread ? (thread?.id ?? null) : null}
+          />
         </div>
 
         {/* v2 divider — desktop only. */}

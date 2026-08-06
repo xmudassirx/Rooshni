@@ -19,14 +19,17 @@ export const dynamic = "force-dynamic";
 export default async function ConversationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ thread?: string; lpage?: string }>;
+  searchParams: Promise<{ thread?: string; lpage?: string; q?: string }>;
 }) {
   const params = await searchParams;
   const listPage = Number(params.lpage ?? "1");
   const requestedThread = params.thread && isUuid(params.thread) ? params.thread : null;
+  // Session 30 (WS B1): the search rides the URL and is answered server-side
+  // against the whole conversation set — the s28 Contacts pattern.
+  const q = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
 
   const [list, explicitThread] = await Promise.all([
-    getConversationList(Number.isFinite(listPage) ? listPage : 1),
+    getConversationList(Number.isFinite(listPage) ? listPage : 1, q),
     requestedThread ? getOpenThread(requestedThread) : Promise.resolve(null),
   ]);
 
@@ -55,6 +58,7 @@ export default async function ConversationsPage({
         list={list}
         thread={thread}
         explicitThread={Boolean(explicitThread)}
+        searchQuery={q}
         draftStamps={draftStamps}
         viewerCanStamp={viewerCanStamp}
       />
