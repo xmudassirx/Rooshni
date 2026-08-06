@@ -3,12 +3,13 @@ import { scaleDurationMs } from "@rooshni/config";
 import { emitEvent } from "./events";
 import { DRAFTING_EVENT_KINDS, INBOUND_EVENT_KINDS, RETURNING_MARKER_KIND } from "./event-kinds";
 import { contactReceivedAnyAttachment } from "./route-guides";
-import { loadRouteOptions, setEngagementRoute } from "./routes";
+import { resolveEngagementRoute } from "./routes";
 import {
   composeReplyDraft,
   composeWithRegisterRetry,
   isTransientProviderError,
   retrieveKnowledgeEntries,
+  type ClassifyFn,
   type ComposeDraftResult,
   type ComposeReplyInput,
   type GenerateFn,
@@ -254,6 +255,9 @@ async function loadThreadMessages(db: SupabaseClient, threadId: string): Promise
 
 interface ProcessThreadDeps {
   generator: GenerateFn | null;
+  /** Session 31 (D179c): the pre-compose route reader — null leaves the
+   * 0042 ladder standing as it is (a missing read is recoverable). */
+  classifier?: ClassifyFn | null;
   now: Date;
 }
 
@@ -425,11 +429,6 @@ async function processSettledThread(
           ?.map((a) => `${a.label ?? ""}: ${a.value ?? ""}`)
           .join("\n") ?? ""
       : "";
-  const retrieval = await retrieveKnowledgeEntries(
-    db,
-    thread.business_id,
-    `${burstText}\n${markerText}\n${enquiryTitle}`
-  );
   const noGoRules = await (async () => {
     const rows = await q<{ template: { no_go_rules: unknown } | { no_go_rules: unknown }[] | null }[]>(
       db
@@ -470,41 +469,65 @@ async function processSettledThread(
     };
   }
 
-  // Session 27 (D161b): classification rides this call when the route is
-  // unset or default-sourced.
-  const routeOptions =
-    thread.engagement_id && (!engagementRoute || engagementRouteSource === "form_default")
-      ? await loadRouteOptions(db, thread.business_id)
-      : null;
-
-  const composeInput: ComposeReplyInput = {
-    business_name: businessName,
-    sign_off: signOff,
-    first_name: firstName,
-    full_name: fullName,
-    channel: thread.channel,
-    enquiry_title: enquiryTitle,
-    stage_label: stageLabel,
-    form_answers: formAnswers,
-    no_go_rules: noGoRules,
-    retrieval,
-    // PR-iv (Session 19): reply drafts carry the same booking-link law.
-    booking_url: resolveBookingUrl(settings),
-    thread_messages: messages,
-    new_inbound_count: unanswered.length,
-    returning,
-    route_options: routeOptions?.length ? routeOptions : null,
-  };
-
   let composed: ComposeDraftResult;
   let registerRetried = false;
   let budgetBefore: Awaited<ReturnType<typeof assessAiBudget>> | null = null;
+  let composeInput: ComposeReplyInput | null = null;
   try {
     // Session 22 (WS2, ruling 2b): the hard cap refuses reply GENERATION
     // here too — the same server-side gate as the workflow drafter, the same
     // visible-failure lane below. Nothing else on the thread is touched.
     budgetBefore = await assessAiBudget(db, thread.business_id, deps.now);
     guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
+
+    // Session 31 (D179c): route resolution — the 0042 ladder plus Light's
+    // read over an unset or form_default source — completes BEFORE
+    // composition; retrieval keys on what it settles, never on
+    // text-matching alone. The read is generation: it runs behind the
+    // budget guard and takes the same failure lanes as composition.
+    let resolvedRoute = engagementRoute;
+    if (thread.engagement_id) {
+      const resolved = await resolveEngagementRoute(db, {
+        business_id: thread.business_id,
+        engagement_id: thread.engagement_id,
+        current_route: engagementRoute,
+        current_source: engagementRouteSource,
+        actor_id: drafter,
+        classifier: deps.classifier ?? null,
+        evidence: {
+          enquiry_title: enquiryTitle,
+          form_label: returning?.form_label ?? null,
+          form_answers: formAnswers,
+          client_words: `${burstText}\n${markerText}`.trim() || null,
+        },
+      });
+      resolvedRoute = resolved.route;
+    }
+
+    const retrieval = await retrieveKnowledgeEntries(
+      db,
+      thread.business_id,
+      `${burstText}\n${markerText}\n${enquiryTitle}`,
+      resolvedRoute
+    );
+
+    composeInput = {
+      business_name: businessName,
+      sign_off: signOff,
+      first_name: firstName,
+      full_name: fullName,
+      channel: thread.channel,
+      enquiry_title: enquiryTitle,
+      stage_label: stageLabel,
+      form_answers: formAnswers,
+      no_go_rules: noGoRules,
+      retrieval,
+      // PR-iv (Session 19): reply drafts carry the same booking-link law.
+      booking_url: resolveBookingUrl(settings),
+      thread_messages: messages,
+      new_inbound_count: unanswered.length,
+      returning,
+    };
     // Session 25 (register retry-once, founder-ordered): a register-screen
     // breach retries exactly ONCE with the violation fed back — evented on
     // The Record, never a loop. A second breach throws past this block into
@@ -605,7 +628,7 @@ async function processSettledThread(
   // Fresh compliance check on the exact wording, with the doctrine's
   // retry-once at the same tier on a recorded breach.
   let check = await recordReplyCompliance(db, thread.business_id, commId, drafter, composed.attestation);
-  if (check.result === "breach") {
+  if (check.result === "breach" && composeInput) {
     try {
       const retry = await composeReplyDraft(deps.generator, composeInput, {
         escalationOverride: {
@@ -716,27 +739,9 @@ async function processSettledThread(
     })(),
   });
 
-  // Session 27 (D161b): Light's confident route read — from the SAME call's
-  // output — lands through the 0042 door, evented with its stated reason. A
-  // precedence refusal (a human or form answer won a race) is the ladder
-  // working, not an error.
-  if (thread.engagement_id && composed.route_classification?.key && routeOptions?.length) {
-    try {
-      await setEngagementRoute(db, {
-        business_id: thread.business_id,
-        engagement_id: thread.engagement_id,
-        route: composed.route_classification.key,
-        source: "light",
-        actor_id: drafter,
-        reason: composed.route_classification.reason,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!/precedence/i.test(message)) {
-        report.errors.push(`thread ${thread.id}: route classification write failed — ${message}`);
-      }
-    }
-  }
+  // Session 31 (D179c): Light's route read no longer rides here — route
+  // resolution completed BEFORE composition (resolveEngagementRoute), so
+  // this reply's retrieval already keyed on it.
 
   // WS2: a soft-cap crossing lands once per month on The Record — never a block.
   if (budgetBefore) {
@@ -815,6 +820,9 @@ export async function sweepSettleAndSupersede(
   db: SupabaseClient,
   options: {
     generator: GenerateFn | null;
+    /** Session 31 (D179c): the pre-compose route reader; when omitted the
+     * ladder stands as it is. */
+    classifier?: ClassifyFn | null;
     now?: Date;
     onlyThreadId?: string;
     /** "Ask Light to draft" (133d): the manual trigger works on a PAUSED
@@ -871,7 +879,7 @@ export async function sweepSettleAndSupersede(
         report.skipped += 1;
         continue;
       }
-      await processSettledThread(db, thread, { generator: options.generator, now }, report);
+      await processSettledThread(db, thread, { generator: options.generator, classifier: options.classifier ?? null, now }, report);
     } catch (err) {
       report.errors.push(`thread ${thread.id}: ${err instanceof Error ? err.message : err}`);
     }

@@ -97,7 +97,14 @@ async function main() {
 
   const formAnswers = ((engagement.attributes ?? {}) as Record<string, unknown>).form_answers as FormAnswer[];
   const leadText = `${leadTextFromAnswers(formAnswers)}\n${engagement.title}`;
-  const retrieval = await retrieveKnowledgeEntries(db, engagement.business_id, leadText);
+  // Session 31 (D179c): retrieval keys on the enquiry's RESOLVED route —
+  // the circuit reads the standing field; it never classifies (no writes
+  // beyond the draft are this script's business).
+  const circuitRoute =
+    typeof ((engagement.attributes ?? {}) as Record<string, unknown>).visa_route === "string"
+      ? (((engagement.attributes ?? {}) as Record<string, unknown>).visa_route as string)
+      : null;
+  const retrieval = await retrieveKnowledgeEntries(db, engagement.business_id, leadText, circuitRoute);
 
   const stageRel = engagement.stage as { label: string } | { label: string }[] | null;
   const stageLabel = Array.isArray(stageRel) ? (stageRel[0]?.label ?? "") : (stageRel?.label ?? "");

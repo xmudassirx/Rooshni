@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emitEvent } from "./events";
 import { ROUTE_EVENT_KINDS } from "./event-kinds";
+import { classifyRoute, type ClassifyFn, type ClassifyRouteInput } from "./drafting";
+import { LIGHT_MODEL_FLOOR, priceGeneration } from "./model-router";
 
 /**
  * Route classification — the app-side face of the 0042 door (Session 27,
@@ -66,6 +68,93 @@ export async function loadRouteOptions(db: SupabaseClient, businessId: string): 
 export function routeLabel(options: RouteOption[], key: string | null | undefined): string | null {
   if (!key) return null;
   return options.find((o) => o.key === key)?.label ?? key;
+}
+
+/** What resolution settled on: the route the draft may key retrieval and
+ * booklet selection on (D179c), with its provenance. Null route = the draft
+ * stays route-neutral — a missing booklet is recoverable; a wrong one is
+ * not. */
+export interface ResolvedRoute {
+  route: string | null;
+  source: string | null;
+}
+
+export interface ResolveRouteInput {
+  business_id: string;
+  engagement_id: string;
+  /** The engagement's current field values (attributes.visa_route /
+   * visa_route_source), read by the caller. */
+  current_route: string | null;
+  current_source: string | null;
+  /** Light's agent actor — the read's evented author and the door's actor
+   * on a confident write. */
+  actor_id: string;
+  /** Null when no provider is configured — the ladder stands as it is. */
+  classifier: ClassifyFn | null;
+  /** The evidence for the read (D161b: form name, form answers, the
+   * person's own words). Options are loaded here, not passed. */
+  evidence: Omit<ClassifyRouteInput, "options">;
+}
+
+/**
+ * Session 31 (D179c): route resolution, COMPLETE, before composition.
+ * The 0042 ladder is consulted first; only over an unset or form_default
+ * source does Light read (one floor-tier call), and a confident read lands
+ * through the door with its stated reason. The read itself — confident or
+ * abstained — is evented with its priced spend (D161d's visibility). A
+ * refused write (a human or form answer won a race) is the ladder working:
+ * the field's standing value is returned.
+ */
+export async function resolveEngagementRoute(db: SupabaseClient, input: ResolveRouteInput): Promise<ResolvedRoute> {
+  const standing: ResolvedRoute = { route: input.current_route, source: input.current_source };
+  if (input.current_route && !lightMaySetRoute(input.current_source)) return standing;
+  if (!input.classifier) return standing;
+
+  const options = await loadRouteOptions(db, input.business_id);
+  if (!options.length) return standing;
+
+  const read = await classifyRoute(input.classifier, { ...input.evidence, options });
+  const price = priceGeneration({
+    model: LIGHT_MODEL_FLOOR.model,
+    input_tokens: read.usage.input_tokens,
+    output_tokens: read.usage.output_tokens,
+  });
+  await emitEvent(db, {
+    business_id: input.business_id,
+    actor_id: input.actor_id,
+    action: ROUTE_EVENT_KINDS.routeRead,
+    entity_type: "engagement",
+    entity_id: input.engagement_id,
+    payload: { key: read.key, reason: read.reason, applied: Boolean(read.key) },
+    cost: {
+      provider: "anthropic",
+      model: LIGHT_MODEL_FLOOR.model,
+      tokens: read.usage.input_tokens + read.usage.output_tokens,
+      input_tokens: read.usage.input_tokens,
+      output_tokens: read.usage.output_tokens,
+      ...(price ? { amount_gbp: price.amount_gbp, amount_usd: price.amount_usd, fx_rate: price.fx_rate } : {}),
+    },
+  });
+  if (!read.key) return standing;
+
+  try {
+    await setEngagementRoute(db, {
+      business_id: input.business_id,
+      engagement_id: input.engagement_id,
+      route: read.key,
+      source: "light",
+      actor_id: input.actor_id,
+      reason: read.reason,
+    });
+  } catch (err) {
+    // A precedence refusal is the ladder working (a human or form answer
+    // landed between the caller's read and this write) — the standing value
+    // carries the draft; anything else is a real failure.
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/precedence/i.test(message)) throw err;
+    return standing;
+  }
+  return { route: read.key, source: "light" };
 }
 
 export interface SetRouteInput {
