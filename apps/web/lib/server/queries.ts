@@ -409,6 +409,14 @@ export async function getViewerStampAuthority(): Promise<boolean> {
   return Boolean(grants?.length);
 }
 
+/** Session 30 (177c): is the signed-in viewer the owner? Gates the contact
+ * Archive control (owner-only for now; decision 116: no control that cannot
+ * act). */
+export async function getViewerIsOwner(): Promise<boolean> {
+  const { membershipRole } = await getAppContext();
+  return membershipRole === "owner";
+}
+
 export async function getInboxCount(): Promise<number> {
   const { db, business } = await getAppContext();
   const { count, error } = await db
@@ -1338,6 +1346,10 @@ export interface ThreadMessage {
     submittedAt: string | null;
     answers: Array<{ label: string; value: string; previousValue: string | null; changed: boolean }>;
   } | null;
+  /** Session 30 (177b): the recorded rejection when this draft's stamp was
+   * withheld — the 0017 all-or-none triple, rendered in the stamp red
+   * wherever the draft appears. */
+  rejection: { byName: string; at: string; reason: string } | null;
 }
 
 export interface ThreadConsent {
@@ -1475,10 +1487,13 @@ interface CommWindowRow {
   send_failure: unknown;
   marker_kind?: string | null;
   marker?: unknown;
+  rejected_at?: string | null;
+  rejected_by_actor_id?: string | null;
+  rejection_reason?: string | null;
 }
 
 const COMM_WINDOW_COLUMNS =
-  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, marker_kind:attributes->>kind, marker:attributes->marker, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id";
+  "id, thread_id, channel, direction, status, body, body_format, plain_body:attributes->>plain_body, send_failure:attributes->send_failure, marker_kind:attributes->>kind, marker:attributes->marker, scheduled_for, occurred_at, duration_seconds, drafted_by_actor_id, approved_by_actor_id, rejected_at, rejected_by_actor_id, rejection_reason";
 
 function mapCommRow(
   c: CommWindowRow,
@@ -1506,6 +1521,18 @@ function mapCommRow(
     sentHtml: isHtml ? c.body : null,
     sendFailure: parseSendFailure(c.send_failure),
     returningMarker: parseReturningMarker(c.marker_kind, c.marker),
+    // 177b: the 0017 rejection triple is all-or-none — a populated
+    // rejected_at guarantees the reason and the rejecter.
+    rejection:
+      c.rejected_at && c.rejection_reason
+        ? {
+            byName:
+              (c.rejected_by_actor_id ? actorById.get(c.rejected_by_actor_id)?.name : null) ??
+              "a team member",
+            at: c.rejected_at,
+            reason: c.rejection_reason,
+          }
+        : null,
   };
 }
 
@@ -1518,6 +1545,7 @@ async function hydrateActors(
       rows.flatMap((c) => [
         ...(c.drafted_by_actor_id ? [c.drafted_by_actor_id] : []),
         ...(c.approved_by_actor_id ? [c.approved_by_actor_id] : []),
+        ...(c.rejected_by_actor_id ? [c.rejected_by_actor_id] : []),
       ])
     ),
   ];
@@ -1535,28 +1563,77 @@ async function hydrateActors(
   );
 }
 
+/** Session 30 (WS B1, the s28 Contacts precedent): the thread-list search
+ * legs are bounded at 50 surfaced matches each — the ENTIRE set is always
+ * queried; the cap bounds only how many matches one query surfaces. */
+const CONVERSATION_SEARCH_BOUND = 50;
+
 /** The windowed thread list (5c): DEFAULT_LIST_WINDOW per page, ordered by
  * the 0036 trigger-maintained last_activity_at, total a COUNT aggregate.
  * Hydration (contact names, last message, pending drafts, live runs) is
  * scoped to the PAGE's threads — the last message is one single-row read per
- * page thread (the s22 contacts precedent: exact and bounded). */
-export async function getConversationList(page = 1): Promise<ConversationListPage> {
+ * page thread (the s22 contacts precedent: exact and bounded).
+ *
+ * Session 30 (WS B1): `search` queries the business's ENTIRE conversation
+ * set server-side — contact display name + channel values resolve to contact
+ * ids through bounded legs, and both the window and the count filter by that
+ * id set. Never just the loaded page (the s28 Contacts pattern applied to
+ * the defect s28 recorded on this surface, D175). */
+export async function getConversationList(page = 1, search = ""): Promise<ConversationListPage> {
   const { db, business } = await getAppContext();
+  const query = search.trim().replace(/[%_\\]/g, "").slice(0, 80);
+
+  let searchContactIds: string[] | null = null;
+  if (query) {
+    // JUDGMENT (Lane B): the channel leg includes 'whatsapp' beside email and
+    // phone — Conversations is the surface where a WhatsApp-held number IS
+    // the identity (inbound matching already treats whatsapp+phone as one
+    // family, inbound.ts). The s28 Contacts legs stay email/phone.
+    const [names, channels] = await Promise.all([
+      db
+        .from("contacts")
+        .select("id")
+        .eq("business_id", business.id)
+        .ilike("display_name", `%${query}%`)
+        .is("archived_at", null)
+        .limit(CONVERSATION_SEARCH_BOUND),
+      db
+        .from("contact_channels")
+        .select("contact_id")
+        .eq("business_id", business.id)
+        .in("channel", ["email", "phone", "whatsapp"])
+        .ilike("value", `%${query}%`)
+        .is("archived_at", null)
+        .limit(CONVERSATION_SEARCH_BOUND),
+    ]);
+    if (names.error) throw new Error(`conversation search (names) failed: ${names.error.message}`);
+    if (channels.error)
+      throw new Error(`conversation search (channels) failed: ${channels.error.message}`);
+    searchContactIds = [
+      ...new Set([
+        ...(names.data ?? []).map((r) => r.id as string),
+        ...(channels.data ?? []).map((r) => r.contact_id as string),
+      ]),
+    ];
+    // A fruitless search returns the honest empty page — no impossible filter.
+    if (!searchContactIds.length) return { rows: [], total: 0, page: 1, pageCount: 1 };
+  }
+
   const range = pageRange(clampPage(page), DEFAULT_LIST_WINDOW);
-  const {
-    data: threads,
-    error,
-    count,
-  } = await db
+  let windowQuery = db
     .from("comm_threads")
     .select("id, subject, channel, contact_id, engagement_id, is_unread, last_activity_at", {
       count: "exact",
     })
     .eq("business_id", business.id)
     .is("archived_at", null)
-    .not("last_activity_at", "is", null)
-    .order("last_activity_at", { ascending: false })
-    .range(range.from, range.to);
+    .not("last_activity_at", "is", null);
+  if (searchContactIds) windowQuery = windowQuery.in("contact_id", searchContactIds);
+  const {
+    data: threads,
+    error,
+    count,
+  } = await windowQuery.order("last_activity_at", { ascending: false }).range(range.from, range.to);
   if (error) throw new Error(`comm_threads window failed: ${error.message}`);
 
   const pageThreads = threads ?? [];
