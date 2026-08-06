@@ -17,6 +17,7 @@ import {
 import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
 import { recordRowTarget } from "../../../apps/web/lib/record-row";
 import { buildTimeline } from "../../../apps/web/lib/enquiry-timeline";
+import { archivedContactRedirect } from "../../../apps/web/lib/archive-redirect";
 import {
   carriesRuledLadder,
   chooseReissueAction,
@@ -7017,6 +7018,76 @@ async function main() {
     );
     if (!archiveActionSource.includes("canArchiveContact") || !archiveActionSource.includes('membershipRole === "owner"')) {
       throw new Error("the archive action lost its owner gate");
+    }
+  });
+
+  // --- Workstream C: archive lands on the book, never the archived page --
+  await expectOk("archive redirects to the Contacts book with its confirmation — and the book offers no door to an archived contact (WS C)", async () => {
+    // The one redirect target, proven as the action computes it.
+    if (archivedContactRedirect("Archie Chamberlain") !== "/contacts?archived=Archie%20Chamberlain") {
+      throw new Error("the archive redirect target moved");
+    }
+    // The action redirects SERVER-side with that target — the archived
+    // page (an honest 404 once the read layer refuses the row) is never
+    // reloaded; the client-side push that raced into the 404 is gone.
+    const actionSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/actions.ts"),
+      "utf8"
+    );
+    if (!actionSource.includes("redirect(archivedContactRedirect(")) {
+      throw new Error("the archive action no longer redirects to the book");
+    }
+    const controlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/[id]/archive-control.tsx"),
+      "utf8"
+    );
+    if (controlSource.includes("router.push")) {
+      throw new Error("the archive control regrew the client-side race the founder witnessed as a 404");
+    }
+    // The book renders the once-per-event confirmation from the redirect's
+    // own param, in the shipped toast pattern — static, never animated.
+    const pageSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/page.tsx"),
+      "utf8"
+    );
+    if (!pageSource.includes("ArchivedToast")) {
+      throw new Error("the Contacts book lost the archive confirmation");
+    }
+    const toastSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/archived-toast.tsx"),
+      "utf8"
+    );
+    if (!toastSource.includes("Archived · on The Record")) {
+      throw new Error("the confirmation lost its ruled wording");
+    }
+    if (toastSource.includes("animate-") || toastSource.includes("transition")) {
+      throw new Error("the confirmation animates — the shipped toast pattern is static");
+    }
+    // No door from the book: the archived contact answers none of the
+    // book's own reads — the live set, nor the search legs.
+    const inBook = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.contacts
+       where business_id = $1 and archived_at is null and display_name = 'Archie Chamberlain'`,
+      [f.business_id]
+    );
+    if (inBook.rows[0]!.n !== 0) throw new Error("the archived contact still stands in the book's set");
+    const legs = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.contact_channels
+       where business_id = $1 and archived_at is null
+         and value in ('archie@chamberlain.test', '+447700900777')`,
+      [f.business_id]
+    );
+    if (legs.rows[0]!.n !== 0) {
+      throw new Error("the archived contact's channels still answer the book's search legs");
+    }
+    // The list renders only the rows the server handed it — no client-side
+    // set that could resurrect a link.
+    const listSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/contacts/contacts-list.tsx"),
+      "utf8"
+    );
+    if (!listSource.includes("const visible = contacts;")) {
+      throw new Error("the list renders rows the server did not hand it");
     }
   });
 

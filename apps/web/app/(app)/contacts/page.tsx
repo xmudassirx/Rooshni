@@ -3,6 +3,7 @@ import { PageHead } from "@/components/shell/page-head";
 import { getContacts } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
 
+import { ArchivedToast } from "./archived-toast";
 import { ContactsList } from "./contacts-list";
 
 export const dynamic = "force-dynamic";
@@ -10,9 +11,14 @@ export const dynamic = "force-dynamic";
 export default async function ContactsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string; q?: string }>;
+  searchParams: Promise<{ page?: string; q?: string; archived?: string }>;
 }) {
   const params = await searchParams;
+  // Session 30, Workstream C: the archive action lands here with the
+  // archived contact's name — the book shows the once-per-event
+  // confirmation; the book itself no longer holds (or links) the contact.
+  const archivedName =
+    typeof params.archived === "string" ? params.archived.trim().slice(0, 120) : "";
   // WS5d (Session 22): the book reads a window — default 20, counted by
   // aggregate; hydration is scoped to the page's contacts only.
   // Session 28: search reads the ENTIRE set server-side — never just the
@@ -29,6 +35,7 @@ export default async function ContactsPage({
         sub="People and organisations in one book — channels and consents per person, GDPR at the door"
       />
       <ContactsList contacts={contacts.rows} query={q} />
+      {archivedName ? <ArchivedToast name={archivedName} /> : null}
       {contacts.total > 0 ? (
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[10.5px] tracking-wide text-ink-faint uppercase">
           <span>
