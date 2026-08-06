@@ -108,6 +108,32 @@ export function selectEmailCarrier(
   };
 }
 
+/**
+ * Session 33 (D184 × D163) — is the row's stamp-holder timing choice still
+ * in force? A SEND NOW override or an APPROVE AND SCHEDULE choice rides
+ * attributes.quiet_hours_override (0039 writes {by_actor_id, at}; the
+ * schedule choice adds scheduled_for), and the dispatcher must not re-hold
+ * a timing a human chose. EXCEPT after a RETRY: D163 rules dispatch policy
+ * (quiet hours, Send-now override) re-applies FRESH at retry time — the
+ * 0040 door nulls scheduled_for but leaves attributes untouched, so a
+ * marker older than the row's latest retry is spent, not standing.
+ * JUDGMENT: (Lane B) implemented here as pure dispatch logic rather than a
+ * migration editing 0040 — the record keeps both markers verbatim; only
+ * their precedence is decided, and the harness proves it.
+ */
+export function honourQuietHoursOverride(
+  attributes: Record<string, unknown> | null | undefined
+): boolean {
+  const override = attributes?.quiet_hours_override as { at?: string } | undefined;
+  if (!override) return false;
+  const retry = (attributes?.send_retry as { at?: string } | undefined)?.at;
+  if (!retry) return true;
+  // A marker that cannot prove it postdates the retry is spent — policy
+  // re-applies fresh (fail towards the hold, never towards a silent send).
+  if (!override.at) return false;
+  return new Date(override.at).getTime() > new Date(retry).getTime();
+}
+
 export interface DispatchReport {
   dispatched: number;
   failed: number;
@@ -324,11 +350,18 @@ export async function dispatchApprovedCommunications(
       }
 
       // Quiet hours: hold and dispatch at the window's end. A row carrying
-      // the 0039 override marker is NEVER re-held — a stamp-holder chose the
-      // timing (their stamp, their timing; the choice is on The Record as
-      // communication.quiet_hours_overridden), and re-holding it here would
-      // silently unmake a recorded human decision.
-      const holdUntil = comm.attributes?.quiet_hours_override
+      // a STANDING 0039 override marker is never re-held — a stamp-holder
+      // chose the timing (their stamp, their timing; the choice is on The
+      // Record as communication.quiet_hours_overridden or, for the D184c
+      // schedule choice, communication.scheduled), and re-holding it here
+      // would silently unmake a recorded human decision. A marker older
+      // than the row's latest RETRY is spent — D163: policy re-applies
+      // fresh at retry time (honourQuietHoursOverride decides). This branch
+      // remains the policy backstop for rows that arrive approved without a
+      // choice (retries per D163; any non-UI approval path) — the STAMP
+      // surfaces themselves offer the explicit D184c choice and never rely
+      // on this silent hold.
+      const holdUntil = honourQuietHoursOverride(comm.attributes)
         ? null
         : quietHoursHoldUntil(now, facts.timezone, resolveQuietHours(facts.settings, facts.template_quiet_hours));
       if (holdUntil) {

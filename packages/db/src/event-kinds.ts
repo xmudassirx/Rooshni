@@ -51,6 +51,11 @@ export const SEND_EVENT_KINDS = {
    * same body, same stamp, transport re-attempts (0040). The human actor and
    * the failure being answered ride the payload. */
   communicationSendRetried: "communication.send_retried",
+  /** Session 33 (D184c): the stamp landed inside quiet hours and the
+   * stamp-holder chose APPROVE AND SCHEDULE — scheduled_for carries the
+   * chosen instant and dispatch honours it (the D163 machinery). The human
+   * actor rides the event; the choice is recorded, never silent. */
+  communicationScheduled: "communication.scheduled",
   /** A real Meta lead arrived through the webhook (idempotent on the leadgen id). */
   metaLeadReceived: "meta.lead_received",
   /** Decision 15: the auto-close step refused to close — its nudges never reached the client. */
