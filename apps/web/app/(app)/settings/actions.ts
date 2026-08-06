@@ -307,12 +307,21 @@ export async function setBusinessHoursAction(
   const settings = { ...((bizRow.settings as Record<string, unknown>) ?? {}) };
   const timezone = (bizRow.timezone as string) || "Europe/London";
 
-  if (mode === "reset") {
-    // Back to the honest default — the field reads "default — not yet set
-    // by you" again and the hold reads the shipped window. The opening-hours
-    // FACT retires too (the shipped default window is dispatch policy, not
-    // a client-facing fact).
-    delete settings.quiet_hours;
+  if (mode === "reset" || mode === "disable") {
+    // reset: back to the honest default — the field reads "default — not
+    // yet set by you" again and the hold reads the shipped window.
+    // disable (Session 33, D184b): NO QUIET HOURS — the D170 explicit-null
+    // path, an owner's first-class choice; stamped mail dispatches
+    // immediately, any hour. Both retire the opening-hours FACT: the
+    // shipped default window is dispatch policy, not a client-facing fact,
+    // and with quiet hours off no window exists to state.
+    // JUDGMENT: (Lane B) disable retiring the fact is the reset lane
+    // applied — a window-derived fact cannot outlive its window.
+    if (mode === "disable") {
+      settings.quiet_hours = null;
+    } else {
+      delete settings.quiet_hours;
+    }
     delete settings.business_hours;
     const { data: existingFact } = await db
       .from("memory_entries")
@@ -328,7 +337,10 @@ export async function setBusinessHoursAction(
           business_id: business.id,
           actor_id: actor.id,
           entry_id: existingFact.id,
-          reason: "Business hours reset to the shipped default window",
+          reason:
+            mode === "disable"
+              ? "Quiet hours turned off — no send window exists to state (D184b)"
+              : "Business hours reset to the shipped default window",
         });
       } catch (err) {
         return { error: err instanceof Error ? err.message : "The memory write failed." };
@@ -381,12 +393,17 @@ export async function setBusinessHoursAction(
     entity_id: business.id,
     payload: {
       keys: ["business_hours", "quiet_hours"],
-      ...(mode === "reset"
-        ? { business_hours: null, note: "reset to the shipped default window; the opening-hours memory fact retired" }
-        : {
-            quiet_hours: settings.quiet_hours,
-            note: "opening hours live in Light's Memory (D181) — this save wrote through the memory door",
-          }),
+      ...(mode === "disable"
+        ? {
+            quiet_hours: null,
+            note: "No quiet hours — the owner's recorded choice (D184b); stamped mail dispatches immediately, any hour",
+          }
+        : mode === "reset"
+          ? { business_hours: null, note: "reset to the shipped default window; the opening-hours memory fact retired" }
+          : {
+              quiet_hours: settings.quiet_hours,
+              note: "opening hours live in Light's Memory (D181) — this save wrote through the memory door",
+            }),
     },
   });
 

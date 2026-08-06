@@ -11,6 +11,11 @@ import { setBusinessHoursAction, type BusinessHoursActionState } from "./actions
  * what this control shows is exactly what the hold enforces. Until the firm
  * sets it, the shipped default is stated honestly as a default, never
  * presented as the firm's own choice.
+ *
+ * Session 33 (D184b): NO QUIET HOURS is a first-class choice beside the
+ * window config — owner-set, evented, the D170 explicit-null path. A firm
+ * working deportation cases at midnight sends at midnight. The off state
+ * renders honestly, and the owner can turn the window back on here too.
  */
 
 const INITIAL: BusinessHoursActionState = { error: null };
@@ -21,7 +26,7 @@ export interface BusinessHoursValue {
   timezone: string;
   /** false = the shipped default is in force — "not yet set by you". */
   isSet: boolean;
-  /** null window = holds disabled entirely (founder wiring). */
+  /** null window = quiet hours OFF — the owner's D184b choice. */
   disabled: boolean;
   isOwner: boolean;
   /** Fact-surfaces micro-fix (defect B): the opening-hours MEMORY fact —
@@ -44,21 +49,18 @@ export function BusinessHoursControl({ value }: { value: BusinessHoursValue }) {
     }
   }, [state.saved, router]);
 
-  if (value.disabled) {
-    return (
-      <span className="text-[12.5px] text-ink">
-        Always open — the quiet-hours hold is switched off for this business (founder wiring).
-      </span>
-    );
-  }
-
   if (!editing) {
     return (
       <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]">
-        {/* Fact-surfaces micro-fix (defect B): the memory fact is the value
-            shown — the same home the save writes through; the derived
-            window renders only before a fact exists. */}
-        {value.memoryValue ? (
+        {value.disabled ? (
+          // Session 33 (D184b): the off state, honestly worded.
+          <span className="text-ink">
+            Quiet hours off — stamped mail dispatches immediately, any hour
+          </span>
+        ) : value.memoryValue ? (
+          // Fact-surfaces micro-fix (defect B): the memory fact is the value
+          // shown — the same home the save writes through; the derived
+          // window renders only before a fact exists.
           <span className="text-ink">
             {value.memoryValue}
             <span className="font-mono text-[9px] tracking-wide text-ink-faint uppercase"> · from Light&rsquo;s Memory</span>
@@ -69,7 +71,7 @@ export function BusinessHoursControl({ value }: { value: BusinessHoursValue }) {
             <span className="text-ink-soft"> · {value.timezone}</span>
           </span>
         )}
-        {!value.isSet && !value.memoryValue ? (
+        {!value.disabled && !value.isSet && !value.memoryValue ? (
           <span className="font-mono text-[9px] tracking-wide text-ink-faint uppercase">
             default — not yet set by you
           </span>
@@ -131,7 +133,25 @@ export function BusinessHoursControl({ value }: { value: BusinessHoursValue }) {
           cancel
         </button>
       </form>
-      {value.isSet ? (
+      {/* Session 33 (D184b): the first-class choice beside the window
+          config — quiet hours OFF entirely, the explicit-null path. */}
+      {!value.disabled ? (
+        <form action={formAction} className="mt-1.5">
+          <input type="hidden" name="mode" value="disable" />
+          <button
+            type="submit"
+            disabled={pending}
+            className="cursor-pointer rounded-md border border-rule bg-paper px-2 py-1 font-mono text-[9.5px] font-semibold tracking-wide text-ink-soft uppercase hover:border-accent hover:text-ink disabled:opacity-60"
+          >
+            no quiet hours — dispatch any hour
+          </button>
+        </form>
+      ) : (
+        <p className="mt-1.5 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
+          quiet hours are off — saving a window above turns them back on
+        </p>
+      )}
+      {value.isSet && !value.disabled ? (
         <form action={formAction} className="mt-1">
           <input type="hidden" name="mode" value="reset" />
           <button
@@ -145,8 +165,9 @@ export function BusinessHoursControl({ value }: { value: BusinessHoursValue }) {
       ) : null}
       {state.error ? <p className="mt-1 text-[12px] text-stamp">{state.error}</p> : null}
       <p className="mt-1 text-[11px] leading-relaxed text-ink-faint">
-        Messages stamped outside these hours queue and send when you open — the stamp is yours, the
-        timing is policy, and a held message can always be sent now from its thread.
+        Messages stamped outside these hours meet the choice at the stamp: send now (recorded), or
+        approve and schedule a dispatch time. With no quiet hours, stamped mail dispatches
+        immediately, any hour.
       </p>
     </div>
   );

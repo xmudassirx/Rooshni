@@ -5,6 +5,7 @@ import {
   resolveQuietHours,
   sendWindowFromQuietHours,
   MEMORY_FACT_KEYS,
+  QUIET_HOURS_DEFAULT,
 } from "@rooshni/db";
 
 import { HonestButton } from "@/components/ui/honest-button";
@@ -122,8 +123,11 @@ export async function GeneralTab() {
           v={
             <BusinessHoursControl
               value={{
-                open: quiet ? sendWindowFromQuietHours(quiet).open : "00:00",
-                close: quiet ? sendWindowFromQuietHours(quiet).close : "00:00",
+                // Session 33 (D184b): when quiet hours are OFF the editor
+                // prefills the shipped window so turning them back on is
+                // one save, never a blank form.
+                open: sendWindowFromQuietHours(quiet ?? QUIET_HOURS_DEFAULT).open,
+                close: sendWindowFromQuietHours(quiet ?? QUIET_HOURS_DEFAULT).close,
                 timezone: config.timezone,
                 isSet: isQuietHoursSet(s),
                 disabled: quiet === null,
@@ -141,9 +145,9 @@ export async function GeneralTab() {
           v={
             quiet
               ? `${quiet.start}–${quiet.end} · outside the business hours above`
-              : "Off — stamped messages send at any hour (founder wiring)"
+              : "Quiet hours off — stamped mail dispatches immediately, any hour"
           }
-          small="Stamped messages inside quiet hours queue and dispatch when you open — the stamp is yours, the timing is policy, and a held message can be sent now from its thread. One config: this line and the hold read the same source."
+          small="Approving inside quiet hours surfaces the choice at the stamp: send now (the override is recorded, with your name) or approve and schedule a dispatch time. One config: this line, the dialogue and the dispatch hold read the same source."
         />
       </div>
       <div className="glass rounded-xl px-4 py-1.5">
