@@ -1855,3 +1855,41 @@ quoted-approval precedent).
      reason among them). A human move is a recorded fact the workflow
      respects; machine stage moves continue as today and never
      overwrite a later human move."
+
+178. Session 30's Lane B calls, consolidated (provisional — the
+     founder's merge is the stamp, D152 pattern): (a) the
+     Conversations search's channel leg includes 'whatsapp' beside
+     email and phone — Conversations is the surface where a
+     WhatsApp-held number IS the identity (inbound matching already
+     treats whatsapp+phone as one family); the s28 Contacts legs
+     stay email/phone. (b) 177f's "never overwrite a later human
+     move" reads as WHO SPOKE LAST: when the engagement's latest
+     stage move was made by a human hand, a machine move_stage/close
+     step stands down (skipped, its reason on the step outcome —
+     the decision-15 visibility); enforced in the engine because the
+     rule weighs the machine's intent against the human's recorded
+     act — the 0016 door and 0015 grant check stay the database
+     truth beneath; the 0022 contacted trigger is untouched (it
+     moves only new_lead→contacted). (c) 177c's owner-only gate is
+     app-level for now (pure canArchiveContact + the action's
+     membershipRole check — the 0037 manager-gate precedent);
+     archived_at cascades to every live channel row so every
+     resolver and the 0043 consent pre-flight exclude the contact
+     with zero query changes; a database door for the owner gate is
+     a natural later hardening if ordered. (d) the WhatsApp
+     env-provenance state wears the green connected chip reading
+     "connected · env" — a real, working connection earned by a
+     live credential-presence read (boolean, never a value — the
+     s20 wiring-state law); a grant, when one exists, outranks env
+     as the named provenance. (e) in Conversations, an explicitly
+     opened thread stays open across a search change; a new query
+     restarts the list at page 1 (the s28 pattern). (f) the stage
+     control renders for any signed-in member (the D161c
+     route-control precedent on the same page — the 0015 grant
+     check refuses ungranted actors regardless); the vocabulary is
+     the full installed set, moves out of a terminal stage
+     permitted wherever the 0016 door permits them. (g) WS B4 swept
+     two adjacent stale two-theme lines in the same files
+     (ui-system frontmatter and "both themes"; the handover
+     template's theme checkbox) under the same decision-62
+     authority.
