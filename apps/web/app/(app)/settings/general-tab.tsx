@@ -2,7 +2,7 @@ import {
   isQuietHoursSet,
   loadMemoryContext,
   memoryFactValue,
-  resolveQuietHours,
+  resolveQuietHoursWithSource,
   sendWindowFromQuietHours,
   MEMORY_FACT_KEYS,
   QUIET_HOURS_DEFAULT,
@@ -13,6 +13,7 @@ import { getAppContext } from "@/lib/server/context";
 import { getBusinessConfig, getTemplateContent } from "@/lib/server/queries";
 import { BusinessHoursControl } from "./business-hours-control";
 import { DraftingSettings } from "./drafting-settings";
+import { QuietHoursControl } from "./quiet-hours-control";
 
 /*
  * Settings → General, master mockup v2 (setSTab 'general'): identity and
@@ -74,7 +75,12 @@ export async function GeneralTab() {
   // Session 26 (C5, founder-ruled): the unset-firm default resolves from the
   // installed template's declared quiet hours — the SAME resolver the
   // dispatch hold reads, so display and enforcement cannot disagree.
-  const quiet = resolveQuietHours(s, template?.quietHoursDefault ?? null);
+  // Quiet-window micro-fix (7 Aug 2026): resolved WITH its true source —
+  // the row states provenance, never a claimed derivation.
+  const { window: quiet, source: quietSource } = resolveQuietHoursWithSource(
+    s,
+    template?.quietHoursDefault ?? null
+  );
 
   const edit = (
     <HonestButton size="sm" variant="ghost" notice={EDIT_NOTICE}>
@@ -140,12 +146,20 @@ export async function GeneralTab() {
             />
           }
         />
+        {/* Quiet-window micro-fix (7 Aug 2026, founder-witnessed): the row
+            states the resolved window with its TRUE source and carries its
+            own editor — both acts through the one shared door. */}
         <Row
           k="Quiet hours"
           v={
-            quiet
-              ? `${quiet.start}–${quiet.end} · outside the business hours above`
-              : "Quiet hours off — stamped mail dispatches immediately, any hour"
+            <QuietHoursControl
+              value={{
+                start: quiet?.start ?? null,
+                end: quiet?.end ?? null,
+                source: quietSource,
+                isOwner: membershipRole === "owner",
+              }}
+            />
           }
           small="Approving inside quiet hours surfaces the choice at the stamp: send now (the override is recorded, with your name) or approve and schedule a dispatch time. One config: this line, the dialogue and the dispatch hold read the same source."
         />

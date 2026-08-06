@@ -343,6 +343,24 @@ export async function setBusinessHoursAction(
         return { error: err instanceof Error ? err.message : "The memory write failed." };
       }
     }
+  } else if (mode === "set_quiet") {
+    // Quiet-window micro-fix (7 Aug 2026, founder-witnessed): the Quiet
+    // hours row's own editor — a firm-set QUIET WINDOW, winning the D170
+    // resolution. DISPATCH POLICY ONLY: it never touches the client-facing
+    // opening-hours fact (the s33 amendment severed dispatch policy from
+    // opening hours; a window set here must not claim the firm's opening
+    // hours changed). One door: this arm lives in the same action the
+    // Business hours editor and the no-quiet-hours toggle post to.
+    const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const start = String(formData.get("start") ?? "").trim();
+    const end = String(formData.get("end") ?? "").trim();
+    if (!HHMM.test(start) || !HHMM.test(end)) {
+      return { error: "A quiet window needs start and end times as HH:MM (24-hour)." };
+    }
+    if (start === end) {
+      return { error: "Start and end cannot be the same — that window holds nothing. To dispatch any hour, choose no quiet hours instead." };
+    }
+    settings.quiet_hours = { start, end };
   } else {
     const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
     if (!HHMM.test(open) || !HHMM.test(close)) {
@@ -389,7 +407,7 @@ export async function setBusinessHoursAction(
     entity_type: "business",
     entity_id: business.id,
     payload: {
-      keys: ["business_hours", "quiet_hours"],
+      keys: mode === "set_quiet" ? ["quiet_hours"] : ["business_hours", "quiet_hours"],
       ...(mode === "disable"
         ? {
             quiet_hours: null,
@@ -397,10 +415,15 @@ export async function setBusinessHoursAction(
           }
         : mode === "reset"
           ? { business_hours: null, note: "reset to the shipped default window; the opening-hours memory fact retired" }
-          : {
-              quiet_hours: settings.quiet_hours,
-              note: "opening hours live in Light's Memory (D181) — this save wrote through the memory door",
-            }),
+          : mode === "set_quiet"
+            ? {
+                quiet_hours: settings.quiet_hours,
+                note: "quiet window firm-set from the Quiet hours row — dispatch policy only; the opening-hours fact untouched",
+              }
+            : {
+                quiet_hours: settings.quiet_hours,
+                note: "opening hours live in Light's Memory (D181) — this save wrote through the memory door",
+              }),
     },
   });
 

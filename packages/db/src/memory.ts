@@ -248,6 +248,30 @@ export async function createMemoryEntry(
   return row;
 }
 
+/**
+ * Quiet-window micro-fix (7 Aug 2026): the fact-heal clause, extended to
+ * EVERY supersede door (the Memory edit form included — setMemoryFact
+ * already healed). What the successor carries when the caller declares
+ * nothing: a fact whose predecessor list is EMPTY and untouched heals to
+ * the shared per-key defaults; the same guard stands — a caller-passed
+ * list (however empty) and a non-empty predecessor list are never
+ * overridden. Pure, harness-testable.
+ */
+export function healedCarriedSurfaces(
+  predecessor: Pick<MemoryEntryRow, "kind" | "surfaces" | "attributes">,
+  declared?: MemorySurfaceDecl[]
+): MemorySurfaceDecl[] {
+  if (declared) return declared;
+  if (
+    predecessor.kind === "fact" &&
+    predecessor.surfaces.length === 0 &&
+    typeof predecessor.attributes.fact_key === "string"
+  ) {
+    return defaultSurfacesForFactKey(predecessor.attributes.fact_key);
+  }
+  return predecessor.surfaces;
+}
+
 export interface SupersedeMemoryEntryInput {
   business_id: string;
   actor_id: string;
@@ -320,7 +344,7 @@ export async function supersedeMemoryEntry(
       title: input.title?.trim() || predecessor.title,
       body: input.body,
       why: input.why ?? null,
-      surfaces: input.surfaces ?? predecessor.surfaces,
+      surfaces: healedCarriedSurfaces(predecessor, input.surfaces),
       attributes: predecessor.attributes,
     })
     .select(ENTRY_COLUMNS)
