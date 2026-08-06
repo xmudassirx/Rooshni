@@ -122,6 +122,14 @@ export async function IntegrationsTab() {
         }
         const state = stateByKey.get(row.key);
         const connected = state?.connected ?? false;
+        // Session 30 (WS B2): a connection carried by environment credentials
+        // is a real connection and says so — provenance named on the chip and
+        // in the meta line, never an unearned negative (and never a
+        // credentials UI: the one door arrives with its wiring session).
+        const viaEnvironment = state?.provenance === "environment";
+        const notice = viaEnvironment
+          ? "Connected through environment credentials set at deploy — not through this door, so there is nothing to manage here yet. The number connect door arrives with its wiring session; the session-window law is already enforced at pre-flight."
+          : row.notice;
         return (
           <div key={row.key} className="border-b border-ink/10 px-4.5 py-3.5 last:border-b-0">
             <div className="flex items-center gap-3">
@@ -139,9 +147,9 @@ export async function IntegrationsTab() {
                     : "rounded-md border border-ink/15 bg-paper-deep px-2 py-1 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase"
                 }
               >
-                {connected ? "connected" : "not connected"}
+                {connected ? (viaEnvironment ? "connected · env" : "connected") : "not connected"}
               </span>
-              <HonestButton size="sm" variant="ghost" notice={row.notice}>
+              <HonestButton size="sm" variant="ghost" notice={notice}>
                 {connected ? "manage" : "connect"}
               </HonestButton>
             </div>

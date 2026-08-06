@@ -17,6 +17,7 @@ import {
   pricedAmountGbp,
   readGmailEnv,
   readGraphEnv,
+  readWhatsAppEnv,
   renderEmailHtml,
   resolveAiBudget,
   resolveConversionsConfig,
@@ -27,6 +28,7 @@ import {
   resolveSignOffMode,
   resolveSignOffText,
   weekWindowUtc,
+  whatsAppConnectionState,
   type LightPerformance,
 } from "@rooshni/db";
 import { scaleDurationMs } from "@rooshni/config";
@@ -4128,6 +4130,10 @@ export interface IntegrationState {
   key: "mail" | "whatsapp" | "meta" | "calendar" | "stripe";
   connected: boolean;
   detail: string | null;
+  /** How the connection actually exists, when it is not the grant door —
+   * "environment" names credentials living in env vars (Session 30, WS B2:
+   * the card renders the truth, never an unearned negative). */
+  provenance?: "grant" | "environment" | null;
 }
 
 export interface MailPipeState {
@@ -4244,9 +4250,26 @@ export async function getIntegrationStates(): Promise<IntegrationState[]> {
   );
   const hasStripeActor = (actors ?? []).some((a) => a.display_name === "Stripe");
 
+  // Session 30 (WS B2): the WhatsApp carrier runs on env credentials today —
+  // a live grant is the real door, but credential presence (a boolean, never
+  // a value — the s20 wiring-state law) is a real, working connection and
+  // renders as such with its provenance named.
+  const whatsapp = whatsAppConnectionState(
+    liveTools.has("comms.whatsapp"),
+    readWhatsAppEnv() !== null
+  );
+
   return [
     { key: "mail", connected: liveTools.has("comms.email"), detail: null },
-    { key: "whatsapp", connected: liveTools.has("comms.whatsapp"), detail: null },
+    {
+      key: "whatsapp",
+      connected: whatsapp.connected,
+      provenance: whatsapp.provenance,
+      detail:
+        whatsapp.provenance === "environment"
+          ? "connected through environment credentials — templates send today; the one-door connect arrives with its wiring session"
+          : null,
+    },
     {
       key: "meta",
       connected: liveTools.has("enquiries"),

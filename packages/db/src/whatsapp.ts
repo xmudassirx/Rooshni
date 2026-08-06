@@ -30,6 +30,27 @@ export function readWhatsAppEnv(env: NodeJS.ProcessEnv = process.env): WhatsAppE
   return { accessToken, phoneNumberId };
 }
 
+/** How the WhatsApp carrier is actually connected, if at all. */
+export interface WhatsAppConnectionState {
+  connected: boolean;
+  provenance: "grant" | "environment" | null;
+}
+
+/**
+ * Session 30 (WS B2) — the Settings card's one truth. The card showed NOT
+ * CONNECTED while templates demonstrably sent: the carrier runs on env
+ * credentials, not on a grant through the one door. An integration grant is
+ * the real connection when it exists; env-credential presence is a real,
+ * working connection too and renders as such WITH its provenance named —
+ * never an unearned negative, never a fabricated grant. Pure so the harness
+ * proves the card's truth the way the card derives it.
+ */
+export function whatsAppConnectionState(hasGrant: boolean, envPresent: boolean): WhatsAppConnectionState {
+  if (hasGrant) return { connected: true, provenance: "grant" };
+  if (envPresent) return { connected: true, provenance: "environment" };
+  return { connected: false, provenance: null };
+}
+
 /** Builds the WhatsApp carrier, or null when unconfigured (the dispatcher
  * then leaves WhatsApp rows approved and says so in its report). */
 export function createWhatsAppSender(
