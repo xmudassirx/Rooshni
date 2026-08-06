@@ -2043,3 +2043,32 @@ unassigned for the founder's pen.
      rejection needs no dialogue. (d) The thread's inline approve
      and the inbox card share the one dialogue; bulk approve
      continues not to exist.
+
+185. Session 33's Lane B calls, consolidated (provisional — the
+     founder's merge is the stamp, D152/D176 pattern): (a) D163 at the
+     marker: the 0040 retry door nulls scheduled_for but leaves
+     attributes untouched, so a pre-retry Send-now/schedule marker
+     would dodge the hold forever — "policy re-applies fresh at retry
+     time" is implemented as pure dispatcher logic
+     (honourQuietHoursOverride): a quiet_hours_override marker older
+     than the row's latest send_retry is SPENT, and a marker that
+     cannot prove it postdates the retry fails towards the hold; no
+     migration, both markers stand verbatim on the record. (b) The
+     schedule choice's write rides the SERVICE client immediately
+     after the DB-enforced stamp by the same actor (the dispatcher's
+     own hold-write lane): scheduled_for plus the 0039-shaped marker
+     ({by_actor_id, at, scheduled_for}) — ONE marker vocabulary, so
+     the dispatcher has one rule; timing only, the 0021 doors remain
+     the only status movers; evented as communication.scheduled (a
+     new TS kind under the decision 89d registry). (c) The D184c gate
+     sits BEFORE the sign-off resolution, so a withheld stamp writes
+     NOTHING — not even the fresh compliance check. (d) Choosing "No
+     quiet hours" retires the opening-hours memory fact, the reset
+     lane applied — a window-derived fact cannot outlive its window.
+     (e) "The silent hold is retired" reads as retired ON THE STAMP
+     SURFACES: the dispatcher's hold branch remains the policy
+     backstop for rows arriving approved without a choice — retries
+     re-entering policy per D163, and any non-UI approval path — and
+     the s24 held-card (with its Send now) stays as the fallback for
+     the race where the window becomes active between the gate and
+     the inline dispatch.
