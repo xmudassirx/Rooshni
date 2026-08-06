@@ -614,6 +614,163 @@ function blocksText(body: unknown): string {
     .join("\n");
 }
 
+/** What a declared surface actually carries today — loaded by sweepFactEdit,
+ * consumed by the PURE planner below (the harness proves the planner). */
+export interface SweepCarrier {
+  decl: MemorySurfaceDecl;
+  template?: {
+    id: string;
+    key: string;
+    channel: string;
+    subject: string | null;
+    body: string;
+    version: number;
+  } | null;
+  entry?: { id: string; title: string; version: number; body: unknown } | null;
+}
+
+export interface PlannedCorrection {
+  decl: MemorySurfaceDecl;
+  content_type: "template_correction" | "knowledge_entry_correction";
+  title: string;
+  body_after_text: string;
+  correction: Record<string, unknown>;
+}
+
+export interface PlannedTask {
+  decl: MemorySurfaceDecl;
+  reason: "external" | "value_not_found";
+  title: string;
+  description: string;
+}
+
+export interface FactSweepPlan {
+  corrections: PlannedCorrection[];
+  tasks: PlannedTask[];
+  deferred: string[];
+}
+
+/**
+ * The sweep's PURE core — deterministic substitution planning per surface,
+ * harness-proven: in-platform carriers of the stale value plan corrections;
+ * external surfaces plan tasks; a declared surface where the old value is
+ * not found verbatim plans a review task (fail loud, never skip silently —
+ * founder-ruled Q2); website surfaces defer visibly.
+ */
+export function planFactSweep(input: {
+  fact_title: string;
+  old_value: string;
+  new_value: string;
+  carriers: SweepCarrier[];
+}): FactSweepPlan {
+  const plan: FactSweepPlan = { corrections: [], tasks: [], deferred: [] };
+  const oldValue = input.old_value.trim();
+  const newValue = input.new_value.trim();
+  if (!oldValue || oldValue === newValue) return plan;
+
+  const reviewTask = (decl: MemorySurfaceDecl, detail: string) => {
+    plan.tasks.push({
+      decl,
+      reason: "value_not_found",
+      title: `Review ${decl.label}: ${input.fact_title} changed`,
+      description: `${input.fact_title} changed from "${oldValue}" to "${newValue}", and this fact declares ${decl.label} as a surface — but ${detail}, so no correction could be drafted. Review the surface by hand.`,
+    });
+  };
+
+  for (const carrier of input.carriers) {
+    const decl = carrier.decl;
+    if (!decl.in_platform) {
+      plan.tasks.push({
+        decl,
+        reason: "external",
+        title: `Update ${decl.label}: ${input.fact_title}`,
+        description: `${input.fact_title} changed from "${oldValue}" to "${newValue}". ${decl.label} is not connected to the platform, so the change there is owed by hand.`,
+      });
+      continue;
+    }
+    if (decl.surface === "website") {
+      // Declared for later — the model is unchanged when it connects; today
+      // nothing renders, so the sweep defers it visibly on the event.
+      plan.deferred.push(decl.label);
+      continue;
+    }
+    if (decl.surface === "message_template") {
+      const template = carrier.template;
+      const bodyBefore = template?.body ?? "";
+      const subjectBefore = template?.subject ?? null;
+      const inBody = bodyBefore.includes(oldValue);
+      const inSubject = Boolean(subjectBefore?.includes(oldValue));
+      if (!template || (!inBody && !inSubject)) {
+        reviewTask(
+          decl,
+          template ? "the old value was not found verbatim in the template" : "no template exists for this key"
+        );
+        continue;
+      }
+      const bodyAfter = inBody ? bodyBefore.split(oldValue).join(newValue) : bodyBefore;
+      const subjectAfter = inSubject && subjectBefore ? subjectBefore.split(oldValue).join(newValue) : subjectBefore;
+      plan.corrections.push({
+        decl,
+        content_type: "template_correction",
+        title: `Correction: ${decl.label} — ${input.fact_title}`,
+        body_after_text: bodyAfter,
+        correction: {
+          template_id: template.id,
+          template_key: template.key,
+          channel: template.channel,
+          template_version: template.version,
+          body_before: bodyBefore,
+          body_after: bodyAfter,
+          ...(subjectBefore !== null ? { subject_before: subjectBefore, subject_after: subjectAfter } : {}),
+        },
+      });
+      continue;
+    }
+    if (decl.surface === "knowledge_entry") {
+      const entry = carrier.entry;
+      const textBefore = entry ? blocksText(entry.body) : "";
+      if (!entry || !textBefore.includes(oldValue)) {
+        reviewTask(
+          decl,
+          entry ? "the old value was not found verbatim in the entry" : "the entry no longer exists"
+        );
+        continue;
+      }
+      const textAfter = textBefore.split(oldValue).join(newValue);
+      // The substitution runs INSIDE the block structure — approval applies
+      // blocks_after verbatim, so the entry's paragraph shape survives the
+      // correction untouched.
+      const blocksAfter = Array.isArray(entry.body)
+        ? (entry.body as Array<Record<string, unknown>>).map((block) =>
+            block && typeof block === "object" && typeof block.text === "string"
+              ? { ...block, text: block.text.split(oldValue).join(newValue) }
+              : block
+          )
+        : entry.body;
+      plan.corrections.push({
+        decl,
+        content_type: "knowledge_entry_correction",
+        title: `Correction: ${entry.title} — ${input.fact_title}`,
+        body_after_text: textAfter,
+        correction: {
+          target_content_item_id: entry.id,
+          target_title: entry.title,
+          target_version: entry.version,
+          body_before: textBefore,
+          body_after: textAfter,
+          blocks_after: blocksAfter,
+        },
+      });
+      continue;
+    }
+    // An in-platform surface the sweep has no reach into — fail loud, never
+    // skip silently.
+    reviewTask(decl, `the sweep has no reach into the "${decl.surface}" surface kind`);
+  }
+
+  return plan;
+}
+
 export interface SweepFactEditInput {
   business_id: string;
   /** The human who edited the fact — sweep tasks land on their desk. */
@@ -631,6 +788,44 @@ export async function sweepFactEdit(db: SupabaseClient, input: SweepFactEditInpu
   const oldValue = input.old_value.trim();
   const newValue = input.new_value.trim();
   if (!oldValue || oldValue === newValue) return result;
+
+  // Load what each declared surface carries today, then let the PURE
+  // planner decide — the write below performs exactly the plan.
+  const carriers: SweepCarrier[] = [];
+  for (const decl of input.fact.surfaces) {
+    if (decl.in_platform && decl.surface === "message_template") {
+      const { data: templates, error } = await db
+        .from("message_templates")
+        .select("id, key, channel, subject, body, version")
+        .eq("business_id", input.business_id)
+        .eq("key", decl.ref ?? "")
+        .order("version", { ascending: false })
+        .limit(1);
+      if (error) throw new Error(`sweep template read failed: ${error.message}`);
+      carriers.push({ decl, template: (templates?.[0] as SweepCarrier["template"]) ?? null });
+    } else if (decl.in_platform && decl.surface === "knowledge_entry") {
+      const { data: entry, error } = await db
+        .from("content_items")
+        .select("id, title, body, version")
+        .eq("id", decl.ref ?? "00000000-0000-0000-0000-000000000000")
+        .eq("business_id", input.business_id)
+        .eq("content_type", "knowledge_entry")
+        .is("archived_at", null)
+        .maybeSingle();
+      if (error) throw new Error(`sweep knowledge read failed: ${error.message}`);
+      carriers.push({ decl, entry: (entry as SweepCarrier["entry"]) ?? null });
+    } else {
+      carriers.push({ decl });
+    }
+  }
+
+  const plan = planFactSweep({
+    fact_title: input.fact.title,
+    old_value: oldValue,
+    new_value: newValue,
+    carriers,
+  });
+  result.deferred = plan.deferred;
 
   const raiseTask = async (
     surface: MemorySurfaceDecl,
@@ -706,116 +901,16 @@ export async function sweepFactEdit(db: SupabaseClient, input: SweepFactEditInpu
     });
   };
 
-  for (const surface of input.fact.surfaces) {
-    if (!surface.in_platform) {
-      await raiseTask(
-        surface,
-        "external",
-        `Update ${surface.label}: ${input.fact.title}`,
-        `${input.fact.title} changed from "${oldValue}" to "${newValue}". ${surface.label} is not connected to the platform, so the change there is owed by hand.`
-      );
-      continue;
-    }
-    if (surface.surface === "website") {
-      // Declared for later — the model is unchanged when it connects; today
-      // nothing renders, so the sweep defers it visibly on the event.
-      result.deferred.push(surface.label);
-      continue;
-    }
-    if (surface.surface === "message_template") {
-      const { data: templates, error } = await db
-        .from("message_templates")
-        .select("id, key, channel, subject, body, version")
-        .eq("business_id", input.business_id)
-        .eq("key", surface.ref ?? "")
-        .order("version", { ascending: false })
-        .limit(1);
-      if (error) throw new Error(`sweep template read failed: ${error.message}`);
-      const template = templates?.[0];
-      const bodyBefore = (template?.body as string | null) ?? "";
-      const subjectBefore = (template?.subject as string | null) ?? null;
-      const inBody = bodyBefore.includes(oldValue);
-      const inSubject = Boolean(subjectBefore?.includes(oldValue));
-      if (!template || (!inBody && !inSubject)) {
-        await raiseTask(
-          surface,
-          "value_not_found",
-          `Review ${surface.label}: ${input.fact.title} changed`,
-          `${input.fact.title} changed from "${oldValue}" to "${newValue}", and this fact declares ${surface.label} as a surface — but the old value was not found verbatim in the template${template ? "" : " (no template found for this key)"}, so no correction could be drafted. Review the surface by hand.`
-        );
-        continue;
-      }
-      const bodyAfter = inBody ? bodyBefore.split(oldValue).join(newValue) : bodyBefore;
-      const subjectAfter = inSubject && subjectBefore ? subjectBefore.split(oldValue).join(newValue) : subjectBefore;
-      await proposeCorrection(
-        surface,
-        "template_correction",
-        `Correction: ${surface.label} — ${input.fact.title}`,
-        bodyAfter,
-        {
-          template_id: template.id,
-          template_key: template.key,
-          channel: template.channel,
-          template_version: template.version,
-          body_before: bodyBefore,
-          body_after: bodyAfter,
-          ...(subjectBefore !== null ? { subject_before: subjectBefore, subject_after: subjectAfter } : {}),
-        }
-      );
-      continue;
-    }
-    if (surface.surface === "knowledge_entry") {
-      const { data: entry, error } = await db
-        .from("content_items")
-        .select("id, title, body, version, state")
-        .eq("id", surface.ref ?? "00000000-0000-0000-0000-000000000000")
-        .eq("business_id", input.business_id)
-        .eq("content_type", "knowledge_entry")
-        .is("archived_at", null)
-        .maybeSingle();
-      if (error) throw new Error(`sweep knowledge read failed: ${error.message}`);
-      const textBefore = entry ? blocksText(entry.body) : "";
-      if (!entry || !textBefore.includes(oldValue)) {
-        await raiseTask(
-          surface,
-          "value_not_found",
-          `Review ${surface.label}: ${input.fact.title} changed`,
-          `${input.fact.title} changed from "${oldValue}" to "${newValue}", and this fact declares the knowledge entry "${surface.label}" as a surface — but the old value was not found verbatim${entry ? "" : " (the entry no longer exists)"}, so no correction could be drafted. Review the entry by hand.`
-        );
-        continue;
-      }
-      const textAfter = textBefore.split(oldValue).join(newValue);
-      // The substitution runs INSIDE the block structure — approval applies
-      // blocks_after verbatim, so the entry's paragraph shape survives the
-      // correction untouched.
-      const blocksAfter = (entry.body as Array<Record<string, unknown>>).map((block) =>
-        block && typeof block === "object" && typeof block.text === "string"
-          ? { ...block, text: block.text.split(oldValue).join(newValue) }
-          : block
-      );
-      await proposeCorrection(
-        surface,
-        "knowledge_entry_correction",
-        `Correction: ${entry.title} — ${input.fact.title}`,
-        textAfter,
-        {
-          target_content_item_id: entry.id,
-          target_title: entry.title,
-          target_version: entry.version,
-          body_before: textBefore,
-          body_after: textAfter,
-          blocks_after: blocksAfter,
-        }
-      );
-      continue;
-    }
-    // An in-platform surface this sweep does not know how to reach — fail
-    // loud, never skip silently.
-    await raiseTask(
-      surface,
-      "value_not_found",
-      `Review ${surface.label}: ${input.fact.title} changed`,
-      `${input.fact.title} changed from "${oldValue}" to "${newValue}", and this fact declares "${surface.surface}" as an in-platform surface — but the sweep has no reach into that surface kind, so no correction could be drafted. Review it by hand.`
+  for (const task of plan.tasks) {
+    await raiseTask(task.decl, task.reason, task.title, task.description);
+  }
+  for (const correction of plan.corrections) {
+    await proposeCorrection(
+      correction.decl,
+      correction.content_type,
+      correction.title,
+      correction.body_after_text,
+      correction.correction
     );
   }
 
