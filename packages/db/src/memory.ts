@@ -74,6 +74,28 @@ export const MEMORY_FACT_KEYS = {
   openingHours: "opening_hours",
 } as const;
 
+export const GOOGLE_BUSINESS_PROFILE_SURFACE: MemorySurfaceDecl = {
+  surface: "google_business_profile",
+  label: "Google Business Profile",
+  ref: null,
+  in_platform: false,
+};
+
+/**
+ * Fact-surfaces micro-fix (6 Aug 2026, founder-witnessed defect A): the
+ * per-key DEFAULT surfaces — ONE shared declaration for every creation
+ * door (the seed, the Settings faces, the Memory surface's add), never two
+ * lists. Opening hours and phone appear on Google Business Profile in the
+ * world, so a fact born through any door declares it; a fact created with
+ * an empty list would make the ripple sweep honestly sweep nothing.
+ */
+export function defaultSurfacesForFactKey(factKey: string): MemorySurfaceDecl[] {
+  if (factKey === MEMORY_FACT_KEYS.openingHours || factKey === MEMORY_FACT_KEYS.phone) {
+    return [GOOGLE_BUSINESS_PROFILE_SURFACE];
+  }
+  return [];
+}
+
 /** Total estimated tokens across instruction bodies (the ceiling's unit). */
 export function memoryInstructionTokens(bodies: string[]): number {
   return bodies.reduce((sum, b) => sum + estimateTokens(b), 0);
@@ -416,7 +438,9 @@ export async function setMemoryFact(
       title: input.title,
       body: value,
       why: input.why ?? null,
-      surfaces: input.surfaces ?? [],
+      // Fact-surfaces micro-fix: a fact born through ANY door carries the
+      // shared per-key defaults when the caller declares nothing.
+      surfaces: input.surfaces?.length ? input.surfaces : defaultSurfacesForFactKey(input.fact_key),
       attributes: { fact_key: input.fact_key },
     });
     return { entry, sweep: null, changed: true };
@@ -427,6 +451,12 @@ export async function setMemoryFact(
     return { entry: existing, sweep: null, changed: false };
   }
 
+  // Fact-surfaces micro-fix: a supersede over an EMPTY declared list heals
+  // it with the shared per-key defaults (the witnessed defect: a
+  // face-created hours fact with no surfaces swept honestly to 0/0, and a
+  // plain carry-forward would repeat that forever). A caller-passed list
+  // and a non-empty predecessor list are never overridden.
+  const healedDefaults = existing.surfaces.length ? [] : defaultSurfacesForFactKey(input.fact_key);
   const { successor } = await supersedeMemoryEntry(db, {
     business_id: input.business_id,
     actor_id: input.actor_id,
@@ -434,7 +464,7 @@ export async function setMemoryFact(
     title: input.title,
     body: value,
     why: input.why ?? null,
-    surfaces: input.surfaces,
+    surfaces: input.surfaces ?? (healedDefaults.length ? healedDefaults : undefined),
   });
 
   const sweep =

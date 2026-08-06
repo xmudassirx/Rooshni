@@ -128,6 +128,10 @@ export async function GeneralTab() {
                 isSet: isQuietHoursSet(s),
                 disabled: quiet === null,
                 isOwner: membershipRole === "owner",
+                // Fact-surfaces micro-fix (defect B): the field renders the
+                // MEMORY fact memory-first — the same home it writes
+                // through; the window string is only the pre-fact fallback.
+                memoryValue: memoryFactValue(memory, MEMORY_FACT_KEYS.openingHours),
               }}
             />
           }

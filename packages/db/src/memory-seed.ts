@@ -2,7 +2,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { FEE_PROHIBITION_LINE, REGISTER_PUNCTUATION_LINE } from "./drafting";
 import { resolveSignOffText } from "./sign-off";
 import { isQuietHoursSet, sendWindowFromQuietHours, type QuietHours } from "./quiet-hours";
-import { createMemoryEntry, MEMORY_FACT_KEYS, type MemorySurfaceDecl } from "./memory";
+import {
+  createMemoryEntry,
+  defaultSurfacesForFactKey,
+  MEMORY_FACT_KEYS,
+  type MemorySurfaceDecl,
+} from "./memory";
 
 /**
  * Session 32 (D181) — the seed backfill: today's scattered behaviour
@@ -27,13 +32,6 @@ export interface MemorySeedReport {
   created: Array<{ key: string; kind: string; title: string }>;
   skipped: Array<{ key: string; reason: string }>;
 }
-
-const GMB_SURFACE: MemorySurfaceDecl = {
-  surface: "google_business_profile",
-  label: "Google Business Profile",
-  ref: null,
-  in_platform: false,
-};
 
 /** Detect which in-platform surfaces carry the value verbatim TODAY — the
  * declared list starts honest instead of guessed. */
@@ -134,13 +132,7 @@ export async function seedMemoryEntries(
     report.created.push({ key, kind: "instruction", title: entry.title });
   };
 
-  const seedFact = async (
-    key: string,
-    title: string,
-    value: string | null,
-    why: string,
-    extraSurfaces: MemorySurfaceDecl[] = []
-  ) => {
+  const seedFact = async (key: string, title: string, value: string | null, why: string) => {
     if (seen.has(key)) {
       report.skipped.push({ key, reason: "already present — a founder's later edit is never argued with" });
       return;
@@ -151,6 +143,8 @@ export async function seedMemoryEntries(
       return;
     }
     const detected = await detectSurfaces(db, input.business_id, trimmed);
+    // Fact-surfaces micro-fix: the per-key defaults come from the ONE
+    // shared declaration every creation door uses — never a seed-local list.
     const entry = await createMemoryEntry(db, {
       business_id: input.business_id,
       actor_id: input.owner_actor_id,
@@ -158,7 +152,7 @@ export async function seedMemoryEntries(
       title,
       body: trimmed,
       why,
-      surfaces: [...detected, ...extraSurfaces],
+      surfaces: [...detected, ...defaultSurfacesForFactKey(key)],
       attributes: { fact_key: key },
     });
     report.created.push({ key, kind: "fact", title: entry.title });
@@ -211,8 +205,7 @@ export async function seedMemoryEntries(
     MEMORY_FACT_KEYS.phone,
     "Phone",
     phone,
-    "Seeded at Session 32 from the signup record — Memory is now the home (D181, Q1)",
-    [GMB_SURFACE]
+    "Seeded at Session 32 from the signup record — Memory is now the home (D181, Q1)"
   );
 
   // Opening hours: only when firm-set (the shipped default window is
@@ -226,8 +219,7 @@ export async function seedMemoryEntries(
     MEMORY_FACT_KEYS.openingHours,
     "Opening hours",
     hours,
-    "Seeded at Session 32 from Settings (business hours) — Memory is now the home (D181, Q1)",
-    [GMB_SURFACE]
+    "Seeded at Session 32 from Settings (business hours) — Memory is now the home (D181, Q1)"
   );
 
   return report;

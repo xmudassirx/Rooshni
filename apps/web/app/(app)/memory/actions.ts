@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   createMemoryEntry,
   deactivateMemoryEntry,
+  defaultSurfacesForFactKey,
   promoteObservation,
   supersedeMemoryEntry,
   sweepFactEdit,
@@ -75,6 +76,7 @@ export async function addFactAction(_prev: MemoryActionState, formData: FormData
 
   const { db, business, actor } = await getAppContext();
   try {
+    const factKey = slugKey(title);
     await createMemoryEntry(db, {
       business_id: business.id,
       actor_id: actor.id,
@@ -82,8 +84,10 @@ export async function addFactAction(_prev: MemoryActionState, formData: FormData
       title,
       body: value,
       why: "Added in Light's Memory",
-      surfaces,
-      attributes: { fact_key: slugKey(title) },
+      // Fact-surfaces micro-fix: a fact born through ANY door carries the
+      // shared per-key defaults when none were picked.
+      surfaces: surfaces.length ? surfaces : defaultSurfacesForFactKey(factKey),
+      attributes: { fact_key: factKey },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "The fact could not be saved.";
@@ -94,6 +98,7 @@ export async function addFactAction(_prev: MemoryActionState, formData: FormData
     };
   }
   revalidatePath("/memory");
+  revalidatePath("/settings");
   return { error: null, saved: true };
 }
 
@@ -127,6 +132,7 @@ export async function editFactAction(_prev: MemoryActionState, formData: FormDat
         new_value: value,
       });
       revalidatePath("/memory");
+      revalidatePath("/settings");
       revalidatePath("/inbox");
       revalidatePath("/tasks");
       return {
@@ -143,6 +149,7 @@ export async function editFactAction(_prev: MemoryActionState, formData: FormDat
     return { error: err instanceof Error ? err.message : "The edit failed." };
   }
   revalidatePath("/memory");
+  revalidatePath("/settings");
   return { error: null, saved: true };
 }
 
@@ -170,6 +177,7 @@ export async function addInstructionAction(
     return { error: err instanceof Error ? err.message : "The instruction could not be saved." };
   }
   revalidatePath("/memory");
+  revalidatePath("/settings");
   return { error: null, saved: true };
 }
 
@@ -195,6 +203,7 @@ export async function editInstructionAction(
     return { error: err instanceof Error ? err.message : "The edit failed." };
   }
   revalidatePath("/memory");
+  revalidatePath("/settings");
   return { error: null, saved: true };
 }
 
@@ -218,6 +227,7 @@ export async function deactivateEntryAction(
     return { error: err instanceof Error ? err.message : "The entry could not be deactivated." };
   }
   revalidatePath("/memory");
+  revalidatePath("/settings");
   return { error: null, saved: true };
 }
 
@@ -240,5 +250,6 @@ export async function promoteObservationAction(
     return { error: err instanceof Error ? err.message : "The promotion failed." };
   }
   revalidatePath("/memory");
+  revalidatePath("/settings");
   return { error: null, saved: true };
 }
