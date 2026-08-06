@@ -8,7 +8,10 @@ import {
   canWithdrawWorkflowDefinition,
   createServiceClient,
   emitEvent,
+  getInstalledQuietHoursDefault,
+  quietHoursHoldUntil,
   rejectCommunication,
+  resolveQuietHours,
   withdrawWorkflowDefinition,
   applyCorrection,
   recordRejectionObservation,
@@ -114,8 +117,20 @@ export interface DecisionState {
   /** Defect-trio hotfix (2 Aug 2026, item 2): the stamp landed INSIDE quiet
    * hours — the message is held and sends at this instant (ISO). The card
    * answers the stamp with the hold instead of silence; neutral chrome —
-   * policy, not failure. */
+   * policy, not failure. Since Session 33 (D184c) this is a race-window
+   * fallback only: the stamp surfaces gate the choice BEFORE stamping. */
   heldUntil?: string | null;
+  /** Session 33 (D184c): the stamp was WITHHELD — the destination's quiet
+   * window is active and no choice accompanied the approve. NOTHING landed
+   * (no compliance check, no stamp); the dialogue opens with these facts
+   * and is the only path to the stamp while the window is active. */
+  quietChoiceRequired?: { until: string } | null;
+  /** Session 33 (D184c): the stamp landed WITH the schedule choice —
+   * scheduled_for (ISO) is on the row and dispatch carries it then. */
+  scheduledFor?: string | null;
+  /** Session 33 (D184c): the stamp landed WITH the send-now choice — the
+   * override is on The Record, exactly the s24 override. */
+  sentNow?: boolean;
 }
 
 /**
@@ -129,8 +144,49 @@ export async function approveAction(
 ): Promise<DecisionState> {
   const communicationId = String(formData.get("communicationId") ?? "");
   if (!communicationId) return { error: "No communication was selected." };
+  // Session 33 (D184c): the choice at the stamp — absent, "send_now" or
+  // "schedule" (with scheduledFor, ISO). Anything else reads as absent.
+  const quietChoiceRaw = String(formData.get("quietChoice") ?? "");
+  const quietChoice =
+    quietChoiceRaw === "send_now" || quietChoiceRaw === "schedule" ? quietChoiceRaw : null;
 
   const { db, business, actor } = await getAppContext();
+
+  // Session 33 (D184c): THE GATE, before any stamping work — the same 170
+  // resolver the dispatch hold reads (firm-set wins; unset falls to the
+  // installed template's declaration; explicit null = off). While the
+  // destination business's quiet window is active, an approve without a
+  // choice stamps NOTHING (not even the sign-off compliance check) and
+  // returns the window's facts; the dialogue is the only path to the stamp.
+  const { data: bizRow } = await db
+    .from("businesses")
+    .select("settings, timezone")
+    .eq("id", business.id)
+    .maybeSingle();
+  const quiet = resolveQuietHours(
+    (bizRow?.settings as Record<string, unknown>) ?? {},
+    await getInstalledQuietHoursDefault(db, business.id)
+  );
+  const windowEnds = quietHoursHoldUntil(
+    new Date(),
+    (bizRow?.timezone as string) || "Europe/London",
+    quiet
+  );
+  if (windowEnds && !quietChoice) {
+    return { error: null, quietChoiceRequired: { until: windowEnds.toISOString() } };
+  }
+  let scheduledFor: Date | null = null;
+  if (quietChoice === "schedule") {
+    const raw = String(formData.get("scheduledFor") ?? "");
+    scheduledFor = raw ? new Date(raw) : null;
+    if (!scheduledFor || Number.isNaN(scheduledFor.getTime())) {
+      return { error: "A dispatch time is required to approve and schedule." };
+    }
+    if (scheduledFor.getTime() < Date.now()) {
+      return { error: "That time has already passed. Pick a future time, or send now." };
+    }
+  }
+
   // Session 16 (PR-F, decision 133e): approver-mode sign-off resolves on the
   // STORED body — the same deterministic transformation the card rendered —
   // with a fresh recorded compliance check on the exact resolved words,
@@ -147,6 +203,61 @@ export async function approveAction(
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Approval failed." };
   }
+
+  if (scheduledFor) {
+    // Session 33 (D184c) — APPROVE AND SCHEDULE: the stamp just landed and
+    // the same stamp-holder chose the dispatch time. scheduled_for is
+    // TIMING only — the 0021 doors remain the only status movers, and the
+    // tick sweep carries the row at its instant (the D163 machinery). The
+    // 0039-shaped marker tells the dispatcher a human chose this timing (it
+    // must not re-hold a chosen time that falls inside a window).
+    // JUDGMENT: (Lane B) the write rides the service client immediately
+    // after the DB-enforced stamp by this same actor — the dispatcher's own
+    // hold-write lane; no new door, no migration, and the act is evented.
+    const service = createServiceClient();
+    const { data: commRow, error: commError } = await service
+      .from("communications")
+      .select("channel, attributes")
+      .eq("id", communicationId)
+      .maybeSingle();
+    if (commError || !commRow) {
+      return { error: `Stamped, but the schedule could not be read back: ${commError?.message ?? "row missing"}` };
+    }
+    const { error: schedError } = await service
+      .from("communications")
+      .update({
+        scheduled_for: scheduledFor.toISOString(),
+        attributes: {
+          ...((commRow.attributes as Record<string, unknown>) ?? {}),
+          quiet_hours_override: {
+            by_actor_id: actor.id,
+            at: new Date().toISOString(),
+            scheduled_for: scheduledFor.toISOString(),
+          },
+        },
+      })
+      .eq("id", communicationId);
+    if (schedError) {
+      // The stamp stands (never unwound by a timing hiccup); the tick will
+      // carry the row under plain policy — say so honestly.
+      return { error: `Stamped, but scheduling failed: ${schedError.message}. The message dispatches under quiet-hours policy instead.` };
+    }
+    await emitEvent(db, {
+      business_id: business.id,
+      actor_id: actor.id,
+      action: SEND_EVENT_KINDS.communicationScheduled,
+      entity_type: "communication",
+      entity_id: communicationId,
+      payload: {
+        channel: commRow.channel,
+        scheduled_for: scheduledFor.toISOString(),
+        quiet_window_until: windowEnds?.toISOString() ?? null,
+        note: "Approved and scheduled — the stamp is theirs, the timing their recorded choice (D184c).",
+      },
+    });
+    return { error: null, stamped: true, scheduledFor: scheduledFor.toISOString() };
+  }
+
   // Session 10: the stamp is given — carry the message now (best-effort;
   // quiet hours hold it, and any transient failure leaves it approved for
   // the tick sweep). APPROVED ≠ SENT: a carriage problem never unwinds the
@@ -164,6 +275,43 @@ export async function approveAction(
       .maybeSingle();
     heldUntil = (held?.scheduled_for as string | null) ?? null;
   }
+
+  if (quietChoice === "send_now" && heldUntil) {
+    // Session 33 (D184c) — SEND NOW at the stamp: the inline dispatch above
+    // held the row (the window is active), and the stamp-holder already
+    // chose the timing — collapse the hold through the 0039 door and event
+    // the override, exactly the s24 Send-now act, then carry it.
+    const { data: comm } = await db
+      .from("communications")
+      .select("channel")
+      .eq("id", communicationId)
+      .eq("business_id", business.id)
+      .maybeSingle();
+    const { error: rpcError } = await db.rpc("override_quiet_hours_hold", {
+      p_comm: communicationId,
+      p_actor: actor.id,
+    });
+    if (rpcError) {
+      // The stamp stands and the hold stands — the held card offers Send
+      // now again; nothing silent, nothing unwound.
+      return { error: null, stamped: true, heldUntil };
+    }
+    await emitEvent(db, {
+      business_id: business.id,
+      actor_id: actor.id,
+      action: SEND_EVENT_KINDS.communicationQuietHoursOverridden,
+      entity_type: "communication",
+      entity_id: communicationId,
+      payload: {
+        channel: comm?.channel ?? null,
+        was_held_until: heldUntil,
+        note: "Send now — the stamp is theirs, the timing now too; recorded, never silent.",
+      },
+    });
+    await dispatchAfterApproval(communicationId);
+    return { error: null, stamped: true, sentNow: true };
+  }
+
   // Session 11 (founder-ruled at the Session 10 close): no redirect — the
   // card shows "✓ Stamped — on The Record" briefly, then the client
   // refreshes and the row leaves the stamps-owed view for History.
