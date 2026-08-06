@@ -2013,3 +2013,33 @@ quoted-approval precedent).
      human refusals); no stamp lives on that screen, so red would
      overclaim — sweep corrections take their red-adjacent stamp in
      the Approval Inbox.
+
+## Session 33 (7 August 2026) — quiet hours: the choice at the stamp —
+## recorded on in-prompt authority
+
+Entry 184 is quoted verbatim from the Session 33 prompt (7 August 2026 —
+the §8 quoted-approval pattern, the entry-113 in-prompt-authority
+precedent: founder-ruled, quoted verbatim). Builder bookkeeping (dated
+7 August 2026): the prompt numbers this ruling 184; no entry 183 exists at
+the time of writing — the number is recorded as ordered and 183 stays
+unassigned for the founder's pen.
+
+184. Quiet hours, re-ruled: (a) RECORDED FACT — drafting is never
+     gated by quiet hours and never was; the hold binds dispatch
+     only, after the stamp. (b) Quiet hours can be TURNED OFF
+     entirely: Settings → General offers "No quiet hours" as a
+     first-class choice (the 170 explicit-null path), owner-set,
+     evented — a firm working deportation cases at midnight sends
+     at midnight. (c) THE CHOICE AT THE STAMP: approving a
+     communication while the destination's quiet window is active
+     surfaces a dialogue naming the window ("Quiet hours until
+     08:00") with two acts: SEND NOW (the stamp plus the evented
+     override, as the s24 override today) or APPROVE AND SCHEDULE
+     (a time picker defaulting to the window's end, any future
+     time allowed; the stamp lands with scheduled_for set; dispatch
+     carries it at the chosen time). Nothing silent: the silent
+     hold-until-window is retired in favour of the explicit choice;
+     WYSIWYS holds — the scheduled body is the stamped body;
+     rejection needs no dialogue. (d) The thread's inline approve
+     and the inbox card share the one dialogue; bulk approve
+     continues not to exist.
