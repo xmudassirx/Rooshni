@@ -1825,3 +1825,33 @@ quoted-approval precedent).
      to require quoted in-prompt authority (the entry-113
      precedent). The direction of authority is unchanged: nothing
      becomes a ruling without the founder's hand.
+
+## Session 30 (6 August 2026) — thread-list, rejection, contact and
+## enquiry controls — recorded on in-prompt authority
+
+177. **Thread-list, rejection, contact and enquiry controls, ruled.**
+     In-prompt authority, the entry-113 precedent — founder-ruled
+     6 August 2026, quoted verbatim: "(a) a Conversations thread row
+     carrying a draft awaiting the stamp shows a GOLD pending-stamp
+     indicator, distinct from the accent unread badge for client
+     inbounds — a glance distinguishes 'a client waits on you' from
+     'Light waits on you'; both may coexist on one row. (b) A rejected
+     draft renders its rejection wherever the draft appears — thread
+     bubble and enquiry timeline — in the stamp red with the recorded
+     reason ('Rejected by [name] · [reason]'); rejection is the stamp
+     withheld and wears the stamp's colour. (c) Contacts gain an
+     ARCHIVE control — owner-only for now, evented with optional
+     reason; an archived contact leaves resolution and its channels
+     leave consent, while its history stands untouched; deletion does
+     not exist (append-only). (d) Disqualifying an enquiry CANCELS its
+     live workflow run — drafts stop being generated, not merely
+     blocked at pre-flight. (e) The enquiry timeline renders NEWEST
+     FIRST — the timeline answers 'what just happened'; the opening
+     events belong at the bottom once history exists. (f) The enquiry
+     stage becomes HUMAN-MOVABLE: the enquiry page gains a stage
+     control — any team member with enquiry access moves the stage,
+     evented with optional reason; the vocabulary is the installed
+     template's stages plus its terminal states (disqualified with
+     reason among them). A human move is a recorded fact the workflow
+     respects; machine stage moves continue as today and never
+     overwrite a later human move."
