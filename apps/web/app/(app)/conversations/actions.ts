@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
   createAnthropicGenerator,
+  createAnthropicRouteClassifier,
   createServiceClient,
   emitEvent,
   requestThreadDraftNow,
@@ -163,6 +164,7 @@ export async function askLightToDraftAction(
     await requestThreadDraftNow(service, threadId);
     const report = await sweepSettleAndSupersede(service, {
       generator: createAnthropicGenerator(),
+      classifier: createAnthropicRouteClassifier(),
       onlyThreadId: threadId,
       // The paused toggle stops AUTOMATIC drafting; the human's explicit
       // ask is the manual door and runs regardless.

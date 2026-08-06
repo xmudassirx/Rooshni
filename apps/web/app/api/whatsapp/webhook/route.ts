@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   createAnthropicGenerator,
+  createAnthropicRouteClassifier,
   createServiceClient,
   recordInboundWhatsApp,
   resolveInboundBusiness,
@@ -197,7 +198,7 @@ export async function POST(request: NextRequest) {
   let settleNote: string | null = null;
   if (ingested > 0) {
     try {
-      const settle = await sweepSettleAndSupersede(db, { generator: createAnthropicGenerator() });
+      const settle = await sweepSettleAndSupersede(db, { generator: createAnthropicGenerator(), classifier: createAnthropicRouteClassifier() });
       if (settle.errors.length > 0) settleNote = settle.errors.join("; ");
     } catch (err) {
       // The cron re-evaluates settle timers next tick; a Meta retry would
