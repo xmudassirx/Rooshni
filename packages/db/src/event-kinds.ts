@@ -239,4 +239,39 @@ export const CONTACT_EVENT_KINDS = {
   archived: "contact.archived",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 32 — Light's Memory (D181). Same JUDGMENT as above: kinds are TS
+ * constants, the single truth every emitter imports. The Session 9 reserved
+ * kind memory.proposals_raised belonged to the dead Spec 2 card model and is
+ * not emitted by this vocabulary.
+ */
+export const MEMORY_EVENT_KINDS = {
+  /** A memory entry was born (fact | instruction | observation) — kind,
+   * title and fact_key (facts) in the payload. */
+  entryCreated: "memory.entry_created",
+  /** An entry was edited: the append-only supersede — a successor row was
+   * inserted and the predecessor deactivated, chained. One act, one event;
+   * predecessor and successor ids in the payload. */
+  entrySuperseded: "memory.entry_superseded",
+  /** An entry was deactivated without a successor — it stops riding drafts;
+   * its history stands. Optional reason in the payload. */
+  entryDeactivated: "memory.entry_deactivated",
+  /** A human promoted an observation to a standing instruction — one click,
+   * theirs (the database refuses any non-human author). The observation is
+   * superseded by the instruction; both ids in the payload. */
+  observationPromoted: "memory.observation_promoted",
+  /** The ripple sweep ran on a fact edit — ONE act: "N corrections
+   * proposed, M manual tasks raised", with every correction and task id,
+   * the old and new values, and any deferred (website) surfaces named. */
+  factRippleSwept: "memory.fact_ripple_swept",
+  /** A human stamped a sweep correction — the change APPLIED: a template
+   * re-issued (D102 lane, new version) or a knowledge entry updated (new
+   * version through the existing door). Correction id, surface and the new
+   * version in the payload. Nothing ever applies without this stamp. */
+  correctionApplied: "memory.correction_applied",
+  /** A human declined a sweep correction — reason recorded; the surface
+   * stands untouched. */
+  correctionRejected: "memory.correction_rejected",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

@@ -21,8 +21,13 @@ import type { FormAnswer } from "./meta";
 import { fireEngagementConversions } from "./conversions";
 import { assessAiBudget, guardGenerationBudget, maybeEmitSoftCapCrossed } from "./ai-budget";
 import { priceGeneration } from "./model-router";
-import { resolveSignOffText } from "./sign-off";
-import { resolveBookingUrl, substituteBookingLink } from "./booking-link";
+import { substituteBookingLink } from "./booking-link";
+import {
+  loadMemoryContext,
+  resolveBookingUrlWithMemory,
+  resolveSignOffWithMemory,
+  type MemoryContext,
+} from "./memory";
 import { contactAlreadyReceivedFile, declareAttachment, findPublishedRouteGuide, type RouteGuide } from "./route-guides";
 import { resolveEngagementRoute } from "./routes";
 import { resolveFormRouteDefault } from "./returning-leads";
@@ -653,7 +658,7 @@ async function recordComplianceCheck(
 async function templateVars(
   db: SupabaseClient,
   facts: EngagementFacts
-): Promise<{ vars: Record<string, string>; settings: Record<string, unknown> }> {
+): Promise<{ vars: Record<string, string>; settings: Record<string, unknown>; memory: MemoryContext }> {
   const owners = await q<{ display_name: string }[]>(
     db.from("actors").select("display_name").eq("id", facts.owner_actor_id).limit(1),
     "owner lookup"
@@ -675,7 +680,11 @@ async function templateVars(
   // deferral is closed (stale clause cleaned at the Session 21 sweep).
   // Session 16 (PR-F): one resolver module (sign-off.ts) is the truth for
   // the text; approver mode resolves at render+stamp, never at generation.
-  const signOff = resolveSignOffText(settings, businessName);
+  // Session 32 (D181, Q1 option A): Light's Memory is the single home for
+  // the client-facing sign-off value; settings is the TRANSITIONAL fallback
+  // until the seed backfill lands (noted at close for retirement).
+  const memory = await loadMemoryContext(db, facts.business_id);
+  const signOff = resolveSignOffWithMemory(memory, settings, businessName);
   return {
     vars: {
       first_name: facts.contact?.given_name ?? fullName.split(/\s+/)[0] ?? "",
@@ -688,6 +697,7 @@ async function templateVars(
     // settings (booking URL now; carried alongside the vars so one lookup
     // serves both).
     settings,
+    memory,
   };
 }
 
@@ -959,10 +969,12 @@ async function executeDraftComm(
     );
     if (!templates[0]) throw new Error(`Message template "${templateKey}" not found for this business`);
 
-    const { vars, settings: businessSettings } = await templateVars(db, facts);
+    const { vars, settings: businessSettings, memory } = await templateVars(db, facts);
     // PR-iv (Session 19): the firm's booking URL, resolved once — [link] in
     // any client-facing body becomes it; unset means no token may survive.
-    const bookingUrl = resolveBookingUrl(businessSettings);
+    // Session 32 (D181, Q1 option A): the memory fact is the home; settings
+    // is the transitional fallback.
+    const bookingUrl = resolveBookingUrlWithMemory(memory, businessSettings);
     const intended = (step.config.channel as string) ?? templates[0].channel;
     const picked = await pickChannel(db, facts.contact.id, intended, step.config.fallback_channel);
 
@@ -1135,6 +1147,9 @@ async function executeDraftComm(
               }
             : null,
           prior_sends: priorSends?.length ? priorSends : null,
+          // Session 32 (D181): the firm's memory rides the composition; its
+          // entry ids land on the credit line.
+          memory,
         };
         // Session 25 (register retry-once, founder-ordered): a register-screen
         // breach retries exactly ONCE with the violation fed back — evented on
@@ -1441,6 +1456,9 @@ async function executeDraftComm(
           context_tokens: composed.credit_line.context_tokens,
           budget_tokens: composed.credit_line.budget_tokens,
           knowledge_entry_ids: composed.credit_line.knowledge_entry_ids,
+          // Session 32 (D181): WHICH memory entries rode — The Record
+          // answers "why did Light say that" by name.
+          memory_entry_ids: composed.credit_line.memory_entry_ids,
           compliance: check.result,
           step_key: step.key,
         },

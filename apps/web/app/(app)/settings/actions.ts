@@ -4,17 +4,20 @@ import { createHash, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import {
   createServiceClient,
-  describeSendWindow,
+  deactivateMemoryEntry,
   emitEvent,
   quietHoursFromSendWindow,
+  setMemoryFact,
   ATTACHMENT_MAX_BYTES,
   DRAFTING_EVENT_KINDS,
   FILES_BUCKET,
   FIRST_LIGHT_EVENT_KINDS,
+  MEMORY_FACT_KEYS,
   SETTLE_WINDOW_MINUTES_OPTIONS,
   storageSlug,
 } from "@rooshni/db";
 import { getAppContext } from "@/lib/server/context";
+import { getAgentActor } from "@/lib/server/queries";
 
 /**
  * Session 15 (PR-1) — the knowledge pack's ONLY door. Entries are
@@ -117,12 +120,66 @@ export async function updateDraftingSettingsAction(
   if (readError) return { error: `Settings read failed: ${readError.message}` };
   const settings = { ...((bizRow?.settings ?? {}) as Record<string, unknown>) };
 
-  if (signOffText) settings.email_sign_off = signOffText;
-  else delete settings.email_sign_off; // absent = the firm display name, the only shipped default
+  // Session 32 (D181, Q1 option A): the sign-off TEXT and booking URL are
+  // client-facing FACTS — Light's Memory is their single home, and this
+  // field is a face over the fact: the save writes a superseding entry
+  // through the memory door and fires the ripple sweep. Mode and settle
+  // window are machinery and stay settings keys.
+  const light = await getAgentActor();
+  try {
+    await setMemoryFact(db, {
+      business_id: business.id,
+      actor_id: actor.id,
+      light_actor_id: light?.id ?? actor.id,
+      fact_key: MEMORY_FACT_KEYS.signature,
+      title: "Signature",
+      value: signOffText || business.name,
+      why: "Edited from Settings (the field is a face over the memory fact — D181, Q1)",
+    });
+    if (bookingUrl) {
+      await setMemoryFact(db, {
+        business_id: business.id,
+        actor_id: actor.id,
+        light_actor_id: light?.id ?? actor.id,
+        fact_key: MEMORY_FACT_KEYS.bookingLink,
+        title: "Booking link",
+        value: bookingUrl,
+        why: "Edited from Settings (the field is a face over the memory fact — D181, Q1)",
+      });
+    } else {
+      // Blank = no booking link is offered (PR-iv) — the fact retires,
+      // history stands.
+      const { data: existing } = await db
+        .from("memory_entries")
+        .select("id")
+        .eq("business_id", business.id)
+        .eq("kind", "fact")
+        .eq("active", true)
+        .eq("attributes->>fact_key", MEMORY_FACT_KEYS.bookingLink)
+        .maybeSingle();
+      if (existing) {
+        await deactivateMemoryEntry(db, {
+          business_id: business.id,
+          actor_id: actor.id,
+          entry_id: existing.id,
+          reason: "Booking link cleared from Settings — no link is offered",
+        });
+      }
+    }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "The memory write failed." };
+  }
+
+  // JUDGMENT (Session 32): the machinery keys save AFTER the memory writes
+  // landed (a failed memory write must never orphan the value), and the
+  // legacy settings copies are DELETED on every save — they are only the
+  // transitional fallback for a business with no fact rows, and a stale
+  // copy would resurface through that fallback (e.g. a cleared booking
+  // link falling back to the old URL). Listed at close.
   settings.email_sign_off_mode = mode;
   settings.draft_settle_minutes = settleMinutes;
-  if (bookingUrl) settings.booking_url = bookingUrl;
-  else delete settings.booking_url; // absent = no booking link is offered (PR-iv)
+  delete settings.email_sign_off;
+  delete settings.booking_url;
 
   const { error: writeError } = await db
     .from("businesses")
@@ -142,10 +199,12 @@ export async function updateDraftingSettingsAction(
       draft_settle_minutes: settleMinutes,
       email_sign_off_set: Boolean(signOffText),
       booking_url_set: Boolean(bookingUrl),
+      note: "sign-off text and booking URL live in Light's Memory (D181) — this save wrote through the memory door",
     },
   });
 
   revalidatePath("/settings");
+  revalidatePath("/memory");
   return { error: null, saved: true };
 }
 
@@ -250,9 +309,31 @@ export async function setBusinessHoursAction(
 
   if (mode === "reset") {
     // Back to the honest default — the field reads "default — not yet set
-    // by you" again and the hold reads the shipped window.
+    // by you" again and the hold reads the shipped window. The opening-hours
+    // FACT retires too (the shipped default window is dispatch policy, not
+    // a client-facing fact).
     delete settings.quiet_hours;
     delete settings.business_hours;
+    const { data: existingFact } = await db
+      .from("memory_entries")
+      .select("id")
+      .eq("business_id", business.id)
+      .eq("kind", "fact")
+      .eq("active", true)
+      .eq("attributes->>fact_key", MEMORY_FACT_KEYS.openingHours)
+      .maybeSingle();
+    if (existingFact) {
+      try {
+        await deactivateMemoryEntry(db, {
+          business_id: business.id,
+          actor_id: actor.id,
+          entry_id: existingFact.id,
+          reason: "Business hours reset to the shipped default window",
+        });
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : "The memory write failed." };
+      }
+    }
   } else {
     const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
     if (!HHMM.test(open) || !HHMM.test(close)) {
@@ -263,7 +344,27 @@ export async function setBusinessHoursAction(
     }
     const window = { open, close };
     settings.quiet_hours = quietHoursFromSendWindow(window);
-    settings.business_hours = describeSendWindow(window, timezone);
+    // Session 32 (D181, Q1 option A): the client-facing OPENING HOURS fact
+    // lives in Light's Memory — this field is a face over it; the save
+    // writes through the memory door and fires the ripple sweep. The
+    // structured quiet_hours window above stays settings (dispatch
+    // machinery, per the ruling); the legacy business_hours display string
+    // retires (memory is the home, settings only the pre-seed fallback).
+    delete settings.business_hours;
+    const light = await getAgentActor();
+    try {
+      await setMemoryFact(db, {
+        business_id: business.id,
+        actor_id: actor.id,
+        light_actor_id: light?.id ?? actor.id,
+        fact_key: MEMORY_FACT_KEYS.openingHours,
+        title: "Opening hours",
+        value: `${open} to ${close} (${timezone})`,
+        why: "Edited from Settings (the field is a face over the memory fact — D181, Q1)",
+      });
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "The memory write failed." };
+    }
   }
 
   const { error: writeError } = await db
@@ -281,12 +382,16 @@ export async function setBusinessHoursAction(
     payload: {
       keys: ["business_hours", "quiet_hours"],
       ...(mode === "reset"
-        ? { business_hours: null, note: "reset to the shipped default window" }
-        : { business_hours: settings.business_hours, quiet_hours: settings.quiet_hours }),
+        ? { business_hours: null, note: "reset to the shipped default window; the opening-hours memory fact retired" }
+        : {
+            quiet_hours: settings.quiet_hours,
+            note: "opening hours live in Light's Memory (D181) — this save wrote through the memory door",
+          }),
     },
   });
 
   revalidatePath("/", "layout");
+  revalidatePath("/memory");
   return { error: null, saved: true };
 }
 

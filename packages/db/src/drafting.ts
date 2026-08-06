@@ -8,6 +8,7 @@ import {
 } from "./model-router";
 import type { FormAnswer } from "./meta";
 import { substituteBookingLink } from "./booking-link";
+import type { MemoryContext } from "./memory";
 
 /**
  * The query-aware drafting engine (Session 15). Light composes against:
@@ -384,6 +385,10 @@ export interface ComposeDraftInput {
    * composition receives this so a follow-up never reads like a first
    * contact. Null or empty for a first draft. */
   prior_sends?: PriorSend[] | null;
+  /** Session 32 (D181): the firm's memory — active standing instructions
+   * and facts ride every composition; their ids land on the credit line so
+   * The Record answers "why did Light say that" by name. */
+  memory?: MemoryContext | null;
 }
 
 export interface ComposeDraftResult {
@@ -397,6 +402,9 @@ export interface ComposeDraftResult {
     context_tokens: number;
     budget_tokens: number;
     knowledge_entry_ids: string[];
+    /** Session 32 (D181): WHICH memory entries rode this composition —
+     * instruction and fact ids, by name on The Record. */
+    memory_entry_ids: string[];
     /** PR-E: "cache: X read / Y written" on the credit line; the fallback
      * reason is recorded when the API rejected cache_control. */
     cache?: { read_tokens: number; written_tokens: number; fallback_reason?: string };
@@ -439,8 +447,10 @@ export function findRegisterBreach(body: string): "em dash" | "en dash" | null {
   return null;
 }
 
-/** The prompt line both generation registers carry — written without the
- * forbidden marks so the instruction never exemplifies the breach. */
+/** The punctuation rule (D142), written without the forbidden marks so the
+ * instruction never exemplifies the breach. Session 32 (D181, Q3): no longer
+ * hardcoded into the prompts — SEED TEXT for the register standing
+ * instruction in Light's Memory; findRegisterBreach stays the law. */
 export const REGISTER_PUNCTUATION_LINE =
   "- Never use an em dash or an en dash anywhere in the draft; punctuate with commas and full stops instead.";
 
@@ -449,9 +459,43 @@ export const REGISTER_PUNCTUATION_LINE =
  * messages — no consultation prices, no service fees, no "from £X". The
  * prompt line is the belt; findFeeBreach is the braces. Fees live on the
  * booking page and in human-written messages only.
+ * Session 32 (D181, founder-ruled Q3): this line no longer rides hardcoded —
+ * it is SEED TEXT for the fees standing instruction in Light's Memory, and
+ * both compose paths carry it from there. The deterministic screen below
+ * stays in code, harness-pinned: deactivating the instruction softens the
+ * steering, never the law.
  */
 export const FEE_PROHIBITION_LINE =
   "- Never state, quote or estimate any fee, price or cost figure, in any currency or wording. Fees are never given in these messages; they live on the booking page and with the firm's own team. If cost comes up, invite the next step instead: if they would like to speak to our legal team, the next step is booking a consultation.";
+
+/**
+ * Session 32 (D181): the memory blocks both compose paths carry — active
+ * standing instructions and active facts, verbatim, ids on the credit line.
+ * Pure and harness-testable; empty memory adds nothing (the transitional
+ * pre-seed state).
+ */
+export function memoryInstructionLines(memory: MemoryContext | null | undefined): string[] {
+  if (!memory?.instructions.length) return [];
+  return [
+    ``,
+    `Standing instructions from the firm's memory — each one binds this draft:`,
+    ...memory.instructions.map((i) => (i.body.trimStart().startsWith("-") ? i.body.trim() : `- ${i.body.trim()}`)),
+  ];
+}
+
+export function memoryFactLines(memory: MemoryContext | null | undefined): string[] {
+  if (!memory?.facts.length) return [];
+  return [
+    ``,
+    `The firm's facts, from Light's Memory — when one is relevant, state it exactly; never invent or vary a fact:`,
+    ...memory.facts.map((f) => `- ${f.title}: ${f.body.trim()}`),
+  ];
+}
+
+export function memoryEntryIds(memory: MemoryContext | null | undefined): string[] {
+  if (!memory) return [];
+  return [...memory.instructions.map((i) => i.id), ...memory.facts.map((f) => f.id)];
+}
 
 /** The deterministic currency-amount patterns the D179a pre-flight screen
  * refuses: a currency symbol or code beside digits, or digits beside a
@@ -492,11 +536,13 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     ``,
     `Register:`,
     `- Address the enquirer's actual situation using ONLY the firm's published knowledge provided. Never invent services, availability, or claims.`,
-    FEE_PROHIBITION_LINE,
+    // Session 32 (D181, founder-ruled Q3): the fee and punctuation belt
+    // lines now ride from Light's Memory (seeded instructions) via
+    // memoryInstructionLines below — the deterministic screens remain the
+    // law regardless of memory state.
     `- If the enquirer asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome — and steer to a consultation.`,
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — a few short sentences; say less.`,
-    REGISTER_PUNCTUATION_LINE,
     ...(input.booking_url
       ? [
           `- The firm has a booking page. Where you invite a consultation, offer it by writing the token [link] exactly (it becomes the booking URL); never write any other URL and never invent one.`,
@@ -514,6 +560,8 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     ...(input.task === "nudge" && !input.returning ? nudgeRegisterLines(input.prior_sends) : []),
     ...(input.returning ? returningRegisterLines(input.returning) : []),
     `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
+    ...memoryInstructionLines(input.memory),
+    ...memoryFactLines(input.memory),
     ``,
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
   ].join("\n");
@@ -646,6 +694,7 @@ export async function composeDraft(
           ? DRAFT_CONTEXT_BUDGETS.floor_tokens
           : DRAFT_CONTEXT_BUDGETS.escalation_tokens,
       knowledge_entry_ids: input.retrieval.entries.map((e) => e.id),
+      memory_entry_ids: memoryEntryIds(input.memory),
       ...(result.cache ? { cache: result.cache } : {}),
     },
     usage: result.usage,
@@ -684,6 +733,11 @@ export interface ComposeReplyInput {
    * facts; the reply acknowledges prior contact, no cold intro, no
    * duplicate booklet. */
   returning?: ReturningContext | null;
+  /** Session 32 (D181): the firm's memory rides the reply path too — in
+   * the CACHED prefix (instructions with the laws, facts with the
+   * knowledge): memory changes rarely, and an edit naturally invalidates
+   * the cache because the prompt changed. */
+  memory?: MemoryContext | null;
 }
 
 /**
@@ -711,7 +765,9 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
     `The reply register:`,
     `- Answer what the client's message actually asked. Generalities about process and the firm's published services are lawful; case-specific legal advice is never given in a draft — that happens in consultations with the humans.`,
     `- Use ONLY the firm's published knowledge provided. Never invent services, availability, fees or claims.`,
-    FEE_PROHIBITION_LINE,
+    // Session 32 (D181, founder-ruled Q3): the fee and punctuation belt
+    // lines ride from Light's Memory (seeded instructions) below; the
+    // deterministic screens remain the law regardless of memory state.
     `- If the client asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome.`,
     `- Invite a consultation ONLY where the answer genuinely needs one — never as a reflex; follow the published booking policy where one is provided.`,
     ...(input.booking_url
@@ -721,8 +777,8 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
       : []),
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — answer, then stop.`,
-    REGISTER_PUNCTUATION_LINE,
     `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
+    ...memoryInstructionLines(input.memory),
     ``,
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
   ].join("\n");
@@ -732,7 +788,12 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
         .map((e) => `### ${e.title} [${e.category}${e.visa_route ? ` · ${e.visa_route}` : ""}]\n${e.text}`)
         .join("\n\n")
     : "(the firm has published no knowledge entries yet — keep to generalities and invite a consultation only if genuinely needed)";
-  const knowledgeBlock = `The firm's published knowledge (your only source of facts):\n\n${knowledge}`;
+  const knowledgeBlock = [
+    `The firm's published knowledge (your only source of facts):`,
+    ``,
+    knowledge,
+    ...memoryFactLines(input.memory),
+  ].join("\n");
 
   const answers = input.form_answers.length
     ? input.form_answers.map((a) => `- ${a.label}: ${a.value}`).join("\n")
@@ -871,6 +932,7 @@ export async function composeReplyDraft(
           ? DRAFT_CONTEXT_BUDGETS.floor_tokens
           : DRAFT_CONTEXT_BUDGETS.escalation_tokens,
       knowledge_entry_ids: input.retrieval.entries.map((e) => e.id),
+      memory_entry_ids: memoryEntryIds(input.memory),
       ...(result.cache ? { cache: result.cache } : {}),
     },
     usage: result.usage,

@@ -3,10 +3,13 @@ import type { SupabaseClient } from "@rooshni/db";
 import {
   createServiceClient,
   emitEvent,
+  loadMemoryContext,
+  memoryFactValue,
   resolveSignOffBody,
   resolveSignOffMode,
   resolveSignOffText,
   INBOUND_EVENT_KINDS,
+  MEMORY_FACT_KEYS,
 } from "@rooshni/db";
 
 /**
@@ -45,7 +48,13 @@ export async function resolveSignOffAtStamp(
   if (!comm || comm.channel !== "email" || comm.status !== "pending_approval") return { error: null };
 
   const attrs = (comm.attributes ?? {}) as Record<string, unknown>;
+  // Session 32 (D181, Q1): the memory signature fact joins the candidate
+  // list — Memory is the sign-off's home now; the settings text stays a
+  // candidate so bodies drafted before the move still resolve.
+  const memory = await loadMemoryContext(db, business.id);
+  const memorySignature = memoryFactValue(memory, MEMORY_FACT_KEYS.signature);
   const candidates = [
+    ...(memorySignature ? [memorySignature] : []),
     resolveSignOffText(settings, business.name),
     business.name,
     ...(typeof attrs.sign_off_resolved_to === "string" ? [attrs.sign_off_resolved_to] : []),

@@ -9,6 +9,7 @@
   "scripts": {
     "migrate": "tsx scripts/migrate.ts",
     "seed": "tsx seed/index.ts",
+    "seed:memory": "tsx scripts/seed-memory.ts",
     "verify": "tsx scripts/verify.ts",
     "check-local": "tsx scripts/check-local.ts",
     "tick": "tsx scripts/tick.ts",

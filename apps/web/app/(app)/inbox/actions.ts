@@ -10,6 +10,9 @@ import {
   emitEvent,
   rejectCommunication,
   withdrawWorkflowDefinition,
+  applyCorrection,
+  recordRejectionObservation,
+  rejectCorrection,
   DRAFTING_EVENT_KINDS,
   SEND_EVENT_KINDS,
 } from "@rooshni/db";
@@ -83,6 +86,16 @@ async function recordRejectionFeedback(
         entity_type: "draft_feedback",
         entity_id: feedback.id,
         payload: { kind: "rejection", communication_id: comm.id, reason },
+      });
+      // Session 32 (D181): the rejection reason surfaces in Light's Memory
+      // as an observation, its provenance the feedback row — promotable to
+      // a standing instruction by a human hand, one click, there.
+      await recordRejectionObservation(db, {
+        business_id: businessId,
+        actor_id: actorId,
+        communication_id: comm.id,
+        draft_feedback_id: feedback.id,
+        reason,
       });
     }
   } catch (err) {
@@ -479,6 +492,65 @@ export async function withdrawDefinitionAction(
 
   revalidatePath("/", "layout");
   return { error: null, withdrawn: true };
+}
+
+export interface CorrectionDecisionState {
+  error: string | null;
+  decided?: "applied" | "rejected";
+}
+
+/**
+ * Session 32 (D181a, founder-ruled Q2) — the stamp on a ripple-sweep
+ * correction. Approval APPLIES the change: a template re-issue (D102 lane,
+ * new version behind the 0023 supersede guard) or a knowledge-entry update
+ * (the existing version+event door). The correction item is published by
+ * the approver — the 0009 human-publish gate is the stamp; nothing ever
+ * auto-applies. All mechanics live in @rooshni/db (applyCorrection), where
+ * the harness proves them.
+ */
+export async function approveCorrectionAction(
+  _prev: CorrectionDecisionState,
+  formData: FormData
+): Promise<CorrectionDecisionState> {
+  const correctionId = String(formData.get("correctionId") ?? "");
+  if (!isUuid(correctionId)) return { error: "No correction was selected." };
+
+  const { db, business, actor } = await getAppContext();
+  try {
+    await applyCorrection(db, {
+      business_id: business.id,
+      approver_actor_id: actor.id,
+      correction_id: correctionId,
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "The correction could not be applied." };
+  }
+  revalidatePath("/", "layout");
+  return { error: null, decided: "applied" };
+}
+
+export async function rejectCorrectionAction(
+  _prev: CorrectionDecisionState,
+  formData: FormData
+): Promise<CorrectionDecisionState> {
+  const correctionId = String(formData.get("correctionId") ?? "");
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!isUuid(correctionId)) return { error: "No correction was selected." };
+  if (!reason) return { error: "A reason is required — it is recorded on the correction and the ledger." };
+
+  const { db, business, actor } = await getAppContext();
+  try {
+    await rejectCorrection(db, {
+      business_id: business.id,
+      actor_id: actor.id,
+      correction_id: correctionId,
+      reason,
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "The rejection failed." };
+  }
+  revalidatePath("/", "layout");
+  return { error: null, decided: "rejected" };
 }
 
 export interface EditDraftState {

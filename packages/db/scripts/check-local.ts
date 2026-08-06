@@ -41,13 +41,26 @@ import {
   isTransientProviderError,
   leadTextFromAnswers,
   matchRoutes,
+  memoryFactLines,
+  memoryInstructionLines,
   selectKnowledgeEntries,
   PermanentGenerationError,
   RegisterBreachError,
+  REGISTER_PUNCTUATION_LINE,
   type ClassifyFn,
   type GenerateFn,
   type KnowledgeEntry,
 } from "../src/drafting";
+import {
+  memoryFactValue,
+  memoryInstructionTokens,
+  planFactSweep,
+  resolveBookingUrlWithMemory,
+  resolveSignOffWithMemory,
+  MEMORY_INSTRUCTION_TOKEN_CEILING,
+  type MemoryContext,
+  type SweepCarrier,
+} from "../src/memory";
 import { resolveEscalation, LIGHT_MODEL_FLOOR, LIGHT_MODEL_ESCALATION, DRAFT_CONTEXT_BUDGETS } from "../src/model-router";
 import {
   assembleReplyPrompt,
@@ -2972,6 +2985,19 @@ async function main() {
   });
 
   // --- PR-D/E: the reply register and the cache-marked stable prefix ------
+  // JUDGMENT (Session 32, the Q3 ruling applied to the harness): the fee
+  // and punctuation belt lines now ride from Light's Memory, so the s18/s31
+  // compose fixtures carry the SEEDED memory (exactly what memory-seed.ts
+  // writes) — the existing prompt pins then prove the memory-riding path
+  // the product actually runs, assertions unchanged. Listed at close.
+  const seededMemory: MemoryContext = {
+    instructions: [
+      { id: "mem-fees", body: FEE_PROHIBITION_LINE.replace(/^-\s*/, "") },
+      { id: "mem-register", body: REGISTER_PUNCTUATION_LINE.replace(/^-\s*/, "") },
+    ],
+    facts: [],
+  };
+
   const s16ReplyInput: ComposeReplyInput = {
     business_name: "Test Firm",
     sign_off: "Test Firm",
@@ -2991,6 +3017,7 @@ async function main() {
       { role: "client", body: "Thanks — how much does a spouse visa application cost?", at: "2026-08-01T10:00:00Z", channel: "email" },
     ],
     new_inbound_count: 1,
+    memory: seededMemory,
   };
 
   await expectOk("the reply prompt carries the register laws, the transcript, and a CACHE-MARKED stable prefix", async () => {
@@ -3087,6 +3114,8 @@ async function main() {
     channel: "email", task, enquiry_title: "Amina Khan — enquiry", stage_label: "New", source: "meta",
     form_answers: [{ name: "s", label: "Situation", value: "General question" }],
     no_go_rules: [], retrieval: { entries: [], route_matches: [] },
+    // Session 32 (D181): the belt lines ride from seeded memory.
+    memory: seededMemory,
   });
 
   await expectOk("both generation prompts instruct commas and full stops, never em or en dashes", async () => {
@@ -7373,6 +7402,441 @@ async function main() {
     if (rankGuideCandidates(guides, []).length !== 0) throw new Error("an unresolved route still ranked a booklet");
     if (selectKnowledgeEntries(pack, "help me with my visa please", null).entries.length !== 0) {
       throw new Error("an unresolved route still pulled route-specific copy");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 32 — Light's Memory (D181): memory entries, the 800-token
+  // ceiling, human-only instructions, the append-only supersede chain, the
+  // ripple sweep's pure planner, and the memory-riding compose paths.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 32 — Light's Memory (D181):");
+
+  await expectOk("a memory entry's content is append-only — an edit supersedes, never overwrites; deletion does not exist", async () => {
+    const row = await db.query<{ id: string }>(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body)
+       values ($1, $2, 'observation', 'Test observation', 'Clients prefer short replies.') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    const id = row.rows[0]!.id;
+    let threw = false;
+    try {
+      await db.query(`update public.memory_entries set body = 'rewritten' where id = $1`, [id]);
+    } catch (err) {
+      threw = /append-only/.test(String(err));
+    }
+    if (!threw) throw new Error("a body rewrite was not refused");
+    try {
+      await db.query(`delete from public.memory_entries where id = $1`, [id]);
+      throw new Error("DELETE was not refused");
+    } catch (err) {
+      if (!/append-only/.test(String(err))) throw err;
+    }
+    const still = await db.query<{ body: string }>(`select body from public.memory_entries where id = $1`, [id]);
+    if (still.rows[0]!.body !== "Clients prefer short replies.") throw new Error("the entry changed");
+  });
+
+  await expectOk("the supersede transition is the ONE lawful update — chained once, never rewritten, never reactivated", async () => {
+    const e1 = await db.query<{ id: string }>(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body, attributes)
+       values ($1, $2, 'fact', 'Test fact', 'old value', '{"fact_key":"s32_chain"}'::jsonb) returning id`,
+      [f.business_id, f.human_id]
+    );
+    const e2 = await db.query<{ id: string }>(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body, attributes)
+       values ($1, $2, 'fact', 'Test fact', 'new value', '{"fact_key":"s32_chain_next"}'::jsonb) returning id`,
+      [f.business_id, f.human_id]
+    );
+    // The lawful flip: active -> false with the successor named, once.
+    await db.query(
+      `update public.memory_entries set active = false, superseded_by_entry_id = $2 where id = $1`,
+      [e1.rows[0]!.id, e2.rows[0]!.id]
+    );
+    for (const [label, sql, pattern] of [
+      // Re-chaining means pointing at a DIFFERENT successor — the chain
+      // never rewrites once set (same-value writes are no-ops).
+      ["re-chain", `update public.memory_entries set superseded_by_entry_id = '${e1.rows[0]!.id}' where id = '${e1.rows[0]!.id}'`, /already superseded/],
+      ["reactivate", `update public.memory_entries set active = true where id = '${e1.rows[0]!.id}'`, /cannot reactivate/],
+    ] as const) {
+      try {
+        await db.query(sql);
+        throw new Error(`${label} was not refused`);
+      } catch (err) {
+        if (!pattern.test(String(err))) throw new Error(`${label}: wrong error: ${err}`);
+      }
+    }
+  });
+
+  await expectOk("Light never self-writes an instruction — the database refuses a non-human author; a human hand passes", async () => {
+    try {
+      await db.query(
+        `insert into public.memory_entries (business_id, created_by, kind, title, body)
+         values ($1, $2, 'instruction', 'Self-written', 'I will do as I please.')`,
+        [f.business_id, f.agent_id]
+      );
+      throw new Error("an agent-authored instruction was not refused");
+    } catch (err) {
+      if (!/HUMAN hand/.test(String(err))) throw err;
+    }
+    const none = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.memory_entries where business_id = $1 and title = 'Self-written'`,
+      [f.business_id]
+    );
+    if (none.rows[0]!.n !== 0) throw new Error("the refused instruction landed anyway");
+    await db.query(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body, attributes)
+       values ($1, $2, 'instruction', 'Human-written', 'Always be brief.', '{"instruction_key":"s32_brief"}'::jsonb)`,
+      [f.business_id, f.human_id]
+    );
+  });
+
+  await expectOk("the ceiling refuses at 801, NAMING the count — and 800 exactly still passes (D181)", async () => {
+    // 'Always be brief.' above = 4 tokens. Fill to 700 with one big body,
+    // then attempt the token that crosses.
+    const big = "x".repeat(4 * 696); // 696 tokens -> total 700
+    const bigRow = await db.query<{ id: string }>(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body)
+       values ($1, $2, 'instruction', 'Big', $3) returning id`,
+      [f.business_id, f.human_id, big]
+    );
+    try {
+      await db.query(
+        `insert into public.memory_entries (business_id, created_by, kind, title, body)
+         values ($1, $2, 'instruction', 'One over', $3)`,
+        [f.business_id, f.human_id, "y".repeat(4 * 101)] // 101 -> 801
+      );
+      throw new Error("the 801st token was not refused");
+    } catch (err) {
+      const message = String(err);
+      if (!/801 tokens/.test(message) || !/ceiling is 800/.test(message)) {
+        throw new Error(`the refusal did not name the count: ${message}`);
+      }
+    }
+    const exact = await db.query<{ id: string }>(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body)
+       values ($1, $2, 'instruction', 'Exactly at cap', $3) returning id`,
+      [f.business_id, f.human_id, "z".repeat(4 * 100)] // 100 -> 800 exactly
+    );
+    // The TS mirror agrees with the trigger's arithmetic, token for token.
+    if (memoryInstructionTokens([big, "z".repeat(4 * 100), "Always be brief."]) !== 800) {
+      throw new Error("estimateTokens and the trigger disagree");
+    }
+    if (MEMORY_INSTRUCTION_TOKEN_CEILING !== 800) throw new Error("the ceiling constant moved off the ruled 800");
+    // Leave the field clean for later smokes: retire the fillers.
+    await db.query(`update public.memory_entries set active = false where id = $1`, [bigRow.rows[0]!.id]);
+    await db.query(`update public.memory_entries set active = false where id = $1`, [exact.rows[0]!.id]);
+  });
+
+  await expectOk("one ACTIVE fact per key per business — two homes are the drift the laws forbid; a retired key can be re-added", async () => {
+    await db.query(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body, attributes)
+       values ($1, $2, 'fact', 'Booking link', 'https://xlaw.example/book', '{"fact_key":"s32_booking"}'::jsonb)`,
+      [f.business_id, f.human_id]
+    );
+    try {
+      await db.query(
+        `insert into public.memory_entries (business_id, created_by, kind, title, body, attributes)
+         values ($1, $2, 'fact', 'Booking link', 'https://elsewhere.example', '{"fact_key":"s32_booking"}'::jsonb)`,
+        [f.business_id, f.human_id]
+      );
+      throw new Error("a second active fact under the same key was not refused");
+    } catch (err) {
+      if (!/duplicate|unique/i.test(String(err))) throw err;
+    }
+    await db.query(
+      `update public.memory_entries set active = false
+       where business_id = $1 and attributes ->> 'fact_key' = 's32_booking'`,
+      [f.business_id]
+    );
+    await db.query(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body, attributes)
+       values ($1, $2, 'fact', 'Booking link', 'https://new.example/book', '{"fact_key":"s32_booking"}'::jsonb)`,
+      [f.business_id, f.human_id]
+    );
+  });
+
+  await expectOk("cross-tenant invisibility: a member of business A sees zero memory of business B; users hold no DELETE", async () => {
+    const other = await db.query<{ business_id: string }>(
+      `with acc as (
+        insert into public.accounts (name, signup_business_name, signup_email) values ('Other Memory Firm', 'Other Memory Firm', 'other-mem@example.test') returning id
+      ), biz as (
+        insert into public.businesses (account_id, name) select id, 'Other Memory Firm' from acc returning id, account_id
+      ), actor as (
+        insert into public.actors (account_id, actor_type, display_name) select account_id, 'human', 'Other Human' from biz returning id
+      )
+      select (select id from biz) as business_id, (select id from actor) as actor_id`
+    );
+    await db.query(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body)
+       values ($1, (select id from public.actors where account_id = (select account_id from public.businesses where id = $1) limit 1), 'observation', 'Their secret', 'Other firm memory')`,
+      [other.rows[0]!.business_id]
+    );
+    await db.exec(`set role authenticated`);
+    await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+    const seen = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.memory_entries where business_id = $1`,
+      [other.rows[0]!.business_id]
+    );
+    if (seen.rows[0]!.n !== 0) throw new Error("another business's memory is visible");
+    const mine = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.memory_entries where business_id = $1`,
+      [f.business_id]
+    );
+    if (mine.rows[0]!.n === 0) throw new Error("the member cannot read their own business's memory");
+    try {
+      await db.query(`delete from public.memory_entries where business_id = $1`, [f.business_id]);
+      throw new Error("a user DELETE was not refused");
+    } catch (err) {
+      if (!/permission denied|append-only/.test(String(err))) throw err;
+    }
+    await db.exec(`reset role`);
+  });
+
+  await expectOk("an instruction edit changes the NEXT draft, the entry named on the credit line (both compose paths)", async () => {
+    let sawSystem = "";
+    const fake: GenerateFn = async (request) => {
+      sawSystem = request.system;
+      return {
+        subject: null,
+        body: "Hello Amina, thank you for your message. We can help with that.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    const v1: MemoryContext = {
+      instructions: [...seededMemory.instructions, { id: "mem-wa-1", body: "Always mention free parking." }],
+      facts: [],
+    };
+    const before = await composeDraft(fake, { ...s18Input("intro"), memory: v1 });
+    if (!sawSystem.includes("Always mention free parking.")) throw new Error("the instruction did not ride the draft");
+    if (!before.credit_line.memory_entry_ids.includes("mem-wa-1")) {
+      throw new Error("the credit line does not name the riding entry");
+    }
+    // The edit: a superseding entry (new id, new wording) — the next draft
+    // obeys the successor and names IT, never the predecessor.
+    const v2: MemoryContext = {
+      instructions: [
+        ...seededMemory.instructions,
+        { id: "mem-wa-2", body: "Always offer WhatsApp as an alternative way to continue the conversation." },
+      ],
+      facts: [],
+    };
+    const after = await composeDraft(fake, { ...s18Input("intro"), memory: v2 });
+    if (!sawSystem.includes("Always offer WhatsApp as an alternative")) throw new Error("the edited instruction did not ride");
+    if (sawSystem.includes("Always mention free parking.")) throw new Error("the superseded wording still rides");
+    if (!after.credit_line.memory_entry_ids.includes("mem-wa-2") || after.credit_line.memory_entry_ids.includes("mem-wa-1")) {
+      throw new Error("the credit line does not name the successor by id");
+    }
+    // The reply path carries instructions in the CACHED laws block.
+    const { systemBlocks } = assembleReplyPrompt({ ...s16ReplyInput, memory: v2 });
+    if (!systemBlocks[0]!.text.includes("Always offer WhatsApp as an alternative")) {
+      throw new Error("the reply path lost the instruction");
+    }
+  });
+
+  await expectOk("facts ride both compose paths, stated exactly, named on the credit line; empty memory rides nothing", async () => {
+    let sawSystem = "";
+    const fake: GenerateFn = async (request) => {
+      sawSystem = request.system;
+      return {
+        subject: null,
+        body: "Hello Amina, thank you for your message. We can help with that.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    const withFacts: MemoryContext = {
+      instructions: seededMemory.instructions,
+      facts: [{ id: "mem-hours", key: "opening_hours", title: "Opening hours", body: "09:00 to 17:00 (Europe/London)" }],
+    };
+    const composed = await composeDraft(fake, { ...s18Input("intro"), memory: withFacts });
+    if (!sawSystem.includes("Opening hours: 09:00 to 17:00 (Europe/London)")) {
+      throw new Error("the fact did not ride the draft");
+    }
+    if (!composed.credit_line.memory_entry_ids.includes("mem-hours")) {
+      throw new Error("the fact is not named on the credit line");
+    }
+    const { systemBlocks } = assembleReplyPrompt({ ...s16ReplyInput, memory: withFacts });
+    if (!systemBlocks[1]!.text.includes("Opening hours: 09:00 to 17:00")) {
+      throw new Error("the reply path's knowledge block lost the facts");
+    }
+    if (memoryInstructionLines(null).length !== 0 || memoryFactLines({ instructions: [], facts: [] }).length !== 0) {
+      throw new Error("empty memory added prompt lines");
+    }
+  });
+
+  await expectOk("Memory is the single home (Q1 option A): sign-off and booking link resolve memory-first, settings only as the transitional fallback", async () => {
+    const memory: MemoryContext = {
+      instructions: [],
+      facts: [
+        { id: "sig", key: "signature", title: "Signature", body: "X Law Client Team" },
+        { id: "book", key: "booking_link", title: "Booking link", body: "https://xlaw.example/book-now" },
+      ],
+    };
+    const settings = { email_sign_off: "Old Sign-off", booking_url: "https://old.example/book" };
+    if (resolveSignOffWithMemory(memory, settings, "X Law") !== "X Law Client Team") {
+      throw new Error("the memory signature did not win");
+    }
+    if (resolveSignOffWithMemory({ instructions: [], facts: [] }, settings, "X Law") !== "Old Sign-off") {
+      throw new Error("the transitional settings fallback is dead before the seed");
+    }
+    if (resolveSignOffWithMemory(null, {}, "X Law") !== "X Law") throw new Error("the firm-name default fell");
+    if (resolveBookingUrlWithMemory(memory, settings) !== "https://xlaw.example/book-now") {
+      throw new Error("the memory booking link did not win");
+    }
+    const badMemory: MemoryContext = {
+      instructions: [],
+      facts: [{ id: "book", key: "booking_link", title: "Booking link", body: "not a url" }],
+    };
+    if (resolveBookingUrlWithMemory(badMemory, settings) !== "https://old.example/book") {
+      throw new Error("an invalid memory value did not fall through honestly");
+    }
+    if (resolveBookingUrlWithMemory(null, {}) !== null) throw new Error("no home still produced a link");
+    if (memoryFactValue(memory, "signature") !== "X Law Client Team") throw new Error("memoryFactValue misread");
+  });
+
+  await expectOk("the ripple sweep plans the DoD walk, pure: a correction per in-platform carrier, a task per external surface, fail-loud on not-found, website deferred — deterministic substitution only", async () => {
+    const carriers: SweepCarrier[] = [
+      {
+        decl: { surface: "knowledge_entry", label: "Consultation booking policy", ref: "ci-1", in_platform: true },
+        entry: {
+          id: "ci-1",
+          title: "Consultation booking policy",
+          version: 3,
+          body: [
+            { type: "paragraph", text: "We are open 09:00 to 17:00 (Europe/London)." },
+            { type: "paragraph", text: "Book through the website." },
+          ],
+        },
+      },
+      {
+        decl: { surface: "message_template", label: "Template: intro_email", ref: "intro_email", in_platform: true },
+        template: {
+          id: "mt-1",
+          key: "intro_email",
+          channel: "email",
+          subject: null,
+          body: "Hello {{first_name}}, our office hours are 09:00 to 17:00 (Europe/London).",
+          version: 2,
+        },
+      },
+      { decl: { surface: "google_business_profile", label: "Google Business Profile", ref: null, in_platform: false } },
+      {
+        decl: { surface: "knowledge_entry", label: "Spouse route", ref: "ci-2", in_platform: true },
+        entry: { id: "ci-2", title: "Spouse route", version: 1, body: [{ type: "paragraph", text: "No hours here." }] },
+      },
+      { decl: { surface: "website", label: "Website", ref: null, in_platform: true } },
+    ];
+    const plan = planFactSweep({
+      fact_title: "Opening hours",
+      old_value: "09:00 to 17:00 (Europe/London)",
+      new_value: "10:00 to 16:00 (Europe/London)",
+      carriers,
+    });
+    if (plan.corrections.length !== 2) throw new Error(`expected 2 corrections, got ${plan.corrections.length}`);
+    const knowledge = plan.corrections.find((c) => c.content_type === "knowledge_entry_correction")!;
+    if (!/10:00 to 16:00/.test(knowledge.body_after_text) || /09:00 to 17:00/.test(knowledge.body_after_text)) {
+      throw new Error("the knowledge substitution is not deterministic old->new");
+    }
+    const blocksAfter = knowledge.correction.blocks_after as Array<{ text: string }>;
+    if (blocksAfter.length !== 2 || blocksAfter[1]!.text !== "Book through the website.") {
+      throw new Error("the entry's block shape did not survive the correction");
+    }
+    const template = plan.corrections.find((c) => c.content_type === "template_correction")!;
+    if (!/\{\{first_name\}\}, our office hours are 10:00 to 16:00/.test(String(template.correction.body_after))) {
+      throw new Error("the template substitution went wrong");
+    }
+    if (plan.tasks.length !== 2) throw new Error(`expected 2 tasks, got ${plan.tasks.length}`);
+    const external = plan.tasks.find((t) => t.reason === "external")!;
+    if (!/Google Business Profile/.test(external.title) || !/owed by hand/.test(external.description)) {
+      throw new Error("the external task does not name the owed change");
+    }
+    const notFound = plan.tasks.find((t) => t.reason === "value_not_found")!;
+    if (!/Spouse route/.test(notFound.title) || !/not found verbatim/.test(notFound.description)) {
+      throw new Error("the not-found surface did not fail loud");
+    }
+    if (plan.deferred.length !== 1 || plan.deferred[0] !== "Website") throw new Error("the website surface did not defer");
+    // No change, no sweep; a first value (no old) sweeps nothing.
+    if (planFactSweep({ fact_title: "x", old_value: "same", new_value: "same", carriers }).corrections.length !== 0) {
+      throw new Error("an unchanged value swept");
+    }
+    if (planFactSweep({ fact_title: "x", old_value: "", new_value: "fresh", carriers }).corrections.length !== 0) {
+      throw new Error("a first value swept");
+    }
+  });
+
+  await expectOk("nothing auto-applies: a sweep correction is born pending_approval and only a HUMAN publisher can stamp it; retrieval never reads it", async () => {
+    const correction = await db.query<{ id: string }>(
+      `insert into public.content_items (business_id, created_by, content_type, title, slug, body, visibility, state, attributes)
+       values ($1, $2, 'template_correction', 'Correction: intro_email — Opening hours', 's32-corr-1', '[]'::jsonb, 'team', 'pending_approval',
+               '{"correction":{"surface":"message_template"}}'::jsonb) returning id`,
+      [f.business_id, f.agent_id]
+    );
+    try {
+      await db.query(
+        `update public.content_items set state = 'published', published_by_actor_id = $2, published_at = now() where id = $1`,
+        [correction.rows[0]!.id, f.agent_id]
+      );
+      throw new Error("an agent stamped a correction");
+    } catch (err) {
+      if (!/HUMAN/.test(String(err))) throw err;
+    }
+    const pending = await db.query<{ state: string }>(`select state from public.content_items where id = $1`, [
+      correction.rows[0]!.id,
+    ]);
+    if (pending.rows[0]!.state !== "pending_approval") throw new Error("the refused stamp changed the state");
+    // The knowledge pack is untouched by memory writes: the retrieval
+    // filter (0024) reads content_type 'knowledge_entry' only — the
+    // correction row is invisible to it.
+    const retrievable = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.content_items
+       where business_id = $1 and content_type = 'knowledge_entry' and state = 'published' and archived_at is null
+         and id = $2`,
+      [f.business_id, correction.rows[0]!.id]
+    );
+    if (retrievable.rows[0]!.n !== 0) throw new Error("a correction row is visible to retrieval");
+    // The human hand passes — the stamp is the 0009 gate working.
+    await db.query(
+      `update public.content_items set state = 'published', published_by_actor_id = $2, published_at = now() where id = $1`,
+      [correction.rows[0]!.id, f.human_id]
+    );
+  });
+
+  await expectOk("the wiring stands (source-pinned): rejections write observations; a fact edit sweeps; promotion is one evented human act; the seed writes through the door", async () => {
+    const inboxSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/actions.ts"),
+      "utf8"
+    );
+    if (!inboxSource.includes("recordRejectionObservation(db, {")) {
+      throw new Error("a rejection no longer lands in Memory as an observation");
+    }
+    const memoryActionsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/memory/actions.ts"),
+      "utf8"
+    );
+    for (const marker of ["sweepFactEdit(db, {", "promoteObservation(db, {", "supersedeMemoryEntry(db, {"]) {
+      if (!memoryActionsSource.includes(marker)) throw new Error(`the memory surface lost its door: ${marker}`);
+    }
+    const memorySource = readFileSync(resolve(import.meta.dirname, "../src/memory.ts"), "utf8");
+    for (const marker of [
+      "MEMORY_EVENT_KINDS.factRippleSwept",
+      "MEMORY_EVENT_KINDS.observationPromoted",
+      "MEMORY_EVENT_KINDS.entrySuperseded",
+      'state: "pending_approval"',
+    ]) {
+      if (!memorySource.includes(marker)) throw new Error(`the memory module lost its wiring: ${marker}`);
+    }
+    const seedSource = readFileSync(resolve(import.meta.dirname, "../src/memory-seed.ts"), "utf8");
+    for (const marker of ["createMemoryEntry(", "FEE_PROHIBITION_LINE", "REGISTER_PUNCTUATION_LINE"]) {
+      if (!seedSource.includes(marker)) throw new Error(`the seed no longer writes the ruled truth: ${marker}`);
+    }
+    // The settings faces write through the memory door (Q1 option A).
+    const settingsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/actions.ts"),
+      "utf8"
+    );
+    if (!settingsSource.includes("setMemoryFact(db, {")) {
+      throw new Error("a Settings face stopped writing through the memory door");
     }
   });
 
