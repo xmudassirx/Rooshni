@@ -77,10 +77,10 @@ export interface ReissueCandidate {
 }
 
 /** The chore's next move for one business (Session 30, WS B3). */
-export type ReissueAction =
+export type ReissueAction<T extends ReissueCandidate = ReissueCandidate> =
   | { action: "skip"; reason: string }
-  | { action: "stamp"; target: ReissueCandidate; active: ReissueCandidate }
-  | { action: "issue"; version: number; active: ReissueCandidate };
+  | { action: "stamp"; target: T; active: T }
+  | { action: "issue"; version: number; active: T };
 
 /**
  * The issue-vs-stamp decision (Session 30, WS B3 — the v4/v5 incident,
@@ -90,10 +90,10 @@ export type ReissueAction =
  * only a live staging counts. Extracted here (the transformation-module
  * precedent above) so the chore and the harness prove the same decision.
  */
-export function chooseReissueAction(
-  versions: ReissueCandidate[],
+export function chooseReissueAction<T extends ReissueCandidate>(
+  versions: T[],
   stepsByDefinitionId: Map<string, LadderStep[]>
-): ReissueAction {
+): ReissueAction<T> {
   const active = versions.find((v) => v.status === "active");
   if (!active) return { action: "skip", reason: "no ACTIVE version" };
   if (carriesRuledLadder(stepsByDefinitionId.get(active.id) ?? [])) {

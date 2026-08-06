@@ -5,6 +5,7 @@ import { Paperclip } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
+import { buildTimeline, type TimelineItem as LibTimelineItem } from "@/lib/enquiry-timeline";
 import { formatGBP, formatWhen } from "@/lib/format";
 import { describeEvent } from "@/lib/record-language";
 import {
@@ -12,13 +13,13 @@ import {
   getViewerStampAuthority,
   type ChannelConsent,
   type EnquiryComm,
-  type EnquiryDetail,
   type EnquiryStageMove,
   type RecordEvent,
 } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
 import { RetrySendControl } from "../../inbox/retry-send-control";
 import { RouteReclassifyControl } from "../route-control";
+import { StageMoveControl } from "../stage-control";
 
 export const dynamic = "force-dynamic";
 
@@ -29,42 +30,11 @@ export const dynamic = "force-dynamic";
  * lives in the Approval Inbox; pending drafts here link across to it.
  */
 
-type TimelineItem =
-  | { kind: "event"; at: string; event: RecordEvent }
-  | { kind: "stage"; at: string; move: EnquiryStageMove; label: string }
-  | { kind: "comm"; at: string; comm: EnquiryComm };
-
-// JUDGMENT: the ledger's communication.* entries and the opening stage_history
-// row are not repeated as timeline rows — the message cards (with their stamp
-// and rejection detail) and engagement.created already tell those moments, and
-// a timeline that says everything twice reads as noise, not truth.
-function buildTimeline(detail: EnquiryDetail): TimelineItem[] {
-  const stageLabels = new Map(detail.stages.map((s) => [s.id, s.label]));
-  const items: TimelineItem[] = [];
-
-  for (const event of detail.events) {
-    // The communication cards below tell the comms story with the full draft;
-    // repeating their ledger entries here would say everything twice.
-    if (event.action.startsWith("communication.")) continue;
-    items.push({ kind: "event", at: event.occurredAt, event });
-  }
-  for (const move of detail.stageHistory) {
-    // The opening move (from nowhere) is already told by engagement.created.
-    if (!move.fromStageId) continue;
-    items.push({
-      kind: "stage",
-      at: move.movedAt,
-      move,
-      label: stageLabels.get(move.toStageId) ?? "another stage",
-    });
-  }
-  for (const comm of detail.comms) {
-    if (comm.channel === "internal_note") continue;
-    items.push({ kind: "comm", at: comm.occurredAt, comm });
-  }
-
-  return items.sort((a, b) => a.at.localeCompare(b.at));
-}
+/* Session 30 (177e): the timeline's merge-and-order lives in the pure
+ * lib/enquiry-timeline module — NEWEST FIRST, every kind (events, stage
+ * moves, message cards and their pins) in the one sort — so the harness
+ * proves the ordering law the page renders. */
+type TimelineItem = LibTimelineItem<RecordEvent, EnquiryStageMove, EnquiryComm>;
 
 function Pin({ tone }: { tone: "neutral" | "gold" | "red" | "green" }) {
   return (
@@ -201,10 +171,14 @@ function CommCard({
           ))}
         </div>
         <div className="whitespace-pre-wrap text-ink">{comm.body}</div>
+        {/* Session 30 (177b): rejection is the stamp withheld and wears the
+            stamp's colour — the ruled grammar, the fail-loud red rule. */}
         {comm.rejection ? (
-          <div className="mt-2 border-t border-dashed border-rule pt-2 text-[12px] text-stamp">
-            Rejected by {comm.rejection.byName}, {formatWhen(comm.rejection.at)} — “
-            {comm.rejection.reason}”
+          <div className="mt-2 border-t border-dashed border-stamp/40 pt-2 text-[12px] text-stamp">
+            Rejected by {comm.rejection.byName} · {comm.rejection.reason}
+            <span className="mt-0.5 block font-mono text-[10px] tracking-wide text-ink-faint">
+              {formatWhen(comm.rejection.at)}
+            </span>
           </div>
         ) : null}
         {failed ? (
@@ -521,6 +495,30 @@ export default async function EnquiryDetailPage({
                   sub={p.type === "organisation" ? "organisation" : undefined}
                 />
               ))}
+              {/* Session 30 (177f): the stage is human-movable — the
+                  installed template's stages plus its terminal states; the
+                  0015/0016 doors enforce access, the act is evented, and a
+                  human move is a fact the workflow respects. */}
+              <KvRow
+                k="Stage"
+                v={
+                  <>
+                    {currentStage?.label ?? "—"}
+                    <span className="ml-2 inline-block">
+                      <StageMoveControl
+                        engagementId={detail.id}
+                        currentStageId={detail.stageId}
+                        stages={detail.stages}
+                      />
+                    </span>
+                  </>
+                }
+                sub={
+                  currentStage?.isTerminal
+                    ? `terminal — ${currentStage.terminalOutcome ?? "closed"}`
+                    : undefined
+                }
+              />
               {/* Session 27 (D161c): the route field, editable by any team
                   member with enquiry access — the 0042 door enforces the
                   ladder; a human-set route is final against machine writes. */}
