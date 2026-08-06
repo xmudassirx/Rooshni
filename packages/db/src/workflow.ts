@@ -1456,6 +1456,9 @@ async function executeDraftComm(
           context_tokens: composed.credit_line.context_tokens,
           budget_tokens: composed.credit_line.budget_tokens,
           knowledge_entry_ids: composed.credit_line.knowledge_entry_ids,
+          // Session 32 (D181): WHICH memory entries rode — The Record
+          // answers "why did Light say that" by name.
+          memory_entry_ids: composed.credit_line.memory_entry_ids,
           compliance: check.result,
           step_key: step.key,
         },

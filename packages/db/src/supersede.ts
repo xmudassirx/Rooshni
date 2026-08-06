@@ -704,6 +704,8 @@ async function processSettledThread(
       context_tokens: composed.credit_line.context_tokens,
       budget_tokens: composed.credit_line.budget_tokens,
       knowledge_entry_ids: composed.credit_line.knowledge_entry_ids,
+      // Session 32 (D181): the riding memory entries, by id, on The Record.
+      memory_entry_ids: composed.credit_line.memory_entry_ids,
       compliance: check.result,
       task: "reply",
       ...(composed.credit_line.cache

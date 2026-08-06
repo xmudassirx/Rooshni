@@ -34,6 +34,8 @@ export interface CardCreditLine {
   budgetTokens: number;
   attempts: number;
   packEntries: { id: string; title: string }[];
+  /** Session 32 (D181) — the memory entries that rode, by name. */
+  memoryEntries: { id: string; title: string }[];
   /** Session 16 (PR-E) — provider cache figures, when the call was cached. */
   cache: { readTokens: number; writtenTokens: number; fallbackReason: string | null } | null;
 }
@@ -211,6 +213,9 @@ function CreditLine({ credit }: { credit: CardCreditLine }) {
           }`
         : ""}
       {` · pack: ${credit.packEntries.length ? credit.packEntries.map((e) => e.title).join(", ") : "no entries used"}`}
+      {/* Session 32 (D181): WHICH memory entries rode, by name — "why did
+          Light say that" is answerable at the moment of stamping. */}
+      {` · memory: ${credit.memoryEntries.length ? credit.memoryEntries.map((e) => e.title).join(", ") : "no entries rode"}`}
     </div>
   );
 }

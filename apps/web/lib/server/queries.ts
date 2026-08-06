@@ -462,6 +462,9 @@ export interface CommunicationCreditLine {
   budgetTokens: number;
   attempts: number;
   packEntries: { id: string; title: string }[];
+  /** Session 32 (D181) — WHICH memory entries rode the composition, by
+   * name: The Record and the stamp view answer "why did Light say that". */
+  memoryEntries: { id: string; title: string }[];
   /** Session 16 (PR-E) — cache read/written tokens from the provider's usage
    * fields; the fallback reason is recorded when caching was refused. */
   cache: { readTokens: number; writtenTokens: number; fallbackReason: string | null } | null;
@@ -664,6 +667,7 @@ export async function getCommunicationDetail(
         budget_tokens?: unknown;
         attempts?: unknown;
         knowledge_entry_ids?: unknown;
+        memory_entry_ids?: unknown;
       }
     | undefined;
   if (rawCredit && typeof rawCredit === "object") {
@@ -680,6 +684,20 @@ export async function getCommunicationDetail(
       const titleById = new Map((entries ?? []).map((e) => [e.id as string, e.title as string]));
       packEntries = entryIds.map((entryId) => ({ id: entryId, title: titleById.get(entryId) ?? "entry" }));
     }
+    // Session 32 (D181): the memory entries that rode, by name.
+    const memoryIds = Array.isArray(rawCredit.memory_entry_ids)
+      ? rawCredit.memory_entry_ids.filter((v): v is string => typeof v === "string")
+      : [];
+    let memoryEntries: { id: string; title: string }[] = [];
+    if (memoryIds.length) {
+      const { data: memRows } = await db
+        .from("memory_entries")
+        .select("id, title")
+        .eq("business_id", business.id)
+        .in("id", memoryIds);
+      const memTitleById = new Map((memRows ?? []).map((e) => [e.id as string, e.title as string]));
+      memoryEntries = memoryIds.map((memId) => ({ id: memId, title: memTitleById.get(memId) ?? "entry" }));
+    }
     // Session 16 (PR-E): the cache figures ride the credit line.
     const rawCache = (rawCredit as { cache?: unknown }).cache as
       | { read_tokens?: unknown; written_tokens?: unknown; fallback_reason?: unknown }
@@ -692,6 +710,7 @@ export async function getCommunicationDetail(
       budgetTokens: Number(rawCredit.budget_tokens ?? 0),
       attempts: Number(rawCredit.attempts ?? 1),
       packEntries,
+      memoryEntries,
       cache:
         rawCache && typeof rawCache === "object"
           ? {
