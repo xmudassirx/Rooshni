@@ -90,8 +90,12 @@ function significantWords(text: string): Set<string> {
  * 0042 ladder plus Light's pre-compose read), never on raw text-matching —
  * a null resolved route keeps the draft route-neutral. The deterministic
  * text match (matchRoutes) survives only as an escalation trigger.
- * Session 31 (D179a): published_fees never enters the pack — the model
- * cannot quote what it never sees; fees live on the booking page.
+ * JUDGMENT (Session 31): published_fees never enters the pack — D179a
+ * makes the prohibition absolute, so the model cannot quote what it never
+ * sees; the belt to the screen's braces. The installed no-go rule 3
+ * ("never quotes fees beyond the published consultation fee") now lags
+ * D179a and is definition data behind the pipeline — flagged at close,
+ * not touched. Awaiting sign-off.
  */
 export function selectKnowledgeEntries(
   all: KnowledgeEntry[],
@@ -293,8 +297,11 @@ export class PermanentGenerationError extends Error {}
  * CALLER retries exactly once with the violation fed back into the
  * regeneration prompt (evented), before a second breach stands visible.
  * Carries the failed attempt's provider usage so metering stays honest.
- * Session 31 (D179a): a currency amount in a generated body joins the same
- * lane — the same retry-once contract, the same visible second failure. */
+ * JUDGMENT (Session 31): a currency amount in a generated body (D179a)
+ * joins this same lane — the same retry-once contract, the same visible
+ * second failure — rather than a bare permanent refusal: the founder's
+ * register design already rules the feed-back-and-retry-once shape for a
+ * compliance screen's breach. Awaiting sign-off at close. */
 export class RegisterBreachError extends PermanentGenerationError {
   constructor(
     public readonly breach: "em dash" | "en dash" | "currency amount",
@@ -459,11 +466,13 @@ const FEE_PATTERNS: RegExp[] = [
 
 /**
  * Session 31 (D179a): the currency-amount screen. Returns the matched text
- * (for the named mismatch) or null when the body is clean. Scope is
- * machine-drafted bodies — the same lane as findRegisterBreach; the
+ * (for the named mismatch) or null when the body is clean.
+ * JUDGMENT (Session 31): the runtime screen's scope is GENERATED bodies —
+ * the same lane as findRegisterBreach (the D142 precedent); the
  * founder-authored template wording is protected by the sweep and its
- * harness pin, never screened at runtime (the Meta-registered WhatsApp
- * bodies are not ours to block).
+ * harness pin instead, because a runtime block there could refuse a
+ * Meta-registered WhatsApp body the prompt rules out of scope. Awaiting
+ * sign-off at close.
  */
 export function findFeeBreach(body: string): string | null {
   for (const pattern of FEE_PATTERNS) {

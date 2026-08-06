@@ -104,6 +104,12 @@ export interface ResolveRouteInput {
  * abstained — is evented with its priced spend (D161d's visibility). A
  * refused write (a human or form answer won a race) is the ladder working:
  * the field's standing value is returned.
+ * JUDGMENT (Session 31): when the source is form_default and Light's read
+ * is NOT confident, the form default STANDS as the resolved route — D179c's
+ * route-neutral clause names only "unset", and D161a made the per-form
+ * default a real rung of the ladder (the person chose the route-specific
+ * form). Route-neutral applies only when the field is genuinely null after
+ * resolution. Awaiting sign-off at close.
  */
 export async function resolveEngagementRoute(db: SupabaseClient, input: ResolveRouteInput): Promise<ResolvedRoute> {
   const standing: ResolvedRoute = { route: input.current_route, source: input.current_source };

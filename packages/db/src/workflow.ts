@@ -1075,8 +1075,13 @@ async function executeDraftComm(
         }
 
         // Session 31 (D179b): a nudge composes as a FOLLOW-UP — it receives
-        // what the enquiry has already been sent (any channel: the ladder
-        // crosses them) and never re-introduces the firm.
+        // what the enquiry has already been sent and never re-introduces
+        // the firm.
+        // JUDGMENT (Session 31): D179b's "what the thread has already been
+        // sent" is read ENGAGEMENT-wide, not per comm_thread — the D169
+        // ladder crosses channels (nudge 1 WhatsApp, nudges 2-3 email are
+        // separate per-channel threads), and the person is one person.
+        // Awaiting sign-off at close.
         let priorSends: PriorSend[] | null = null;
         if (!templateKey.startsWith("intro")) {
           const sent = await q<
