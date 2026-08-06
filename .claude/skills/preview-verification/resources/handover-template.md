@@ -16,7 +16,7 @@ hunt for what changed, the handover failed.
       amendments); any structural deviation was a Lane C stop BEFORE building.
 - [ ] Semantic colour invariants hold on every screen: gold = Light acted,
       red = human stamp, green = done; the monospace register face unchanged.
-- [ ] Both themes render correctly — Ledger (shipping default) AND Frost.
+- [ ] All three themes render correctly — Frost (default, decision 62), Ledger AND Mono.
 - [ ] All user-facing strings are British English.
 - [ ] Live data wherever the scope says live data; any stand-in states are
       declared under "Known gaps", not left to be discovered.
