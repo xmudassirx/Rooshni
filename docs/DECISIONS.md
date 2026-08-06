@@ -1970,3 +1970,46 @@ quoted-approval precedent).
      past the cap rather than silently degrading every draft).
      Knowledge packs remain route knowledge; Memory is behaviour
      and facts, beside them.
+
+182. Session 32's Lane B calls, consolidated (provisional — the
+     founder's merge is the stamp, D152/D176 pattern): (a) fact
+     identity rides attributes.fact_key, with ONE ACTIVE fact per key
+     per business enforced by a partial unique index — two active
+     booking-link facts would be two homes, the drift the laws forbid;
+     (b) the supersede performs flip-first (deactivate the predecessor,
+     insert the successor, chain once) because the fact index and the
+     instruction ceiling both count the predecessor while it stands; a
+     failure after the flip leaves the entry retired with its wording
+     in history and the error saying so; reactivation does not exist —
+     restoration is a fresh superseding entry; (c) a rejection
+     observation is authored by the REJECTING HUMAN (the reason is
+     theirs, verbatim) with the draft_feedback row as structured
+     provenance — only instructions are human-gated in the database;
+     (d) promotion SUPERSEDES the observation with the instruction it
+     became, so one chain records the graduation; (e) a sweep
+     correction drafted against version N refuses to apply over any
+     other version (re-issued template, edited entry), both versions
+     named — applying blind would overwrite work the stamp never saw;
+     (f) a declined correction lands content state `unpublished` (no
+     new enum) with the rejection triple recorded and evented, the
+     surface untouched; (g) sweep corrections and tasks are CREATED BY
+     Light (the ruling's own grammar — the inbox card wears the gold
+     drafted-by chip) and tasks are ASSIGNED to the human who edited
+     the fact; declared website surfaces defer visibly on the sweep
+     event, raising nothing; (h) the seed skips any identity key that
+     has EVER existed (a founder's later edit or deactivation is never
+     argued with), reports valueless facts as visible skips, formats
+     opening hours en-dash-free ("09:00 to 17:00 (Europe/London)") so
+     the fact can ride drafts under D142, and seeds hours only when
+     firm-set — the shipped default window is dispatch policy, not a
+     client-facing fact; (i) the Settings faces write memory FIRST and
+     then retire the legacy settings copies on every save (a stale
+     copy would resurface through the transitional fallback); clearing
+     the booking link deactivates its fact; (j) the s18/s31 harness
+     compose fixtures now carry the seeded memory, so the existing
+     D179a/D142 prompt pins prove the memory-riding path the product
+     actually runs; (k) on the Memory surface observations and the
+     Promote act wear GOLD (Light's channel — Light's bookkeeping of
+     human refusals); no stamp lives on that screen, so red would
+     overclaim — sweep corrections take their red-adjacent stamp in
+     the Approval Inbox.

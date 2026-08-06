@@ -2985,10 +2985,11 @@ async function main() {
   });
 
   // --- PR-D/E: the reply register and the cache-marked stable prefix ------
-  // Session 32 (D181, Q3 ruling): the fee and punctuation belt lines ride
-  // from Light's Memory — the compose fixtures carry the SEEDED memory
-  // (exactly what memory-seed.ts writes), so the prompt pins below prove
-  // the memory-riding path the product actually runs.
+  // JUDGMENT (Session 32, the Q3 ruling applied to the harness): the fee
+  // and punctuation belt lines now ride from Light's Memory, so the s18/s31
+  // compose fixtures carry the SEEDED memory (exactly what memory-seed.ts
+  // writes) — the existing prompt pins then prove the memory-riding path
+  // the product actually runs, assertions unchanged. Listed at close.
   const seededMemory: MemoryContext = {
     instructions: [
       { id: "mem-fees", body: FEE_PROHIBITION_LINE.replace(/^-\s*/, "") },

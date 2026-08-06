@@ -241,10 +241,13 @@ export interface SupersedeMemoryEntryInput {
 /**
  * The edit: append-only supersede. The predecessor deactivates, the
  * successor is born, the chain links them, ONE event records the act.
- * Order is flip-first — the active-fact unique index and the instruction
- * ceiling both count the predecessor while it stands; the TS ceiling
- * pre-check below keeps the rare failure-after-flip path honest (the
- * predecessor stays deactivated with its body visible in history).
+ * JUDGMENT (Session 32): the order is flip-first — the active-fact unique
+ * index and the instruction ceiling both count the predecessor while it
+ * stands, so successor-first would refuse every lawful edit; the TS
+ * ceiling pre-check below keeps the rare failure-after-flip path honest
+ * (the predecessor stays deactivated, its wording visible in history, the
+ * error says exactly that). Restoration is a fresh entry — reactivation
+ * does not exist (append-only purity). Listed at close.
  */
 export async function supersedeMemoryEntry(
   db: SupabaseClient,
@@ -454,6 +457,9 @@ export async function setMemoryFact(
  * bookkeeping of what a human hand refused, with the refusal's provenance.
  * Machine-writable (only INSTRUCTIONS are human-gated); promotion is the
  * human act.
+ * JUDGMENT (Session 32): the observation's author is the REJECTING HUMAN —
+ * the reason is theirs, verbatim; the draft_feedback row and communication
+ * id ride attributes as the structured provenance. Listed at close.
  */
 export async function recordRejectionObservation(
   db: SupabaseClient,
@@ -484,9 +490,11 @@ export async function recordRejectionObservation(
 
 /**
  * PROMOTION (D181): one click, a human act, evented under their name —
- * the observation graduates to a standing instruction and is superseded by
- * it (the chain shows the graduation). The 0044 human-author trigger is the
- * law beneath; the ceiling binds the new instruction.
+ * the 0044 human-author trigger is the law beneath; the ceiling binds the
+ * new instruction.
+ * JUDGMENT (Session 32): the observation is SUPERSEDED BY the instruction
+ * it became — one chain records the graduation, so history renders it
+ * without a second bookkeeping shape. Listed at close.
  */
 export async function promoteObservation(
   db: SupabaseClient,
@@ -773,9 +781,12 @@ export function planFactSweep(input: {
 
 export interface SweepFactEditInput {
   business_id: string;
-  /** The human who edited the fact — sweep tasks land on their desk. */
+  /** JUDGMENT (Session 32): sweep tasks are ASSIGNED to the human who
+   * edited the fact (they know the change owed) while created_by is Light
+   * on tasks and corrections alike — "Light drafts the correction" is the
+   * ruling's own grammar, and the inbox card wears the gold drafted-by
+   * chip accordingly. Listed at close. */
   editor_actor_id: string;
-  /** Light — the corrections and tasks are Light's drafted acts. */
   light_actor_id: string;
   /** The successor fact entry (the new truth, surfaces list included). */
   fact: MemoryEntryRow;
@@ -1017,8 +1028,11 @@ export async function applyCorrection(
     if (!c.template_key || !c.channel || typeof c.body_after !== "string") {
       throw new Error("The template correction payload is incomplete — nothing can be applied.");
     }
-    // Drift guard: the correction was drafted against a specific version; a
-    // later re-issue makes it stale — refuse honestly, never overwrite.
+    // JUDGMENT (Session 32): the staleness guard — a correction drafted
+    // against version N refuses to apply over any other version (a
+    // re-issued template, an edited entry); the refusal names both
+    // versions. Applying blind would overwrite work the stamp never saw.
+    // Listed at close.
     const { data: newest } = await db
       .from("message_templates")
       .select("version, subject")
@@ -1130,6 +1144,10 @@ export async function applyCorrection(
   return { surface: c.surface, applied_version: appliedVersion };
 }
 
+/** JUDGMENT (Session 32): a declined correction lands state `unpublished`
+ * (the existing content_state vocabulary — no new enum) with the rejection
+ * triple recorded in attributes and the act evented; the target surface is
+ * never touched. Listed at close. */
 export async function rejectCorrection(
   db: SupabaseClient,
   input: { business_id: string; actor_id: string; correction_id: string; reason: string }

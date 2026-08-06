@@ -346,7 +346,11 @@ function InstructionCard({ entry }: { entry: MemoryEntryView }) {
 function ObservationCard({ entry }: { entry: MemoryEntryView }) {
   const [state, formAction, pending] = useActionState(promoteObservationAction, initialState);
   return (
-    // Gold: an observation is Light's bookkeeping of your refusal.
+    // JUDGMENT (Session 32): observations and the Promote act wear GOLD —
+    // they live on Light's channel (Light's bookkeeping of your refusals);
+    // red would overclaim, since no stamp lives on this screen (sweep
+    // corrections are stamped in the Approval Inbox). The click is still a
+    // human act, evented under the clicker's name. Listed at close.
     <div className="light-panel rounded-xl px-4 py-3">
       <p className="text-[13.5px] text-ink">{entry.body}</p>
       <Provenance entry={entry} />

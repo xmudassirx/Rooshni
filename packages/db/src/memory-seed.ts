@@ -11,13 +11,16 @@ import { createMemoryEntry, MEMORY_FACT_KEYS, type MemorySurfaceDecl } from "./m
  * createMemoryEntry (the same evented door the surface uses; law 11 is why
  * this is TS, not migration SQL), and the 0044 triggers judge each insert.
  *
- * Idempotent: an entry whose identity key (fact_key / instruction_key) has
- * EVER existed for the business is never re-seeded — a founder's later
- * edit or deactivation is their ruling, and the seed never argues with it.
- *
- * Values read from their pre-D181 homes (businesses.settings, the account
- * row); facts with no known value are SKIPPED and reported — a fact with
- * an invented value would be a lie on day one.
+ * JUDGMENT (Session 32): idempotency reads "an identity key (fact_key /
+ * instruction_key) that has EVER existed for the business is never
+ * re-seeded" — a founder's later edit or deactivation is their ruling,
+ * and the seed never argues with it. Facts with no value in their
+ * pre-D181 home are SKIPPED and reported — an invented value would be a
+ * lie on day one. The opening-hours value formats as "HH:MM to HH:MM
+ * (timezone)" — en-dash-free, so the fact can ride client-facing drafts
+ * without tripping the D142 screen — and seeds only when firm-set: the
+ * shipped default window is dispatch policy, not a client-facing fact.
+ * Listed at close.
  */
 
 export interface MemorySeedReport {

@@ -170,11 +170,12 @@ export async function updateDraftingSettingsAction(
     return { error: err instanceof Error ? err.message : "The memory write failed." };
   }
 
-  // The machinery keys save AFTER the memory writes landed; the legacy
-  // settings copies retire here — they are only the transitional fallback
-  // for a business with no fact rows, and a stale copy would resurface
-  // through that fallback (e.g. a cleared booking link falling back to the
-  // old URL).
+  // JUDGMENT (Session 32): the machinery keys save AFTER the memory writes
+  // landed (a failed memory write must never orphan the value), and the
+  // legacy settings copies are DELETED on every save — they are only the
+  // transitional fallback for a business with no fact rows, and a stale
+  // copy would resurface through that fallback (e.g. a cleared booking
+  // link falling back to the old URL). Listed at close.
   settings.email_sign_off_mode = mode;
   settings.draft_settle_minutes = settleMinutes;
   delete settings.email_sign_off;
