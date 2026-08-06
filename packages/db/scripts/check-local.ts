@@ -32,8 +32,11 @@ import { evaluateBasicsReadiness, resolveBasicsRequiredKeys, CANONICAL_BASICS_KE
 import { canWithdrawWorkflowDefinition, resolveTemplateBody } from "../src/workflow";
 import { formAnswersFromFieldData } from "../src/meta";
 import {
+  classifyRoute,
   composeDraft,
   composeWithRegisterRetry,
+  FEE_PROHIBITION_LINE,
+  findFeeBreach,
   findRegisterBreach,
   isTransientProviderError,
   leadTextFromAnswers,
@@ -41,6 +44,7 @@ import {
   selectKnowledgeEntries,
   PermanentGenerationError,
   RegisterBreachError,
+  type ClassifyFn,
   type GenerateFn,
   type KnowledgeEntry,
 } from "../src/drafting";
@@ -2266,7 +2270,7 @@ async function main() {
     if (matchRoutes("Hello, I would like some help").length !== 0) throw new Error("matched a route from nothing");
   });
 
-  await expectOk("task-scoped selection: route-matched service description + fees + booking, capped — never the whole pack", async () => {
+  await expectOk("task-scoped selection keys on the RESOLVED route (D179c), fees never enter the pack (D179a), capped — never the whole pack", async () => {
     const pack: KnowledgeEntry[] = [
       { id: "sw", title: "Skilled Worker", category: "service_description", visa_route: "skilled_worker", text: "SW route." },
       { id: "sp", title: "Spouse", category: "service_description", visa_route: "spouse_family", text: "Spouse route." },
@@ -2276,13 +2280,25 @@ async function main() {
       { id: "faq1", title: "Financial requirement", category: "faq", visa_route: null, text: "About the financial requirement." },
       { id: "faq2", title: "Sponsorship evidence", category: "faq", visa_route: null, text: "About sponsorship and employer evidence." },
     ];
-    const result = selectKnowledgeEntries(pack, "My employer offered sponsorship for a skilled worker role");
+    const result = selectKnowledgeEntries(pack, "My employer offered sponsorship for a skilled worker role", "skilled_worker");
     const ids = result.entries.map((e) => e.id);
-    if (!ids.includes("sw")) throw new Error("route-matched service description missing");
+    if (!ids.includes("sw")) throw new Error("the resolved route's service description missing");
     if (ids.includes("sp")) throw new Error("the OTHER route's service description was dumped in");
-    if (!ids.includes("fees") || !ids.includes("book")) throw new Error("fees/booking policy missing");
+    if (ids.includes("fees")) throw new Error("published_fees entered the pack — the model must never see a fee (D179a)");
+    if (!ids.includes("book")) throw new Error("booking policy missing");
     if (!ids.includes("faq2")) throw new Error("word-relevant FAQ missing");
     if (result.entries.length > DRAFT_CONTEXT_BUDGETS.max_pack_entries) throw new Error("selection exceeded the pack cap");
+    // D179c: the resolved route KEYS the selection — the same ILR-worded
+    // text with route resolved elsewhere selects that route's entry, and a
+    // null resolution keeps the pack route-neutral (no wrong-route copy).
+    const crossIds = selectKnowledgeEntries(pack, "I want ILR next year", "spouse_family").entries.map((e) => e.id);
+    if (!crossIds.includes("sp") || crossIds.includes("sw")) {
+      throw new Error("selection followed the text, not the resolved route");
+    }
+    const neutralIds = selectKnowledgeEntries(pack, "I want ILR and my spouse to join me", null).entries.map((e) => e.id);
+    if (neutralIds.includes("sw") || neutralIds.includes("sp")) {
+      throw new Error("an unresolved route still pulled route-specific copy — the draft must stay route-neutral");
+    }
   });
 
   await expectOk("routing: floor by default; escalation EARNED by recorded trigger (doctrine)", async () => {
@@ -3170,7 +3186,9 @@ async function main() {
       };
     };
     const composed = await composeDraft(fake, { ...s18Input("intro"), booking_url: "https://xlaw.example/book" });
-    if (!/booking page/.test(sawSystem)) throw new Error("the prompt does not carry the booking-link line when configured");
+    // Session 31: the tripwire targets the [link] invitation itself — the
+    // D179a fee line mentions "the booking page" in every prompt.
+    if (!/writing the token \[link\]/.test(sawSystem)) throw new Error("the prompt does not carry the booking-link line when configured");
     if (!composed.body.includes("https://xlaw.example/book") || composed.body.includes("[link]")) {
       throw new Error(`the token did not resolve: ${composed.body}`);
     }
@@ -3193,7 +3211,7 @@ async function main() {
       };
     };
     await composeDraft(cleanFake, s18Input("intro"));
-    if (/booking page/.test(unconfiguredSystem)) {
+    if (/writing the token \[link\]/.test(unconfiguredSystem)) {
       throw new Error("the prompt invites [link] with no booking URL configured");
     }
   });
@@ -5921,56 +5939,114 @@ async function main() {
     }
   });
 
-  await expectOk("classification rides the ONE drafting call — no extra model call, undeclared keys never survive, no request means no read", async () => {
+  await expectOk("Light's route read is ONE floor-tier call whose evidence is the form and the person's words — undeclared keys never survive (D161b vocabulary rule, D179c ordering)", async () => {
+    const options = [
+      { key: "spouse_family", label: "Spouse/Family" },
+      { key: "ilr", label: "ILR" },
+    ];
     let calls = 0;
+    let sawModel = "";
     let sawSystem = "";
-    const routeOptions = [{ key: "spouse_family", label: "Spouse/Family" }];
-    const fake: GenerateFn = async (request) => {
+    let sawPrompt = "";
+    const confident: ClassifyFn = async (request) => {
       calls += 1;
+      sawModel = request.model;
       sawSystem = request.system;
+      sawPrompt = request.prompt;
       return {
-        subject: null,
-        body: "Hello Amina, thank you for your message. We can help with that.",
-        attestation: { attested: true, statement: "Complies." },
-        usage: { input_tokens: 1, output_tokens: 1 },
-        route: { key: "spouse_family", reason: "the form and the enquiry text reference a spouse visa" },
+        key: "ilr",
+        reason: "the enquirer's own words ask about indefinite leave to remain",
+        usage: { input_tokens: 40, output_tokens: 12 },
       };
     };
-    const composed = await composeDraft(fake, { ...s18Input("intro"), route_options: routeOptions });
-    if (calls !== 1) throw new Error(`classification cost ${calls} calls — it must ride the one drafting call`);
-    if (composed.route_classification?.key !== "spouse_family") throw new Error("the confident read did not survive");
-    if (!/classify this enquiry's visa route/i.test(sawSystem)) {
-      throw new Error("the classification instruction is missing from the requested prompt");
+    const read = await classifyRoute(confident, {
+      enquiry_title: "Amina Khan — enquiry",
+      form_label: "Spouse Visa 23/04/2024",
+      form_answers: [{ name: "q", label: "Question", value: "I have lived here five years and want ILR" }],
+      options,
+    });
+    if (calls !== 1) throw new Error("the route read must be ONE call");
+    if (sawModel !== LIGHT_MODEL_FLOOR.model) throw new Error("the read left the floor tier");
+    if (read.key !== "ilr") throw new Error("the confident read did not survive");
+    if (!/Spouse Visa 23\/04\/2024/.test(sawPrompt) || !/want ILR/.test(sawPrompt)) {
+      throw new Error("the evidence (form name, the person's own words) was not in the prompt");
     }
-    // An undeclared key is normalised to null — never written.
-    const bad = normaliseRouteClassification(routeOptions, { key: "made_up", reason: "x" });
+    if (!/otherwise set key to null/i.test(sawSystem) || !/never guess/i.test(sawSystem)) {
+      throw new Error("the confident-or-null contract left the classification prompt");
+    }
+    // An undeclared key is normalised to null — never written (D161b).
+    const undeclared: ClassifyFn = async () => ({
+      key: "made_up",
+      reason: "x",
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    const refused = await classifyRoute(undeclared, { enquiry_title: "t", form_answers: [], options });
+    if (refused.key !== null || !/undeclared/.test(refused.reason)) {
+      throw new Error("an undeclared route key survived the read");
+    }
+    const bad = normaliseRouteClassification(options, { key: "made_up", reason: "x" });
     if (bad?.key !== null || !/undeclared/.test(bad?.reason ?? "")) {
       throw new Error("an undeclared route key survived normalisation");
     }
-    // No request → no classification, even if the model volunteers one.
+    // No declared vocabulary = no read, no call.
     calls = 0;
-    const unrequested = await composeDraft(fake, s18Input("intro"));
-    if (unrequested.route_classification !== null) throw new Error("an unrequested classification was recorded");
-    if (/classify this enquiry's visa route/i.test(sawSystem)) {
-      throw new Error("the classification instruction rides prompts that did not ask for it");
+    const none = await classifyRoute(confident, { enquiry_title: "t", form_answers: [], options: [] });
+    if (calls !== 0 || none.key !== null) throw new Error("a read ran with no vocabulary declared");
+  });
+
+  await expectOk("route resolution completes BEFORE composition (D179c): both composers key retrieval and booklet on the resolved route, the read is evented, the door still stamps light provenance", async () => {
+    // Ordering tripwires: in BOTH production composers the resolution call
+    // precedes retrieval, and retrieval receives what it settled — never
+    // the raw text match.
+    const workflowSource = readFileSync(resolve(import.meta.dirname, "../src/workflow.ts"), "utf8");
+    const supersedeSource = readFileSync(resolve(import.meta.dirname, "../src/supersede.ts"), "utf8");
+    for (const [name, source] of [
+      ["workflow.ts", workflowSource],
+      ["supersede.ts", supersedeSource],
+    ] as const) {
+      const resolveAt = source.indexOf("resolveEngagementRoute(db, {");
+      const retrieveAt = source.indexOf("retrieveKnowledgeEntries(");
+      if (resolveAt === -1) throw new Error(`${name} no longer resolves the route`);
+      if (retrieveAt === -1) throw new Error(`${name} no longer retrieves knowledge`);
+      if (resolveAt > retrieveAt) throw new Error(`${name}: retrieval runs before route resolution — D179c ordering broken`);
     }
-    // The reply path takes the same single-call ride.
-    calls = 0;
-    const reply = await composeReplyDraft(fake, { ...s16ReplyInput, route_options: routeOptions });
-    if (calls !== 1 || reply.route_classification?.key !== "spouse_family") {
-      throw new Error("the reply path's classification does not ride its one call");
+    if (!/retrieveKnowledgeEntries\(db, run\.business_id, leadText, resolved\.route\)/.test(workflowSource)) {
+      throw new Error("workflow retrieval no longer keys on the resolved route");
     }
-    // Both production callers apply the read through the door as Light, and
-    // the wrapper pairs the door with the ledger event.
-    for (const file of ["../src/workflow.ts", "../src/supersede.ts"]) {
-      const source = readFileSync(resolve(import.meta.dirname, file), "utf8");
-      if (!source.includes(`source: "light"`) || !source.includes("setEngagementRoute")) {
-        throw new Error(`${file} no longer applies Light's read through the 0042 door`);
-      }
+    if (!/resolvedRoute\s*\)/.test(supersedeSource.slice(supersedeSource.indexOf("retrieveKnowledgeEntries")))) {
+      throw new Error("reply retrieval no longer keys on the resolved route");
     }
+    // The booklet follows the resolved route ONLY — and only when one
+    // resolved: no route, no route-specific booklet (a missing booklet is
+    // recoverable; a wrong one is not).
+    if (!workflowSource.includes(`picked.channel === "email" && resolved.route`)) {
+      throw new Error("the booklet gate no longer requires a resolved route");
+    }
+    if (!workflowSource.includes("findPublishedRouteGuide(db, run.business_id, [resolved.route])")) {
+      throw new Error("booklet selection no longer keys on the resolved route alone");
+    }
+    if (workflowSource.includes("retrieval.route_matches,")) {
+      throw new Error("booklet selection still consults raw text matches");
+    }
+    // The resolution wrapper: the ladder first, Light only over unset or
+    // form_default, the read EVENTED (confident or abstained — D161d), the
+    // confident write through the 0042 door with light provenance.
     const routesSource = readFileSync(resolve(import.meta.dirname, "../src/routes.ts"), "utf8");
+    if (!routesSource.includes("if (input.current_route && !lightMaySetRoute(input.current_source)) return standing")) {
+      throw new Error("resolution no longer respects the 0042 ladder before reading");
+    }
+    if (!routesSource.includes("ROUTE_EVENT_KINDS.routeRead")) {
+      throw new Error("the route read is no longer evented — 'ran and abstained' would be a silence (D161d)");
+    }
+    if (!routesSource.includes(`source: "light"`) || !routesSource.includes("setEngagementRoute")) {
+      throw new Error("routes.ts no longer applies Light's read through the 0042 door");
+    }
     if (!routesSource.includes(`rpc("set_engagement_route"`) || !routesSource.includes("emitEvent")) {
       throw new Error("the route wrapper separated the door from the ledger");
+    }
+    // The superseded ride-along is fully out: one door, no second classifier.
+    if (workflowSource.includes("route_options") || supersedeSource.includes("route_options")) {
+      throw new Error("the superseded ride-along classification is still wired in a composer");
     }
   });
 
@@ -7088,6 +7164,215 @@ async function main() {
     );
     if (!listSource.includes("const visible = contacts;")) {
       throw new Error("the list renders rows the server did not hand it");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 31 — drafting quality (D179): fees out of machine drafts,
+  // nudges compose as follow-ups, retrieval and attachments follow the
+  // resolved route.
+  // ---------------------------------------------------------------------
+  console.log("\nSession 31 — drafting quality (D179):");
+
+  await expectOk("the currency-amount screen is a lookup that NAMES the match — symbols, codes and currency words beside digits; clean prose passes", async () => {
+    if (findFeeBreach("The consultation is £150.") !== "£150") throw new Error("a pound amount slipped through");
+    if (findFeeBreach("From £1,500.50 for the full service.") !== "£1,500.50") throw new Error("a formatted amount slipped");
+    if (findFeeBreach("That will be GBP 200 please") === null) throw new Error("a currency code slipped");
+    if (findFeeBreach("about 150 pounds all in") === null) throw new Error("a currency word slipped");
+    if (findFeeBreach("costs $99.99 to file") === null) throw new Error("a dollar amount slipped");
+    for (const clean of [
+      "Hello Amina, thank you for your enquiry. If you would like to speak to our legal team, the next step is booking a consultation.",
+      "The financial requirement asks the sponsor to evidence a minimum income above a set threshold.",
+      "You can reach us on +44 7700 900123 whenever suits you.",
+      "Fees are discussed at the consultation.",
+    ]) {
+      const hit = findFeeBreach(clean);
+      if (hit !== null) throw new Error(`clean prose was refused: "${hit}"`);
+    }
+  });
+
+  await expectOk("both generation prompts FORBID fees and invite the next step instead (D179a) — the belt on both compose paths", async () => {
+    let sawSystem = "";
+    const fake: GenerateFn = async (request) => {
+      sawSystem = request.system;
+      return {
+        subject: null,
+        body: "Hello Amina, thank you for your message. We can help with that.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    await composeDraft(fake, s18Input("intro"));
+    if (!sawSystem.includes(FEE_PROHIBITION_LINE)) throw new Error("the intro/nudge prompt lost the fee prohibition");
+    await composeDraft(fake, { ...s18Input("nudge"), prior_sends: [{ at: "2026-08-05", channel: "email", summary: "Your enquiry with Test Firm" }] });
+    if (!sawSystem.includes(FEE_PROHIBITION_LINE)) throw new Error("the nudge prompt lost the fee prohibition");
+    const { systemBlocks } = assembleReplyPrompt(s16ReplyInput);
+    if (!systemBlocks[0]!.text.includes(FEE_PROHIBITION_LINE)) throw new Error("the reply prompt lost the fee prohibition");
+    if (/does not appear verbatim in the provided published knowledge/.test(sawSystem + systemBlocks[0]!.text)) {
+      throw new Error("the old published-fee allowance still rides a prompt — D179a is absolute");
+    }
+  });
+
+  await expectOk("a generated body carrying a fee is REFUSED with the match named, and takes the register retry-once lane (both paths)", async () => {
+    let attempts = 0;
+    let sawFeedback: string | undefined;
+    const slipsOnce: GenerateFn = async (request) => {
+      attempts += 1;
+      sawFeedback = /compliance screen: (.*)$/m.exec(request.prompt)?.[1];
+      return {
+        subject: null,
+        body:
+          attempts === 1
+            ? "Hello Amina, a consultation is £150 and we would be glad to help."
+            : "Hello Amina, if you would like to speak to our legal team, the next step is booking a consultation.",
+        attestation: { attested: true, statement: "x" },
+        usage: { input_tokens: 10, output_tokens: 5 },
+      };
+    };
+    const { composed, registerRetried } = await composeWithRegisterRetry(
+      (inp, opts) => composeDraft(slipsOnce, inp, opts),
+      s18Input("intro"),
+      async (breach) => {
+        if (breach.breach !== "currency amount") throw new Error(`breach kind: ${breach.breach}`);
+        if (!/"£150"/.test(breach.message)) throw new Error("the refusal did not NAME the match");
+      }
+    );
+    if (!registerRetried || attempts !== 2) throw new Error("the fee breach did not take the retry-once lane");
+    if (!/£150/.test(sawFeedback ?? "")) throw new Error("the violation was not fed back into the regeneration");
+    if (findFeeBreach(composed.body) !== null) throw new Error("the standing body still carries a fee");
+    if (composed.usage.input_tokens !== 20) throw new Error("the refused attempt's tokens were not metered");
+    // The reply path refuses the same way.
+    const feeReply: GenerateFn = async () => ({
+      subject: null,
+      body: "Hello Amina, our fee is 500 pounds.",
+      attestation: { attested: true, statement: "x" },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    let threw = false;
+    try {
+      await composeReplyDraft(feeReply, s16ReplyInput);
+    } catch (err) {
+      threw = err instanceof RegisterBreachError && err.breach === "currency amount" && /"500 pounds"/.test(err.message);
+    }
+    if (!threw) throw new Error("a fee survived reply composition");
+  });
+
+  await expectOk("the templates carry no figure (D179a sweep, pinned): every harness template row and every seed template body is currency-free", async () => {
+    // The harness DB's rows — body, subject and every per-channel body.
+    const rows = await db.query<{ body: string; subject: string | null; attributes: Record<string, unknown> | null }>(
+      `select body, subject, attributes from public.message_templates`
+    );
+    for (const row of rows.rows) {
+      for (const text of [
+        row.body,
+        row.subject ?? "",
+        ...Object.values((row.attributes?.bodies as Record<string, string> | undefined) ?? {}),
+      ]) {
+        const hit = findFeeBreach(text);
+        if (hit) throw new Error(`a template body carries "${hit}" — templates carry no figure (D179a)`);
+      }
+    }
+    // The seed's TEMPLATES block (the founder-approved copy, including the
+    // Meta-approved WhatsApp bodies recorded verbatim) — swept at source so
+    // a future fee-bearing edit fails here before it ever installs.
+    const seedSource = readFileSync(resolve(import.meta.dirname, "../seed/index.ts"), "utf8");
+    const start = seedSource.indexOf("const TEMPLATES = [");
+    const end = seedSource.indexOf("] as const;", start);
+    if (start === -1 || end === -1) throw new Error("the seed's TEMPLATES block moved — re-point the sweep");
+    const hit = findFeeBreach(seedSource.slice(start, end));
+    if (hit) throw new Error(`a seed template carries "${hit}" — templates carry no figure (D179a)`);
+  });
+
+  await expectOk("a nudge composes as a FOLLOW-UP (D179b): what was already sent rides the prompt, no re-introduction, shorter than the intro", async () => {
+    let sawSystem = "";
+    let sawPrompt = "";
+    const fake: GenerateFn = async (request) => {
+      sawSystem = request.system;
+      sawPrompt = request.prompt;
+      return {
+        subject: null,
+        body: "Hello Amina, just a short note to say your enquiry is still open with us.",
+        attestation: { attested: true, statement: "Complies." },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    };
+    const priorSends = [
+      { at: "2026-08-04", channel: "email", summary: "Your enquiry with Test Firm" },
+      { at: "2026-08-05", channel: "whatsapp", summary: "Hello Amina, thank you for your enquiry with X Law." },
+    ];
+    await composeDraft(fake, { ...s18Input("nudge"), prior_sends: priorSends });
+    if (!/FOLLOW-UP, not a first contact/.test(sawSystem)) throw new Error("the follow-up register left the nudge prompt");
+    if (!/Never re-introduce the firm/.test(sawSystem)) throw new Error("the no-re-introduction instruction is missing");
+    if (!/SHORTER than a first reply/.test(sawSystem)) throw new Error("the shorter-than-the-intro instruction is missing");
+    if (!/Acknowledge in one natural phrase that we wrote before/.test(sawSystem)) {
+      throw new Error("the acknowledge-we-wrote-before instruction is missing");
+    }
+    if (!/Already sent to this enquirer/.test(sawPrompt) || !/2026-08-04 · email/.test(sawPrompt)) {
+      throw new Error("the prior-sends summary did not reach the prompt");
+    }
+    // An intro is not a follow-up: none of the nudge register rides it.
+    await composeDraft(fake, s18Input("intro"));
+    if (/FOLLOW-UP, not a first contact/.test(sawSystem)) throw new Error("the follow-up register leaked into the intro");
+    // Honesty: a nudge with NOTHING genuinely sent never claims we wrote
+    // before — the no-cold-open and shorter lines still bind.
+    await composeDraft(fake, s18Input("nudge"));
+    if (/Acknowledge in one natural phrase that we wrote before/.test(sawSystem)) {
+      throw new Error("a nudge with no prior sends still claims the firm wrote before");
+    }
+    if (!/Never re-introduce the firm/.test(sawSystem)) throw new Error("the no-re-introduction line must bind every nudge");
+    // The workflow drafter feeds the summary from genuinely sent outbound
+    // rows, engagement-wide (the ladder crosses channels).
+    const workflowSource = readFileSync(resolve(import.meta.dirname, "../src/workflow.ts"), "utf8");
+    if (!workflowSource.includes(`"prior sends lookup"`) || !workflowSource.includes('in("status", ["sent", "delivered", "read"])')) {
+      throw new Error("the nudge composer no longer reads what was genuinely sent");
+    }
+    if (!workflowSource.includes("prior_sends: priorSends")) {
+      throw new Error("the prior-sends summary no longer reaches nudge composition");
+    }
+  });
+
+  await expectOk("the DoD route walk, pure: ILR words through the spouse form resolve to ILR (light) — ILR copy, no spouse booklet; ambiguous resolves to nothing — no booklet at all", async () => {
+    const options = [
+      { key: "spouse_family", label: "Spouse/Family" },
+      { key: "ilr", label: "ILR" },
+    ];
+    const pack: KnowledgeEntry[] = [
+      { id: "sp", title: "Spouse", category: "service_description", visa_route: "spouse_family", text: "Spouse route." },
+      { id: "ilr", title: "ILR", category: "service_description", visa_route: "ilr", text: "ILR route." },
+    ];
+    const guides = [
+      { id: "g-sp", title: "Spouse Guide", attributes: { visa_route: "spouse_family" }, created_at: "2026-01-01" },
+      { id: "g-ilr", title: "ILR Guide", attributes: { visa_route: "ilr" }, created_at: "2026-01-01" },
+    ];
+    // The confident read over the form_default source: ILR wins.
+    const confident: ClassifyFn = async () => ({
+      key: "ilr",
+      reason: "the form and enquiry text ask about indefinite leave, not a spouse application",
+      usage: { input_tokens: 30, output_tokens: 10 },
+    });
+    const read = await classifyRoute(confident, {
+      enquiry_title: "Bilal Hussain — enquiry",
+      form_label: "Spouse Visa 23/04/2024",
+      form_answers: [{ name: "q", label: "Question", value: "I have held a skilled worker visa five years and want ILR" }],
+      options,
+    });
+    if (read.key !== "ilr") throw new Error("the confident ILR read did not survive");
+    const ids = selectKnowledgeEntries(pack, "I want ILR", read.key).entries.map((e) => e.id);
+    if (!ids.includes("ilr") || ids.includes("sp")) throw new Error("retrieval did not follow the resolved route");
+    const ranked = rankGuideCandidates(guides, [read.key]);
+    if (ranked.length !== 1 || ranked[0]!.route !== "ilr") throw new Error("the booklet did not follow the resolved route");
+    // Genuinely ambiguous, no default: the honest null — nothing
+    // route-specific attaches (a missing booklet is recoverable).
+    const abstains: ClassifyFn = async () => ({
+      key: null,
+      reason: "the form answers name no route and the enquiry is generic",
+      usage: { input_tokens: 30, output_tokens: 10 },
+    });
+    const noRead = await classifyRoute(abstains, { enquiry_title: "General enquiry", form_answers: [], options });
+    if (noRead.key !== null) throw new Error("an unconfident read produced a route");
+    if (rankGuideCandidates(guides, []).length !== 0) throw new Error("an unresolved route still ranked a booklet");
+    if (selectKnowledgeEntries(pack, "help me with my visa please", null).entries.length !== 0) {
+      throw new Error("an unresolved route still pulled route-specific copy");
     }
   });
 

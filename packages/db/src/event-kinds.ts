@@ -221,6 +221,11 @@ export const ROUTE_EVENT_KINDS = {
    * door. Payload: route, source, reason (Light's stated reason, or the
    * human's optional one), previous_route, previous_source. */
   routeSet: "engagement.route_set",
+  /** Session 31 (D179c): Light's pre-compose route read ran — confident or
+   * abstained, the read is on The Record with its reason and priced spend
+   * (the D161d visibility: "ran and abstained" is a recorded fact, never a
+   * silence). Payload: key (null on abstention), reason, applied. */
+  routeRead: "engagement.route_read",
 } as const satisfies Record<string, EventAction>;
 
 /**

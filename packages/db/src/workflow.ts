@@ -8,12 +8,14 @@ import {
   composeDraft,
   composeWithRegisterRetry,
   createAnthropicGenerator,
+  createAnthropicRouteClassifier,
   isTransientProviderError,
   leadTextFromAnswers,
   retrieveKnowledgeEntries,
   PermanentGenerationError,
   type ComposeDraftResult,
   type DraftAttestation,
+  type PriorSend,
 } from "./drafting";
 import type { FormAnswer } from "./meta";
 import { fireEngagementConversions } from "./conversions";
@@ -22,7 +24,8 @@ import { priceGeneration } from "./model-router";
 import { resolveSignOffText } from "./sign-off";
 import { resolveBookingUrl, substituteBookingLink } from "./booking-link";
 import { contactAlreadyReceivedFile, declareAttachment, findPublishedRouteGuide, type RouteGuide } from "./route-guides";
-import { loadRouteOptions, setEngagementRoute } from "./routes";
+import { resolveEngagementRoute } from "./routes";
+import { resolveFormRouteDefault } from "./returning-leads";
 import type {
   EventRow,
   RealDuration,
@@ -1012,8 +1015,6 @@ async function executeDraftComm(
         // approval gate never sees this check.
         budgetBefore = await assessAiBudget(db, run.business_id);
         guardGenerationBudget(budgetBefore.spend_gbp, budgetBefore);
-        const retrieval = await retrieveKnowledgeEntries(db, run.business_id, leadText);
-        const noGoRules = await loadNoGoRules(db, run.business_id);
 
         // Session 27 (D158c): a successor enquiry for a returning contact
         // composes its intro WITH returning context — acknowledge prior
@@ -1025,18 +1026,45 @@ async function executeDraftComm(
         } | null;
         const isReturning = Boolean(facts.predecessor_engagement_id || returningAttrs);
 
-        // PR-i (Session 19): the intro email carries the route-matched
-        // PUBLISHED guide when one exists — the enquiry's declared route
-        // first, then the lead's own words. No guide = no attachment, never
-        // a placeholder; the pre-flight verifies the file before the stamp.
+        // Session 31 (D179c): route resolution — the 0042 ladder plus
+        // Light's confident read over an unset or form_default source —
+        // completes BEFORE composition; everything downstream (retrieval,
+        // booklet, copy) keys on what it settles. The read is generation:
+        // it runs behind the same budget guard, and its failure takes the
+        // same visible lanes as composition (the catch below).
+        const routeSource =
+          typeof facts.attributes?.visa_route_source === "string"
+            ? (facts.attributes.visa_route_source as string)
+            : null;
+        const currentRoute =
+          typeof facts.attributes?.visa_route === "string" ? (facts.attributes.visa_route as string) : null;
+        const formId =
+          typeof facts.attribution?.form_id === "string" ? (facts.attribution.form_id as string) : null;
+        const resolved = await resolveEngagementRoute(db, {
+          business_id: run.business_id,
+          engagement_id: run.engagement_id,
+          current_route: currentRoute,
+          current_source: routeSource,
+          actor_id: drafter,
+          classifier: createAnthropicRouteClassifier(),
+          evidence: {
+            enquiry_title: facts.title,
+            form_label:
+              returningAttrs?.form_label ?? resolveFormRouteDefault(businessSettings, formId)?.label ?? null,
+            form_answers: formAnswers,
+          },
+        });
+
+        const retrieval = await retrieveKnowledgeEntries(db, run.business_id, leadText, resolved.route);
+        const noGoRules = await loadNoGoRules(db, run.business_id);
+
+        // PR-i (Session 19) as re-ruled by D179c: the intro email carries
+        // the RESOLVED route's PUBLISHED guide — never a text-matched one.
+        // No resolved route = no route-specific booklet, ever: a missing
+        // booklet is recoverable; a wrong one is not.
         let bookletAlreadySent = false;
-        if (templateKey.startsWith("intro") && picked.channel === "email") {
-          const declaredRoute =
-            typeof facts.attributes?.visa_route === "string" ? [facts.attributes.visa_route as string] : [];
-          guide = await findPublishedRouteGuide(db, run.business_id, [
-            ...declaredRoute,
-            ...retrieval.route_matches,
-          ]);
+        if (templateKey.startsWith("intro") && picked.channel === "email" && resolved.route) {
+          guide = await findPublishedRouteGuide(db, run.business_id, [resolved.route]);
           // D158c: no duplicate booklet — the EXACT document this contact
           // already received is never attached (or offered) again; a guide
           // they never received may still ride.
@@ -1046,17 +1074,38 @@ async function executeDraftComm(
           }
         }
 
-        // Session 27 (D161b): classification rides THIS drafting call when
-        // the route is unset or default-sourced — never over a human, a form
-        // answer, or Light's own earlier read.
-        const routeSource =
-          typeof facts.attributes?.visa_route_source === "string"
-            ? (facts.attributes.visa_route_source as string)
-            : null;
-        const currentRoute =
-          typeof facts.attributes?.visa_route === "string" ? (facts.attributes.visa_route as string) : null;
-        const routeOptions =
-          !currentRoute || routeSource === "form_default" ? await loadRouteOptions(db, run.business_id) : null;
+        // Session 31 (D179b): a nudge composes as a FOLLOW-UP — it receives
+        // what the enquiry has already been sent and never re-introduces
+        // the firm.
+        // JUDGMENT (Session 31): D179b's "what the thread has already been
+        // sent" is read ENGAGEMENT-wide, not per comm_thread — the D169
+        // ladder crosses channels (nudge 1 WhatsApp, nudges 2-3 email are
+        // separate per-channel threads), and the person is one person.
+        // Awaiting sign-off at close.
+        let priorSends: PriorSend[] | null = null;
+        if (!templateKey.startsWith("intro")) {
+          const sent = await q<
+            { channel: string; body: string; occurred_at: string | null; created_at: string; attributes: Record<string, unknown> | null }[]
+          >(
+            db
+              .from("communications")
+              .select("channel, body, occurred_at, created_at, attributes")
+              .eq("engagement_id", run.engagement_id)
+              .eq("direction", "outbound")
+              .in("status", ["sent", "delivered", "read"])
+              .is("archived_at", null)
+              .order("created_at", { ascending: true })
+              .limit(10),
+            "prior sends lookup"
+          );
+          priorSends = sent.map((c) => ({
+            at: (c.occurred_at ?? c.created_at).slice(0, 10),
+            channel: c.channel,
+            summary:
+              (typeof c.attributes?.subject === "string" && c.attributes.subject) ||
+              `${c.body.slice(0, 120)}${c.body.length > 120 ? "…" : ""}`,
+          }));
+        }
 
         composeInput = {
           business_name: vars.business_name ?? "",
@@ -1075,7 +1124,7 @@ async function executeDraftComm(
           attachment: guide ? { title: guide.title, filename: guide.file.filename } : null,
           returning: isReturning
             ? {
-                prior_route: currentRoute,
+                prior_route: resolved.route,
                 form_label: returningAttrs?.form_label ?? null,
                 resubmitted_at: returningAttrs?.resubmitted_at ?? "recently",
                 changed_lines: (returningAttrs?.changed ?? []).map(
@@ -1085,7 +1134,7 @@ async function executeDraftComm(
                 booklet_already_sent: bookletAlreadySent,
               }
             : null,
-          route_options: routeOptions?.length ? routeOptions : null,
+          prior_sends: priorSends?.length ? priorSends : null,
         };
         // Session 25 (register retry-once, founder-ordered): a register-screen
         // breach retries exactly ONCE with the violation fed back — evented on
@@ -1423,27 +1472,9 @@ async function executeDraftComm(
       }
     }
 
-    // Session 27 (D161b): Light's confident route read — from the SAME
-    // call's output — lands through the 0042 door, evented with its stated
-    // reason. A precedence refusal (a human or form answer won a race) is
-    // the ladder working, not an error.
-    if (composed?.route_classification?.key && composeInput?.route_options?.length) {
-      try {
-        await setEngagementRoute(db, {
-          business_id: run.business_id,
-          engagement_id: run.engagement_id,
-          route: composed.route_classification.key,
-          source: "light",
-          actor_id: drafter,
-          reason: composed.route_classification.reason,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!/precedence/i.test(message)) {
-          report.errors.push(`step ${stepRun.id}: route classification write failed — ${message}`);
-        }
-      }
-    }
+    // Session 31 (D179c): Light's route read no longer rides here — route
+    // resolution completed BEFORE composition (resolveEngagementRoute,
+    // routes.ts), so the draft's retrieval and booklet already keyed on it.
 
     await submitCommunication(db, {
       business_id: run.business_id,

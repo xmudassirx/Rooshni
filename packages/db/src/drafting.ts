@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   DRAFT_CONTEXT_BUDGETS,
+  LIGHT_MODEL_FLOOR,
   estimateTokens,
   resolveEscalation,
   type EscalationDecision,
@@ -82,16 +83,30 @@ function significantWords(text: string): Set<string> {
 
 /**
  * Task-scoped SELECTION (pure, smoke-testable): which of the published
- * entries this draft may read, by category relevance and route match —
- * capped at DRAFT_CONTEXT_BUDGETS.max_pack_entries, never the whole pack.
+ * entries this draft may read — capped at
+ * DRAFT_CONTEXT_BUDGETS.max_pack_entries, never the whole pack.
+ *
+ * Session 31 (D179c): route-scoped entries key on the RESOLVED route (the
+ * 0042 ladder plus Light's pre-compose read), never on raw text-matching —
+ * a null resolved route keeps the draft route-neutral. The deterministic
+ * text match (matchRoutes) survives only as an escalation trigger.
+ * JUDGMENT (Session 31): published_fees never enters the pack — D179a
+ * makes the prohibition absolute, so the model cannot quote what it never
+ * sees; the belt to the screen's braces. The installed no-go rule 3
+ * ("never quotes fees beyond the published consultation fee") now lags
+ * D179a and is definition data behind the pipeline — flagged at close,
+ * not touched. Awaiting sign-off.
  */
-export function selectKnowledgeEntries(all: KnowledgeEntry[], leadText: string): RetrievalResult {
+export function selectKnowledgeEntries(
+  all: KnowledgeEntry[],
+  leadText: string,
+  resolvedRoute: string | null
+): RetrievalResult {
   const routeMatches = matchRoutes(leadText);
   const byCategory = (category: string) => all.filter((e) => e.category === category);
 
-  // Priority order: the route's service description, then fees and booking
-  // policy (rule 3's published amounts live here), then tone, then the two
-  // most word-relevant FAQ entries.
+  // Priority order: the resolved route's service description, then booking
+  // policy, then tone, then the two most word-relevant FAQ entries.
   const selected: KnowledgeEntry[] = [];
   const seen = new Set<string>();
   const take = (entries: KnowledgeEntry[]) => {
@@ -103,8 +118,9 @@ export function selectKnowledgeEntries(all: KnowledgeEntry[], leadText: string):
     }
   };
 
-  take(byCategory("service_description").filter((e) => e.visa_route && routeMatches.includes(e.visa_route)));
-  take(byCategory("published_fees"));
+  if (resolvedRoute) {
+    take(byCategory("service_description").filter((e) => e.visa_route === resolvedRoute));
+  }
   take(byCategory("consultation_booking_policy"));
   take(byCategory("tone_exemplar").slice(0, 2));
 
@@ -128,11 +144,14 @@ export function selectKnowledgeEntries(all: KnowledgeEntry[], leadText: string):
 /**
  * Task-scoped retrieval (LIGHT-OPERATING-DOCTRINE: assemble, never dump).
  * Only PUBLISHED entries are readable; selection is the pure function above.
+ * Session 31 (D179c): the caller resolves the route BEFORE retrieval and
+ * passes it here — selection keys on it, never on text-matching alone.
  */
 export async function retrieveKnowledgeEntries(
   db: SupabaseClient,
   businessId: string,
-  leadText: string
+  leadText: string,
+  resolvedRoute: string | null
 ): Promise<RetrievalResult> {
   const { data, error } = await db
     .from("content_items")
@@ -154,7 +173,7 @@ export async function retrieveKnowledgeEntries(
     } satisfies KnowledgeEntry;
   });
 
-  return selectKnowledgeEntries(all, leadText);
+  return selectKnowledgeEntries(all, leadText, resolvedRoute);
 }
 
 export interface DraftAttestation {
@@ -182,13 +201,20 @@ export interface ReturningContext {
   booklet_already_sent: boolean;
 }
 
-/** Session 27 (D161b): classification rides the existing drafting call —
- * the caller passes the declared route vocabulary when the enquiry's route
- * is unset or default-sourced, and the model's ONE response carries a
- * confident key or an honest null. No extra model call, ever. */
+/** The declared route vocabulary handed to Light's route read (D161b's
+ * vocabulary rule holds: an undeclared key never survives). */
 export interface RouteClassifyOption {
   key: string;
   label: string;
+}
+
+/** Session 31 (D179b): one message the thread has already carried — the
+ * nudge composer receives these so a follow-up never reads like a first
+ * contact. Summary is the subject or the body's opening words. */
+export interface PriorSend {
+  at: string;
+  channel: string;
+  summary: string;
 }
 
 function returningRegisterLines(returning: ReturningContext): string[] {
@@ -213,9 +239,26 @@ function returningFactsBlock(returning: ReturningContext): string[] {
   ];
 }
 
-function classificationInstruction(options: RouteClassifyOption[]): string {
-  const keys = options.map((o) => `${o.key} (${o.label})`).join(", ");
-  return `Separately from the message body, classify this enquiry's visa route in the "route" output field: set route.key to ONE of ${keys} only if the form and the enquirer's own words give you a confident read; otherwise set route.key to null. State your one-line reason either way. The classification never appears in the message body.`;
+/** Session 31 (D179b): the follow-up register — a nudge is never a
+ * re-introduction. The acknowledge line rides only when something was
+ * genuinely sent; the never-cold-open and shorter-than-the-intro lines
+ * bind every nudge. */
+function nudgeRegisterLines(priorSends: PriorSend[] | null | undefined): string[] {
+  return [
+    `- This is a FOLLOW-UP, not a first contact. Never re-introduce the firm and never open as though this were the first message.`,
+    `- Keep it SHORTER than a first reply: one or two short sentences, then the invitation.`,
+    ...(priorSends?.length
+      ? [`- The firm has already written to this enquirer (the messages already sent are listed with the enquiry). Acknowledge in one natural phrase that we wrote before.`]
+      : []),
+  ];
+}
+
+function priorSendsBlock(priorSends: PriorSend[]): string[] {
+  return [
+    ``,
+    `Already sent to this enquirer on this enquiry (never repeat these, never re-introduce):`,
+    ...priorSends.map((s) => `- [${s.at} · ${s.channel}] ${s.summary}`),
+  ];
 }
 
 export interface GenerateRequest {
@@ -239,9 +282,6 @@ export interface GenerateResult {
    * recorded reason when the provider rejected cache_control and the call
    * fell back uncached — a draft never fails over caching. */
   cache?: { read_tokens: number; written_tokens: number; fallback_reason?: string };
-  /** Session 27 (D161b): the route classification riding the SAME call's
-   * output — a confident key from the declared vocabulary, or null. */
-  route?: { key: string | null; reason: string } | null;
 }
 
 export type GenerateFn = (request: GenerateRequest) => Promise<GenerateResult>;
@@ -256,10 +296,15 @@ export class PermanentGenerationError extends Error {}
  * body). Still permanent for the classifier — no lease retry — but the
  * CALLER retries exactly once with the violation fed back into the
  * regeneration prompt (evented), before a second breach stands visible.
- * Carries the failed attempt's provider usage so metering stays honest. */
+ * Carries the failed attempt's provider usage so metering stays honest.
+ * JUDGMENT (Session 31): a currency amount in a generated body (D179a)
+ * joins this same lane — the same retry-once contract, the same visible
+ * second failure — rather than a bare permanent refusal: the founder's
+ * register design already rules the feed-back-and-retry-once shape for a
+ * compliance screen's breach. Awaiting sign-off at close. */
 export class RegisterBreachError extends PermanentGenerationError {
   constructor(
-    public readonly breach: "em dash" | "en dash",
+    public readonly breach: "em dash" | "en dash" | "currency amount",
     message: string,
     public readonly usage: { input_tokens: number; output_tokens: number }
   ) {
@@ -335,9 +380,10 @@ export interface ComposeDraftInput {
   /** Session 27 (D158c): the returning-lead register, when this enquirer is
    * a returning contact. */
   returning?: ReturningContext | null;
-  /** Session 27 (D161b): pass the declared vocabulary to request route
-   * classification riding this call's output; omit to request none. */
-  route_options?: RouteClassifyOption[] | null;
+  /** Session 31 (D179b): what the enquiry has already been sent — nudge
+   * composition receives this so a follow-up never reads like a first
+   * contact. Null or empty for a first draft. */
+  prior_sends?: PriorSend[] | null;
 }
 
 export interface ComposeDraftResult {
@@ -356,15 +402,12 @@ export interface ComposeDraftResult {
     cache?: { read_tokens: number; written_tokens: number; fallback_reason?: string };
   };
   usage: { input_tokens: number; output_tokens: number };
-  /** Session 27 (D161b): present only when the caller requested
-   * classification (route_options); a key outside the passed vocabulary is
-   * normalised to null — an undeclared route is never written. */
-  route_classification: { key: string | null; reason: string } | null;
 }
 
-/** Normalise the model's route read against the requested vocabulary —
+/** Normalise the model's route read against the declared vocabulary —
  * pure, harness-proven: no options = no classification; an undeclared key
- * never survives. */
+ * never survives. Session 31: consumed by classifyRoute (the pre-compose
+ * read, D179c) — the vocabulary rule is unchanged from D161b. */
 export function normaliseRouteClassification(
   options: RouteClassifyOption[] | null | undefined,
   route: { key: string | null; reason: string } | null | undefined
@@ -401,6 +444,44 @@ export function findRegisterBreach(body: string): "em dash" | "en dash" | null {
 export const REGISTER_PUNCTUATION_LINE =
   "- Never use an em dash or an en dash anywhere in the draft; punctuate with commas and full stops instead.";
 
+/**
+ * Session 31 (D179a): fees never appear in machine-drafted client-facing
+ * messages — no consultation prices, no service fees, no "from £X". The
+ * prompt line is the belt; findFeeBreach is the braces. Fees live on the
+ * booking page and in human-written messages only.
+ */
+export const FEE_PROHIBITION_LINE =
+  "- Never state, quote or estimate any fee, price or cost figure, in any currency or wording. Fees are never given in these messages; they live on the booking page and with the firm's own team. If cost comes up, invite the next step instead: if they would like to speak to our legal team, the next step is booking a consultation.";
+
+/** The deterministic currency-amount patterns the D179a pre-flight screen
+ * refuses: a currency symbol or code beside digits, or digits beside a
+ * currency word. A lookup, never an inference — the matched text is
+ * returned so the refusal can NAME the mismatch (the 0043 grammar). */
+const FEE_PATTERNS: RegExp[] = [
+  /[£$€]\s?\d[\d,]*(?:\.\d+)?/,
+  /\b(?:GBP|USD|EUR)\s?\d[\d,]*(?:\.\d+)?/i,
+  /\b\d[\d,]*(?:\.\d+)?\s?(?:GBP|USD|EUR)\b/i,
+  /\b\d[\d,]*(?:\.\d+)?\s?(?:pounds?|pence|dollars?|euros?)\b/i,
+];
+
+/**
+ * Session 31 (D179a): the currency-amount screen. Returns the matched text
+ * (for the named mismatch) or null when the body is clean.
+ * JUDGMENT (Session 31): the runtime screen's scope is GENERATED bodies —
+ * the same lane as findRegisterBreach (the D142 precedent); the
+ * founder-authored template wording is protected by the sweep and its
+ * harness pin instead, because a runtime block there could refuse a
+ * Meta-registered WhatsApp body the prompt rules out of scope. Awaiting
+ * sign-off at close.
+ */
+export function findFeeBreach(body: string): string | null {
+  for (const pattern of FEE_PATTERNS) {
+    const match = body.match(pattern);
+    if (match) return match[0];
+  }
+  return null;
+}
+
 function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: string } {
   const rules = input.no_go_rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
   const system = [
@@ -411,7 +492,7 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     ``,
     `Register:`,
     `- Address the enquirer's actual situation using ONLY the firm's published knowledge provided. Never invent services, availability, or claims.`,
-    `- Never state or quote any fee amount that does not appear verbatim in the provided published knowledge.`,
+    FEE_PROHIBITION_LINE,
     `- If the enquirer asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome — and steer to a consultation.`,
     `- Open with exactly: "Hello ${input.first_name}," — nothing warmer, nothing inferred.`,
     `- British English. Plain text only. Brief — a few short sentences; say less.`,
@@ -430,10 +511,10 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
           // pre-flight (0043) is the braces; this line is the belt.
           `- Nothing is attached to this message. Never write that anything is attached or enclosed, and never promise a document you are not sending.`,
         ]),
+    ...(input.task === "nudge" && !input.returning ? nudgeRegisterLines(input.prior_sends) : []),
     ...(input.returning ? returningRegisterLines(input.returning) : []),
     `- Sign off as "${input.sign_off}" — the firm's configured sign-off; never any other name.`,
     ``,
-    ...(input.route_options?.length ? [classificationInstruction(input.route_options), ``] : []),
     `Attest honestly: attested is true only if the draft fully complies with every law above.`,
   ].join("\n");
 
@@ -453,6 +534,7 @@ function assemblePrompt(input: ComposeDraftInput): { system: string; prompt: str
     `- Their form answers, verbatim:`,
     answers,
     ...(input.returning ? returningFactsBlock(input.returning) : []),
+    ...(input.prior_sends?.length ? priorSendsBlock(input.prior_sends) : []),
     ``,
     `The firm's published knowledge (your only source of facts):`,
     knowledge,
@@ -522,6 +604,17 @@ export async function composeDraft(
       result.usage
     );
   }
+  // Session 31 (D179a): the currency-amount screen, mismatch named (the
+  // 0043 grammar) — fees never appear in machine-drafted messages. Same
+  // retry-once lane as the register screen.
+  const feeBreach = findFeeBreach(body);
+  if (feeBreach) {
+    throw new RegisterBreachError(
+      "currency amount",
+      `the generated body says "${feeBreach}" but machine-drafted messages never carry a fee — the mismatch refuses the draft (Session 31)`,
+      result.usage
+    );
+  }
 
   // PR-iv (Session 19): the [link] token becomes the real booking URL in the
   // STORED body — the stamp approves the exact words, URL included. A token
@@ -556,7 +649,6 @@ export async function composeDraft(
       ...(result.cache ? { cache: result.cache } : {}),
     },
     usage: result.usage,
-    route_classification: normaliseRouteClassification(input.route_options, result.route),
   };
 }
 
@@ -592,8 +684,6 @@ export interface ComposeReplyInput {
    * facts; the reply acknowledges prior contact, no cold intro, no
    * duplicate booklet. */
   returning?: ReturningContext | null;
-  /** Session 27 (D161b): classification riding this call's output. */
-  route_options?: RouteClassifyOption[] | null;
 }
 
 /**
@@ -621,7 +711,7 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
     `The reply register:`,
     `- Answer what the client's message actually asked. Generalities about process and the firm's published services are lawful; case-specific legal advice is never given in a draft — that happens in consultations with the humans.`,
     `- Use ONLY the firm's published knowledge provided. Never invent services, availability, fees or claims.`,
-    `- Never state or quote any fee amount that does not appear verbatim in the provided published knowledge.`,
+    FEE_PROHIBITION_LINE,
     `- If the client asks for a guarantee, a promised outcome, or a Home Office timescale commitment, decline plainly and honestly — no honest adviser can promise an outcome.`,
     `- Invite a consultation ONLY where the answer genuinely needs one — never as a reflex; follow the published booking policy where one is provided.`,
     ...(input.booking_url
@@ -655,7 +745,7 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
 
   // Session 27 (D158c): the returning register and facts ride the UNCACHED
   // tail — they vary per thread; the cached prefix (laws + knowledge) stays
-  // stable. Same for the classification instruction (D161b).
+  // stable.
   const prompt = [
     `The enquiry: ${input.enquiry_title} (client: ${input.full_name}; stage: ${input.stage_label})`,
     `Their original enquiry form answers, verbatim:`,
@@ -667,7 +757,6 @@ export function assembleReplyPrompt(input: ComposeReplyInput): {
     `The conversation so far (oldest first; only messages actually sent or received):`,
     transcript,
     ``,
-    ...(input.route_options?.length ? [classificationInstruction(input.route_options), ``] : []),
     input.returning && input.new_inbound_count === 0
       ? `The client has not written a new message; their returning form submission (above) is what needs answering. Compose the firm's returning-enquirer reply now.`
       : `The client's last ${input.new_inbound_count > 1 ? `${input.new_inbound_count} messages have` : "message has"} not been answered. Compose the firm's reply now — answer what was actually asked.`,
@@ -744,6 +833,16 @@ export async function composeReplyDraft(
       result.usage
     );
   }
+  // Session 31 (D179a): the currency-amount screen — same lane as
+  // composeDraft's, mismatch named.
+  const feeBreach = findFeeBreach(body);
+  if (feeBreach) {
+    throw new RegisterBreachError(
+      "currency amount",
+      `the generated body says "${feeBreach}" but machine-drafted messages never carry a fee — the mismatch refuses the draft (Session 31)`,
+      result.usage
+    );
+  }
 
   // PR-iv (Session 19): same booking-link law as composeDraft.
   let finalBody: string;
@@ -775,7 +874,6 @@ export async function composeReplyDraft(
       ...(result.cache ? { cache: result.cache } : {}),
     },
     usage: result.usage,
-    route_classification: normaliseRouteClassification(input.route_options, result.route),
   };
 }
 
@@ -799,24 +897,8 @@ const DRAFT_OUTPUT_SCHEMA = {
       required: ["attested", "statement"],
       additionalProperties: false,
     },
-    // Session 27 (D161b): classification rides THIS call's output — no
-    // extra model call exists anywhere. key is null unless the prompt asked
-    // for a classification and the read is confident.
-    route: {
-      type: "object",
-      properties: {
-        key: {
-          type: ["string", "null"],
-          description:
-            "The enquiry's visa route from the offered vocabulary, ONLY when the prompt requested classification and the read is confident; otherwise null.",
-        },
-        reason: { type: "string", description: "One line: why this key, or why no confident read." },
-      },
-      required: ["key", "reason"],
-      additionalProperties: false,
-    },
   },
-  required: ["subject", "body", "attestation", "route"],
+  required: ["subject", "body", "attestation"],
   additionalProperties: false,
 };
 
@@ -881,7 +963,6 @@ export function createAnthropicGenerator(): GenerateFn | null {
       subject: string | null;
       body: string;
       attestation: { attested: boolean; statement: string };
-      route?: { key: string | null; reason: string } | null;
     };
     try {
       parsed = JSON.parse(text);
@@ -898,7 +979,6 @@ export function createAnthropicGenerator(): GenerateFn | null {
       subject: parsed.subject,
       body: parsed.body,
       attestation: parsed.attestation,
-      route: parsed.route ?? null,
       usage: {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
@@ -914,6 +994,150 @@ export function createAnthropicGenerator(): GenerateFn | null {
             },
           }
         : {}),
+    };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Session 31 (D179c): the pre-compose route read. Route resolution — the
+// 0042 ladder plus Light's confident read over an unset or form_default
+// source — completes BEFORE composition, so knowledge-pack retrieval and
+// booklet selection key on the RESOLVED route, never on raw text-matching.
+// JUDGMENT: D179c's ordering supersedes D161b's ride-along clause ("no
+// extra model call") for the unset/form_default lane — a read that must
+// precede composition is physically its own call. It runs at the floor
+// tier with a tight output budget, only when the ladder leaves the route
+// open, and its spend is evented by the caller. Listed at close.
+// ---------------------------------------------------------------------------
+
+export interface ClassifyRouteInput {
+  enquiry_title: string;
+  /** The submitting form's label, when known — part of Light's evidence
+   * (D161b: "form name, form answers, the person's own words"). */
+  form_label?: string | null;
+  form_answers: FormAnswer[];
+  /** The person's own words beyond the form (a reply burst, a resubmission)
+   * — optional extra evidence. */
+  client_words?: string | null;
+  options: RouteClassifyOption[];
+}
+
+export interface RouteReadResult {
+  key: string | null;
+  reason: string;
+  usage: { input_tokens: number; output_tokens: number };
+}
+
+export interface ClassifyRequest {
+  model: string;
+  system: string;
+  prompt: string;
+  maxTokens: number;
+}
+
+export type ClassifyFn = (request: ClassifyRequest) => Promise<RouteReadResult>;
+
+/** The read is a lookup over stated evidence, never worth a long answer. */
+export const CLASSIFY_MAX_OUTPUT_TOKENS = 200;
+
+/** Pure and smoke-testable: the classification prompt — the same
+ * confident-or-null contract D161b ruled, now asked before composition. */
+export function assembleRouteClassifyPrompt(input: ClassifyRouteInput): { system: string; prompt: string } {
+  const keys = input.options.map((o) => `${o.key} (${o.label})`).join(", ");
+  const system = [
+    `You classify a UK immigration enquiry's visa route for an advisory firm. Set key to ONE of: ${keys} — only if the form and the enquirer's own words give you a confident read; otherwise set key to null. Never guess: an unset route is recoverable, a wrong one is not. State your one-line reason either way.`,
+  ].join("\n");
+  const answers = input.form_answers.length
+    ? input.form_answers.map((a) => `- ${a.label}: ${a.value}`).join("\n")
+    : "- (no form answers on file)";
+  const prompt = [
+    `The enquiry: ${input.enquiry_title}`,
+    ...(input.form_label ? [`Submitted via the form: ${input.form_label}`] : []),
+    `Their form answers, verbatim:`,
+    answers,
+    ...(input.client_words?.trim() ? [`Their own words since:`, input.client_words.trim()] : []),
+  ].join("\n");
+  return { system, prompt };
+}
+
+/**
+ * One route read: assemble, call once at the floor tier, normalise against
+ * the declared vocabulary (an undeclared key never survives — D161b). The
+ * caller decides what a confident read means (the 0042 door and its event);
+ * this function only reads honestly.
+ */
+export async function classifyRoute(classify: ClassifyFn, input: ClassifyRouteInput): Promise<RouteReadResult> {
+  if (!input.options.length) {
+    return { key: null, reason: "no route vocabulary is declared", usage: { input_tokens: 0, output_tokens: 0 } };
+  }
+  const { system, prompt } = assembleRouteClassifyPrompt(input);
+  const result = await classify({
+    model: LIGHT_MODEL_FLOOR.model,
+    system,
+    prompt,
+    maxTokens: CLASSIFY_MAX_OUTPUT_TOKENS,
+  });
+  const normalised = normaliseRouteClassification(input.options, { key: result.key, reason: result.reason });
+  return {
+    key: normalised?.key ?? null,
+    reason: normalised?.reason ?? "the model returned no classification",
+    usage: result.usage,
+  };
+}
+
+const ROUTE_READ_SCHEMA = {
+  type: "object",
+  properties: {
+    key: {
+      type: ["string", "null"],
+      description: "The enquiry's visa route from the offered vocabulary, ONLY when the read is confident; otherwise null.",
+    },
+    reason: { type: "string", description: "One line: why this key, or why no confident read." },
+  },
+  required: ["key", "reason"],
+  additionalProperties: false,
+};
+
+/**
+ * The real route-read provider — the drafting generator's sibling: the
+ * official Anthropic SDK, key from ANTHROPIC_API_KEY only, null when
+ * unconfigured (the caller then leaves the ladder as it stands — a missing
+ * read is recoverable).
+ */
+export function createAnthropicRouteClassifier(): ClassifyFn | null {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  return async (request: ClassifyRequest): Promise<RouteReadResult> => {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: request.model,
+      max_tokens: request.maxTokens,
+      system: request.system,
+      messages: [{ role: "user", content: request.prompt }],
+      output_config: { format: { type: "json_schema", schema: ROUTE_READ_SCHEMA } },
+    });
+    if (response.stop_reason === "refusal") {
+      throw new PermanentGenerationError("the provider's safety layer declined the route read (stop_reason: refusal)");
+    }
+    const text = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => (block as { text: string }).text)
+      .join("");
+    let parsed: { key: string | null; reason: string };
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new PermanentGenerationError("the provider returned output that does not parse as the route-read schema");
+    }
+    return {
+      key: parsed.key,
+      reason: parsed.reason,
+      usage: {
+        input_tokens: response.usage.input_tokens,
+        output_tokens: response.usage.output_tokens,
+      },
     };
   };
 }

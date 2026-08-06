@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
   createAnthropicGenerator,
+  createAnthropicRouteClassifier,
   createGmailInboundReader,
   createGraphInboundReader,
   dispatchApprovedCommunications,
@@ -106,7 +107,7 @@ async function tick(request: NextRequest): Promise<NextResponse> {
   // an instant window) yields its ONE reply draft now; pending drafts the
   // world moved past are superseded through the 0030 pipeline, and any
   // unevented supersede markers land on The Record.
-  const settle = await sweepSettleAndSupersede(db, { generator: createAnthropicGenerator() });
+  const settle = await sweepSettleAndSupersede(db, { generator: createAnthropicGenerator(), classifier: createAnthropicRouteClassifier() });
 
   // Session 22 (WS1): the conversions sweep runs AFTER the workflow pass and
   // dispatch — stage moves made this tick get their outcome events this same
