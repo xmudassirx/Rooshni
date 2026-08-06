@@ -24,6 +24,10 @@ export interface BusinessHoursValue {
   /** null window = holds disabled entirely (founder wiring). */
   disabled: boolean;
   isOwner: boolean;
+  /** Fact-surfaces micro-fix (defect B): the opening-hours MEMORY fact —
+   * the single home this field writes through — rendered memory-first; the
+   * derived window string is only the pre-fact fallback. Null = no fact. */
+  memoryValue?: string | null;
 }
 
 export function BusinessHoursControl({ value }: { value: BusinessHoursValue }) {
@@ -51,11 +55,21 @@ export function BusinessHoursControl({ value }: { value: BusinessHoursValue }) {
   if (!editing) {
     return (
       <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]">
-        <span className="text-ink">
-          {value.open}–{value.close}
-          <span className="text-ink-soft"> · {value.timezone}</span>
-        </span>
-        {!value.isSet ? (
+        {/* Fact-surfaces micro-fix (defect B): the memory fact is the value
+            shown — the same home the save writes through; the derived
+            window renders only before a fact exists. */}
+        {value.memoryValue ? (
+          <span className="text-ink">
+            {value.memoryValue}
+            <span className="font-mono text-[9px] tracking-wide text-ink-faint uppercase"> · from Light&rsquo;s Memory</span>
+          </span>
+        ) : (
+          <span className="text-ink">
+            {value.open}–{value.close}
+            <span className="text-ink-soft"> · {value.timezone}</span>
+          </span>
+        )}
+        {!value.isSet && !value.memoryValue ? (
           <span className="font-mono text-[9px] tracking-wide text-ink-faint uppercase">
             default — not yet set by you
           </span>

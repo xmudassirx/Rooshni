@@ -52,11 +52,13 @@ import {
   type KnowledgeEntry,
 } from "../src/drafting";
 import {
+  defaultSurfacesForFactKey,
   memoryFactValue,
   memoryInstructionTokens,
   planFactSweep,
   resolveBookingUrlWithMemory,
   resolveSignOffWithMemory,
+  GOOGLE_BUSINESS_PROFILE_SURFACE,
   MEMORY_INSTRUCTION_TOKEN_CEILING,
   type MemoryContext,
   type SweepCarrier,
@@ -7837,6 +7839,140 @@ async function main() {
     );
     if (!settingsSource.includes("setMemoryFact(db, {")) {
       throw new Error("a Settings face stopped writing through the memory door");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Fact-surfaces micro-fix (6 Aug 2026, D144 hotfix class): every fact
+  // creation door shares ONE per-key default-surfaces declaration; a
+  // supersede can change the surfaces list and the sweep follows the
+  // successor's; the Settings faces READ the memory home they write.
+  // ---------------------------------------------------------------------
+  console.log("\nFact-surfaces micro-fix:");
+
+  await expectOk("a face-created hours fact carries the GMB surface — ONE shared per-key declaration for every door, never two lists", async () => {
+    for (const key of ["opening_hours", "phone"]) {
+      const defaults = defaultSurfacesForFactKey(key);
+      if (defaults.length !== 1 || defaults[0] !== GOOGLE_BUSINESS_PROFILE_SURFACE) {
+        throw new Error(`"${key}" does not default to the Google Business Profile surface`);
+      }
+      if (defaults[0]!.in_platform) throw new Error("GMB is not connected — it must be an external (manual-task) surface");
+    }
+    if (defaultSurfacesForFactKey("signature").length !== 0 || defaultSurfacesForFactKey("custom_fact").length !== 0) {
+      throw new Error("a key with no worldly default gained surfaces");
+    }
+    // Every creation door consumes the shared declaration — and the seed's
+    // former local list is gone (two lists were the defect).
+    const memorySource = readFileSync(resolve(import.meta.dirname, "../src/memory.ts"), "utf8");
+    if ((memorySource.match(/defaultSurfacesForFactKey\(input\.fact_key\)/g) ?? []).length < 2) {
+      throw new Error("setMemoryFact no longer attaches (create) and heals (supersede-over-empty) the shared defaults");
+    }
+    const seedSource = readFileSync(resolve(import.meta.dirname, "../src/memory-seed.ts"), "utf8");
+    if (!seedSource.includes("defaultSurfacesForFactKey(key)")) throw new Error("the seed grew back its own list");
+    if (seedSource.includes("GMB_SURFACE")) throw new Error("the seed still carries a second, local GMB declaration");
+    const memoryActionsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/memory/actions.ts"),
+      "utf8"
+    );
+    if (!memoryActionsSource.includes("defaultSurfacesForFactKey(factKey)")) {
+      throw new Error("the Memory surface's add door does not attach the shared defaults");
+    }
+  });
+
+  await expectOk("a supersede can CHANGE the surfaces list — the successor carries the new list and the sweep follows it", async () => {
+    const declA = JSON.stringify([GOOGLE_BUSINESS_PROFILE_SURFACE]);
+    const declB = JSON.stringify([
+      GOOGLE_BUSINESS_PROFILE_SURFACE,
+      { surface: "knowledge_entry", label: "Booking policy", ref: "ci-x", in_platform: true },
+    ]);
+    const p = await db.query<{ id: string }>(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body, surfaces, attributes)
+       values ($1, $2, 'fact', 'Hours (surfaces test)', '09:00 to 17:00', $3::jsonb, '{"fact_key":"s32fix_hours"}'::jsonb) returning id`,
+      [f.business_id, f.human_id, declA]
+    );
+    const s = await db.query<{ id: string; surfaces: unknown }>(
+      `insert into public.memory_entries (business_id, created_by, kind, title, body, surfaces, attributes)
+       values ($1, $2, 'fact', 'Hours (surfaces test)', '10:00 to 16:00', $3::jsonb, '{"fact_key":"s32fix_hours_next"}'::jsonb) returning id, surfaces`,
+      [f.business_id, f.human_id, declB]
+    );
+    await db.query(
+      `update public.memory_entries set active = false, superseded_by_entry_id = $2 where id = $1`,
+      [p.rows[0]!.id, s.rows[0]!.id]
+    );
+    const successorSurfaces = s.rows[0]!.surfaces as Array<{ surface: string }>;
+    if (successorSurfaces.length !== 2) throw new Error("the successor did not carry the changed list");
+    // The sweep plans FROM the successor's list: the newly declared
+    // in-platform carrier is corrected, the external surface tasks.
+    const plan = planFactSweep({
+      fact_title: "Hours (surfaces test)",
+      old_value: "09:00 to 17:00",
+      new_value: "10:00 to 16:00",
+      carriers: [
+        { decl: { surface: "google_business_profile", label: "Google Business Profile", ref: null, in_platform: false } },
+        {
+          decl: { surface: "knowledge_entry", label: "Booking policy", ref: "ci-x", in_platform: true },
+          entry: { id: "ci-x", title: "Booking policy", version: 1, body: [{ type: "paragraph", text: "Open 09:00 to 17:00 daily." }] },
+        },
+      ],
+    });
+    if (plan.corrections.length !== 1 || plan.tasks.length !== 1) {
+      throw new Error("the sweep did not follow the successor's list");
+    }
+    // The edit door hands the SUCCESSOR to the sweep — never the predecessor.
+    const memoryActionsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/memory/actions.ts"),
+      "utf8"
+    );
+    if (!memoryActionsSource.includes("fact: successor")) {
+      throw new Error("the Memory edit door no longer sweeps the successor's list");
+    }
+  });
+
+  await expectOk("the Settings face renders the ACTIVE memory value after a Memory-side supersede — the faces read the home they write", async () => {
+    // Query-level: the active-context read after a supersede holds only the
+    // successor, and the memory-first resolvers render exactly it.
+    const before: MemoryContext = {
+      instructions: [],
+      facts: [{ id: "sig-1", key: "signature", title: "Signature", body: "X Law" }],
+    };
+    const after: MemoryContext = {
+      instructions: [],
+      facts: [{ id: "sig-2", key: "signature", title: "Signature", body: "X Law Client Team" }],
+    };
+    const staleSettings = { email_sign_off: "X Law" };
+    if (resolveSignOffWithMemory(before, staleSettings, "X Law") !== "X Law") throw new Error("pre-edit read wrong");
+    if (resolveSignOffWithMemory(after, staleSettings, "X Law") !== "X Law Client Team") {
+      throw new Error("a Memory-side supersede does not render through the face's resolver");
+    }
+    if (memoryFactValue(after, "signature") !== "X Law Client Team") throw new Error("memoryFactValue misread");
+    // Component-level pins: every General-tab field reads memory-first —
+    // sign-off, booking link AND the hours control's memoryValue — and the
+    // memory doors revalidate the Settings path so the edit renders
+    // immediately in both places.
+    const generalTabSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/general-tab.tsx"),
+      "utf8"
+    );
+    for (const marker of [
+      "memoryFactValue(memory, MEMORY_FACT_KEYS.signature)",
+      "memoryFactValue(memory, MEMORY_FACT_KEYS.bookingLink)",
+      "memoryFactValue(memory, MEMORY_FACT_KEYS.openingHours)",
+    ]) {
+      if (!generalTabSource.includes(marker)) throw new Error(`the Settings face stopped reading memory-first: ${marker}`);
+    }
+    const hoursControlSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/settings/business-hours-control.tsx"),
+      "utf8"
+    );
+    if (!hoursControlSource.includes("value.memoryValue")) {
+      throw new Error("the hours control does not render the memory fact");
+    }
+    const memoryActionsSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/memory/actions.ts"),
+      "utf8"
+    );
+    if (!memoryActionsSource.includes('revalidatePath("/settings")')) {
+      throw new Error("memory writes do not revalidate the Settings path — the one-way mirror stands");
     }
   });
 
