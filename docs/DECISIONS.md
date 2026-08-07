@@ -2097,3 +2097,21 @@ tail as instructed).
      is idempotent against an existing whatsapp channel for the
      same value. Consent remains per channel; nothing else about
      the consent model moves.
+
+## Chore (7 August 2026) — WhatsApp channel backfill, recorded on
+## in-prompt authority
+
+Entry 187 is quoted verbatim from the chore prompt (7 August 2026 —
+in-prompt authority, the entry-113 precedent; number taken from the
+file's tail as instructed).
+
+187. The D186 WhatsApp-at-ingest ruling extends retroactively by
+     one-off evented backfill: every live contact holding a
+     consented phone channel with consent source meta_lead_form
+     and no whatsapp channel gains a whatsapp channel for the same
+     value, same consent shape, source meta_lead_form, with
+     provenance naming the backfill and the original grant date.
+     The basis is D186's: these contacts all arrived through the
+     same form whose privacy-policy gate is explicit consent.
+     Contacts whose phone consent has any other source are NOT
+     touched — the basis does not cover them.

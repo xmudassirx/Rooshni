@@ -483,6 +483,15 @@ Add to this list during build; check items off only at go-live.
       value in their pre-D181 home are visible skips. Until the run, the
       compose paths fall back to businesses.settings (the transitional
       fallback) and the Memory surface shows an empty day one.
+- [ ] **Run the WhatsApp channel backfill against live at the founder's
+      explicit go** (introduced by the D187 chore, 7 August 2026):
+      `npm run backfill:whatsapp-channels --workspace=@rooshni/db` — every
+      live contact holding a meta_lead_form-consented phone channel and no
+      whatsapp channel gains one for the same value, same consent shape,
+      through the evented app door (contact.channel_added, backfill
+      provenance, original grant date). Idempotent; contacts with any
+      other phone-consent source are counted, visible skips. As of the
+      D186 close the live count stood at 150.
 - [ ] **Retire the settings fallback for sign-off, booking link and
       opening hours in a later session** (introduced Session 32, founder
       rider on Q1): once the seed backfill has landed on live, every

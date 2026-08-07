@@ -17,6 +17,7 @@ import {
 } from "../src/quiet-hours";
 import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
 import { foldLeadContext } from "../../../apps/web/lib/lead-context";
+import { backfillConsentShape, planWhatsAppBackfill } from "../src/whatsapp-backfill";
 import { recordRowTarget } from "../../../apps/web/lib/record-row";
 import { buildTimeline } from "../../../apps/web/lib/enquiry-timeline";
 import { archivedContactRedirect } from "../../../apps/web/lib/archive-redirect";
@@ -8509,6 +8510,145 @@ async function main() {
     }
     if (!cardSource.includes("foldLeadContext(context.answers, context.channels)")) {
       throw new Error("the panel no longer folds through the shared helper");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // WhatsApp backfill chore (7 Aug 2026, D144 hotfix class, D187): the
+  // D186 basis extends retroactively by one-off evented backfill — pure
+  // eligibility core, app-door writes, idempotent.
+  // ---------------------------------------------------------------------
+  console.log("\nWhatsApp backfill chore (D187):");
+
+  await expectOk("eligibility follows the ruled basis — meta_lead_form phone consent qualifies; any other source, archived contacts and archived rows are excluded", async () => {
+    const metaPhone = {
+      channel: "phone",
+      value: "+447700900888",
+      consent: { marketing: true, transactional: true, granted_at: "2026-07-20T10:00:00Z", source: "meta_lead_form" },
+    };
+    const decision = planWhatsAppBackfill({ archived: false, channels: [metaPhone] });
+    if (decision.action !== "create" || decision.value !== "+447700900888") {
+      throw new Error("a meta_lead_form-consented phone did not plan a whatsapp create");
+    }
+    if (decision.granted_at !== "2026-07-20T10:00:00Z") {
+      throw new Error("the create does not carry the ORIGINAL grant date");
+    }
+    // Any other consent source is out of basis — never touched.
+    const inboundPhone = {
+      channel: "phone",
+      value: "+447700900888",
+      consent: { transactional: true, granted_at: "2026-07-20T10:00:00Z", source: "inbound_message" },
+    };
+    if (planWhatsAppBackfill({ archived: false, channels: [inboundPhone] }).action !== "skip_out_of_basis") {
+      throw new Error("a non-meta consent source was not skipped — the basis does not cover it");
+    }
+    // An unconsented meta-source row is out of basis too.
+    const unconsented = { channel: "phone", value: "+4477", consent: { source: "meta_lead_form" } };
+    if (planWhatsAppBackfill({ archived: false, channels: [unconsented] }).action !== "skip_out_of_basis") {
+      throw new Error("an unconsented phone row qualified");
+    }
+    // Archived contacts are never scanned into eligibility.
+    if (planWhatsAppBackfill({ archived: true, channels: [metaPhone] }).action !== "skip_archived") {
+      throw new Error("an archived contact was scanned into eligibility");
+    }
+    // An ARCHIVED phone row is not basis; an archived whatsapp row does not
+    // stand the plan down (only live rows count).
+    if (
+      planWhatsAppBackfill({ archived: false, channels: [{ ...metaPhone, archived_at: "2026-08-01T00:00:00Z" }] })
+        .action !== "skip_out_of_basis"
+    ) {
+      throw new Error("an archived phone row served as basis");
+    }
+  });
+
+  await expectOk("the backfill is idempotent — an existing whatsapp row stands the contact down, so a re-run creates zero; the script writes through the app door, evented", async () => {
+    const metaPhone = {
+      channel: "phone",
+      value: "+447700900888",
+      consent: { marketing: true, transactional: true, granted_at: "2026-07-20T10:00:00Z", source: "meta_lead_form" },
+    };
+    // After the first run the contact holds the created row — the second
+    // plan is a skip, whatever the existing row's consent says.
+    const afterRun = planWhatsAppBackfill({
+      archived: false,
+      channels: [metaPhone, { channel: "whatsapp", value: "+447700900888", consent: backfillConsentShape("2026-07-20T10:00:00Z") }],
+    });
+    if (afterRun.action !== "skip_existing") throw new Error("a re-run would create a duplicate whatsapp row");
+    const preExisting = planWhatsAppBackfill({
+      archived: false,
+      channels: [metaPhone, { channel: "whatsapp", value: "+447700900888", consent: null }],
+    });
+    if (preExisting.action !== "skip_existing") {
+      throw new Error("an existing unconsented whatsapp row did not stand the backfill down");
+    }
+    // The script consumes the pure core, events per contact with backfill
+    // provenance, and is registered as an npm door (tripwires).
+    const scriptSource = readFileSync(resolve(import.meta.dirname, "./backfill-whatsapp-channels.ts"), "utf8");
+    for (const marker of [
+      "planWhatsAppBackfill({",
+      "backfillConsentShape(decision.granted_at)",
+      `action: "contact.channel_added"`,
+      `backfill: "D187"`,
+      "original_granted_at",
+      "emitEvent(db, {",
+    ]) {
+      if (!scriptSource.includes(marker)) throw new Error(`the backfill script lost its wiring: ${marker}`);
+    }
+    const pkg = readFileSync(resolve(import.meta.dirname, "../package.json"), "utf8");
+    if (!pkg.includes(`"backfill:whatsapp-channels"`)) {
+      throw new Error("the backfill script is not registered as an npm door");
+    }
+  });
+
+  await expectOk("the created row passes the consent pre-flight for a whatsapp send — the backfill's exact write shape, proven end to end", async () => {
+    const lead = await db.query<{ id: string }>(
+      `insert into public.contacts (business_id, created_by, type, display_name, given_name)
+       values ($1, $2, 'person', 'Imran Shah', 'Imran') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    const leadId = lead.rows[0]!.id;
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'phone', '+447700900999', true,
+               '{"marketing": true, "transactional": true, "granted_at": "2026-07-15T09:00:00Z", "source": "meta_lead_form"}'::jsonb)`,
+      [f.business_id, f.agent_id, leadId]
+    );
+    const decision = planWhatsAppBackfill({
+      archived: false,
+      channels: [
+        {
+          channel: "phone",
+          value: "+447700900999",
+          consent: { marketing: true, transactional: true, granted_at: "2026-07-15T09:00:00Z", source: "meta_lead_form" },
+        },
+      ],
+    });
+    if (decision.action !== "create") throw new Error("the fixture contact did not plan a create");
+    // The script's exact write shape (is_primary false — the D175b
+    // additional-channel lane; consent = D186's ingest shape with the
+    // original grant date).
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'whatsapp', $4, false, $5::jsonb)`,
+      [f.business_id, f.agent_id, leadId, decision.value, JSON.stringify(backfillConsentShape(decision.granted_at))]
+    );
+    const waThread = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'whatsapp') returning id`,
+      [f.business_id, f.agent_id, leadId]
+    );
+    const draft = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, 'whatsapp', 'outbound', 'draft', 'Salaam Imran, thank you for your enquiry.', $2) returning id`,
+      [f.business_id, f.agent_id, waThread.rows[0]!.id, leadId]
+    );
+    const r = await db.query<{ result: { checks: Array<{ key: string; pass: boolean }> } }>(
+      `select public.preflight_communication($1) as result`,
+      [draft.rows[0]!.id]
+    );
+    const consentCheck = r.rows[0]!.result.checks.find((c) => c.key === "consent");
+    if (!consentCheck || consentCheck.pass !== true) {
+      throw new Error("the backfilled row does not pass the consent pre-flight for a whatsapp send");
     }
   });
 

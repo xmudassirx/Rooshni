@@ -25,6 +25,7 @@
     "allowlist:archive": "tsx scripts/archive-allowlist-email.ts",
     "backfill:form-answers": "tsx scripts/backfill-form-answers.ts",
     "backfill:wa-consent": "tsx scripts/backfill-wa-consent.ts",
+    "backfill:whatsapp-channels": "tsx scripts/backfill-whatsapp-channels.ts",
     "chore:install-multitouch-intro": "tsx scripts/install-multitouch-intro.ts",
     "chore:cancel-replay-runs": "tsx scripts/chore-cancel-replay-runs.ts",
     "chore:reissue-nudge-ladder": "tsx scripts/reissue-nudge-ladder.ts",
