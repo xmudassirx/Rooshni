@@ -16,6 +16,7 @@ import {
   QUIET_HOURS_DEFAULT,
 } from "../src/quiet-hours";
 import { classifyCommChange, rejoinDelayMs, shouldRejoin } from "../../../apps/web/lib/live-inbox-rules";
+import { foldLeadContext } from "../../../apps/web/lib/lead-context";
 import { recordRowTarget } from "../../../apps/web/lib/record-row";
 import { buildTimeline } from "../../../apps/web/lib/enquiry-timeline";
 import { archivedContactRedirect } from "../../../apps/web/lib/archive-redirect";
@@ -6125,9 +6126,15 @@ async function main() {
     if (resolveKnownContactId(rows, "amina@x.test", "+447999") !== "c1") {
       throw new Error("a new phone value blocked an email resolution");
     }
+    // D186: the plan now carries whatsapp beside phone — the submitted
+    // phone is its value, enriched like a sibling.
     const plan = planChannelEnrichment(rows, "amina@x.test", "+447999");
-    if (plan.length !== 1 || plan[0]!.channel !== "phone" || plan[0]!.value !== "+447999") {
+    if (plan.length !== 2) throw new Error("the enrichment plan lost a channel");
+    if (!plan.some((p) => p.channel === "phone" && p.value === "+447999")) {
       throw new Error("the new phone was not planned as enrichment");
+    }
+    if (!plan.some((p) => p.channel === "whatsapp" && p.value === "+447999")) {
+      throw new Error("the new whatsapp channel was not planned as enrichment (D186)");
     }
     // The orchestration writes it with the form's consent and events it with
     // provenance (tripwires — the write path is TS over Supabase).
@@ -6178,8 +6185,13 @@ async function main() {
       throw new Error("a new email value blocked a phone resolution");
     }
     const plan = planChannelEnrichment(rows, "FRESH@X.TEST", "+441111");
-    if (plan.length !== 1 || plan[0]!.channel !== "email" || plan[0]!.value !== "fresh@x.test") {
+    if (!plan.some((p) => p.channel === "email" && p.value === "fresh@x.test")) {
       throw new Error("the new email was not planned (lower-cased) as enrichment");
+    }
+    // D186: the matched contact holds phone +441111 but no whatsapp row —
+    // the returning path enriches whatsapp too.
+    if (plan.length !== 2 || !plan.some((p) => p.channel === "whatsapp" && p.value === "+441111")) {
+      throw new Error("the missing whatsapp channel was not planned as enrichment (D186)");
     }
   });
 
@@ -6254,10 +6266,12 @@ async function main() {
 
   await expectOk("enrichment is idempotent — the same new value on a later submission finds its own row and stands down", async () => {
     // After the first enrichment the rows the resolver reads INCLUDE the
-    // added value — the second plan is empty; one row, ever.
+    // added values — the second plan is empty; one row, ever. D186: the
+    // first enrichment wrote whatsapp too, and its row stands the plan down.
     const afterFirst = [
       { contact_id: "c1", channel: "email", value: "amina@x.test" },
       { contact_id: "c1", channel: "phone", value: "+447999" },
+      { contact_id: "c1", channel: "whatsapp", value: "+447999" },
     ];
     if (planChannelEnrichment(afterFirst, "amina@x.test", "+447999").length !== 0) {
       throw new Error("an already-held value was planned again");
@@ -8355,6 +8369,146 @@ async function main() {
     const memorySource = readFileSync(resolve(import.meta.dirname, "../src/memory.ts"), "utf8");
     if (!memorySource.includes("healedCarriedSurfaces(predecessor, input.surfaces)")) {
       throw new Error("supersedeMemoryEntry no longer consumes the heal clause");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Lead-context micro-fix (7 Aug 2026, D144 hotfix class, D186): ingest
+  // creates the whatsapp channel beside phone and email with the form's
+  // consent; the returning path enriches it like a sibling; the panel
+  // renders two honest registers with fold-into-channel.
+  // ---------------------------------------------------------------------
+  console.log("\nLead-context micro-fix (D186):");
+
+  await expectOk("a Meta lead-form ingest yields THREE consented channels — and the consent pre-flight passes a whatsapp send for a fresh lead (refused without the D186 row, passing with it)", async () => {
+    // The fresh path writes whatsapp beside phone and email, one consent
+    // shape (source pin — the write path is TS over Supabase).
+    const metaSource = readFileSync(resolve(import.meta.dirname, "../src/meta.ts"), "utf8");
+    if (!metaSource.includes(`{ channel: "whatsapp", value: phone }`)) {
+      throw new Error("the fresh ingest path no longer creates the whatsapp channel (D186)");
+    }
+    // The DEFECT shape first: a pre-D186 fresh lead (phone + email only) —
+    // the consent pre-flight refuses a whatsapp send.
+    const lead = await db.query<{ id: string }>(
+      `insert into public.contacts (business_id, created_by, type, display_name, given_name)
+       values ($1, $2, 'person', 'Noor Fatima', 'Noor') returning id`,
+      [f.business_id, f.agent_id]
+    );
+    const leadId = lead.rows[0]!.id;
+    const consent = '{"marketing": true, "transactional": true, "granted_at": "2026-08-07T09:00:00Z", "source": "meta_lead_form"}';
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'phone', '+447700900777', true, $4::jsonb),
+              ($1, $2, $3, 'email', 'noor@example.test', true, $4::jsonb)`,
+      [f.business_id, f.agent_id, leadId, consent]
+    );
+    const waThread = await db.query<{ id: string }>(
+      `insert into public.comm_threads (business_id, created_by, contact_id, channel)
+       values ($1, $2, $3, 'whatsapp') returning id`,
+      [f.business_id, f.agent_id, leadId]
+    );
+    const draft = await db.query<{ id: string }>(
+      `insert into public.communications (business_id, created_by, thread_id, contact_id, channel, direction, status, body, drafted_by_actor_id)
+       values ($1, $2, $3, $4, 'whatsapp', 'outbound', 'draft', 'Salaam Noor, thank you for your enquiry.', $2) returning id`,
+      [f.business_id, f.agent_id, waThread.rows[0]!.id, leadId]
+    );
+    const consentCheck = async () => {
+      const r = await db.query<{ result: { checks: Array<{ key: string; pass: boolean }> } }>(
+        `select public.preflight_communication($1) as result`,
+        [draft.rows[0]!.id]
+      );
+      return r.rows[0]!.result.checks.find((c) => c.key === "consent");
+    };
+    const before = await consentCheck();
+    if (!before || before.pass !== false) {
+      throw new Error("the pre-D186 shape did not refuse on whatsapp consent — the defect this ruling fixes is mis-modelled");
+    }
+    // The D186 row lands (ingest's exact shape) — the same pre-flight passes.
+    await db.query(
+      `insert into public.contact_channels (business_id, created_by, contact_id, channel, value, is_primary, consent)
+       values ($1, $2, $3, 'whatsapp', '+447700900777', true, $4::jsonb)`,
+      [f.business_id, f.agent_id, leadId, consent]
+    );
+    const after = await consentCheck();
+    if (!after || after.pass !== true) {
+      throw new Error("the consent pre-flight does not pass a whatsapp send for a D186 fresh lead");
+    }
+    const rows = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.contact_channels
+       where contact_id = $1 and archived_at is null
+         and coalesce((consent ->> 'transactional')::boolean, false)
+         and coalesce((consent ->> 'marketing')::boolean, false)
+         and consent ->> 'source' = 'meta_lead_form'`,
+      [leadId]
+    );
+    if (rows.rows[0]!.n !== 3) throw new Error("the ingest shape does not hold three consented channels");
+  });
+
+  await expectOk("whatsapp ingest is idempotent and resolution never consults it — an existing row stands the plan down; a whatsapp-only match resolves to no one (D174a untouched)", async () => {
+    const withWa = [
+      { contact_id: "c1", channel: "phone", value: "+447222" },
+      { contact_id: "c1", channel: "whatsapp", value: "+447222" },
+    ];
+    if (planChannelEnrichment(withWa, null, "+447222").some((p) => p.channel === "whatsapp")) {
+      throw new Error("an existing whatsapp row did not stand the plan down");
+    }
+    const waOnly = [{ contact_id: "c1", channel: "whatsapp", value: "+447222" }];
+    if (resolveKnownContactId(waOnly, null, "+447222") !== null) {
+      throw new Error("resolution consulted a whatsapp row — D174a keys on email and phone only");
+    }
+    // The lookup reads whatsapp rows solely to feed the plan's stand-down.
+    const returningSource = readFileSync(resolve(import.meta.dirname, "../src/returning-leads.ts"), "utf8");
+    if (!returningSource.includes(`.in("channel", ["email", "phone", "whatsapp"])`)) {
+      throw new Error("the known-contact lookup no longer reads whatsapp rows for idempotency");
+    }
+  });
+
+  await expectOk("the lead-context panel folds identical values into the channel line and keeps divergent answers verbatim — two honest registers", async () => {
+    const channels = [
+      { channel: "phone", value: "+447700900777", consented: true },
+      { channel: "whatsapp", value: "+447700900777", consented: true },
+      { channel: "email", value: "noor@example.test", consented: true },
+    ];
+    const folded = foldLeadContext(
+      [
+        { label: "Full name", value: "Noor Fatima" },
+        { label: "Email", value: "Noor@Example.TEST" },
+        { label: "Phone number", value: "+447700900777" },
+        { label: "Phone (formatted)", value: "07700 900777" },
+      ],
+      channels
+    );
+    // The email answer folds case-insensitively; the phone answer folds
+    // byte-identically into BOTH the phone and whatsapp lines.
+    const labels = folded.answers.map((a) => a.label);
+    if (labels.includes("Email")) throw new Error("a case-insensitively equal email answer did not fold");
+    if (labels.includes("Phone number")) throw new Error("a byte-identical phone answer did not fold");
+    if (!labels.includes("Full name")) throw new Error("a non-channel answer vanished");
+    if (!labels.includes("Phone (formatted)")) {
+      throw new Error("a differently formatted answer folded — divergent answers must stay verbatim");
+    }
+    const phoneLine = folded.channels.find((c) => c.channel === "phone");
+    const waLine = folded.channels.find((c) => c.channel === "whatsapp");
+    const emailLine = folded.channels.find((c) => c.channel === "email");
+    if (!phoneLine?.foldedAnswerLabels.includes("Phone number") || !waLine?.foldedAnswerLabels.includes("Phone number")) {
+      throw new Error("the folded phone answer is not carried on the channel lines");
+    }
+    if (!emailLine?.foldedAnswerLabels.includes("Email")) {
+      throw new Error("the folded email answer is not carried on the email line");
+    }
+    // The panel renders the two registers and consumes the fold (tripwire).
+    const cardSource = readFileSync(
+      resolve(import.meta.dirname, "../../../apps/web/app/(app)/inbox/inbox-card.tsx"),
+      "utf8"
+    );
+    if (!cardSource.includes("Form answers — verbatim as the lead gave them")) {
+      throw new Error("the FORM ANSWERS register lost its honest heading");
+    }
+    if (!cardSource.includes("Channels &amp; consent")) {
+      throw new Error("the CHANNELS & CONSENT register lost its heading");
+    }
+    if (!cardSource.includes("foldLeadContext(context.answers, context.channels)")) {
+      throw new Error("the panel no longer folds through the shared helper");
     }
   });
 
