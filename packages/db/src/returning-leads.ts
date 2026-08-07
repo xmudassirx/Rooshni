@@ -79,7 +79,7 @@ export function resolveKnownContactId(
 }
 
 export interface EnrichmentChannel {
-  channel: "email" | "phone";
+  channel: "email" | "phone" | "whatsapp";
   value: string;
 }
 
@@ -100,6 +100,10 @@ export function planChannelEnrichment(
   for (const entry of [
     { channel: "email" as const, value: email ? email.toLowerCase() : null },
     { channel: "phone" as const, value: phone },
+    // D186: whatsapp is enriched like its siblings — the submitted phone is
+    // its value; an existing whatsapp row for that value stands the plan
+    // down (idempotent), exactly as email and phone do.
+    { channel: "whatsapp" as const, value: phone },
   ]) {
     if (!entry.value) continue;
     const known = rows.some((r) => r.channel === entry.channel && r.value === entry.value);
@@ -218,7 +222,10 @@ export async function findKnownContactId(
       .from("contact_channels")
       .select("contact_id, channel, value")
       .eq("business_id", businessId)
-      .in("channel", ["email", "phone"])
+      // D186: whatsapp rows are read ONLY so the enrichment plan can stand
+      // down against an existing row (idempotency) — RESOLUTION still keys
+      // on email and phone alone (D174a, untouched).
+      .in("channel", ["email", "phone", "whatsapp"])
       .in("value", values)
       .is("archived_at", null),
     "known-contact lookup"

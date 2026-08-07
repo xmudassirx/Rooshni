@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { formatWhen } from "@/lib/format";
+import { foldLeadContext } from "@/lib/lead-context";
 import { cn } from "@/lib/utils";
 import { CorrectionControls } from "./correction-controls";
 import { DecisionControls } from "./decision-controls";
@@ -224,6 +225,11 @@ function ContextSection({ context }: { context: CardContext }) {
   const [open, setOpen] = useState(false);
   const hasFacts =
     context.answers.length > 0 || context.channels.length > 0 || context.source !== null;
+  // Lead-context micro-fix (7 Aug 2026): two honest registers — an answer
+  // byte-identical to a channel value (case-insensitive for email) folds
+  // into the channel line rather than repeating; divergent answers stay
+  // verbatim.
+  const folded = foldLeadContext(context.answers, context.channels);
   if (!hasFacts) return null;
 
   return (
@@ -246,12 +252,6 @@ function ContextSection({ context }: { context: CardContext }) {
                 <span>{context.stageLabel}</span>
               </>
             ) : null}
-            {context.answers.map((a) => (
-              <span key={a.label} className="contents">
-                <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">{a.label}</span>
-                <span>{a.value}</span>
-              </span>
-            ))}
             {context.source ? (
               <>
                 <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">Source</span>
@@ -261,21 +261,54 @@ function ContextSection({ context }: { context: CardContext }) {
                 </span>
               </>
             ) : null}
-            {context.channels.map((c) => (
-              <span key={`${c.channel}-${c.value}`} className="contents">
-                <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">{c.channel}</span>
-                <span>
-                  {c.value}{" "}
-                  <span className={c.consented ? "text-ledger" : "text-stamp"}>
-                    {c.consented ? "· consented" : "· no consent"}
-                  </span>
-                </span>
-              </span>
-            ))}
           </div>
-          <p className="mt-2 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">
-            Shown here: everything the database holds — form answers verbatim as the lead gave them.
-          </p>
+          {context.answers.length > 0 ? (
+            <>
+              <p className="mt-2.5 font-mono text-[9.5px] font-semibold tracking-[.08em] text-ink-soft uppercase">
+                Form answers — verbatim as the lead gave them
+              </p>
+              {folded.answers.length > 0 ? (
+                <div className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+                  {folded.answers.map((a) => (
+                    <span key={a.label} className="contents">
+                      <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">{a.label}</span>
+                      <span>{a.value}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-[12px] text-ink-faint">
+                  Every answer matches a channel below and is shown there.
+                </p>
+              )}
+            </>
+          ) : null}
+          {context.channels.length > 0 ? (
+            <>
+              <p className="mt-2.5 font-mono text-[9.5px] font-semibold tracking-[.08em] text-ink-soft uppercase">
+                Channels &amp; consent
+              </p>
+              <div className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+                {folded.channels.map((c) => (
+                  <span key={`${c.channel}-${c.value}`} className="contents">
+                    <span className="font-mono text-[9.5px] tracking-wide text-ink-faint uppercase">{c.channel}</span>
+                    <span>
+                      {c.value}{" "}
+                      <span className={c.consented ? "text-ledger" : "text-stamp"}>
+                        {c.consented ? "· consented" : "· no consent"}
+                      </span>
+                      {c.foldedAnswerLabels.length > 0 ? (
+                        <span className="font-mono text-[9px] tracking-wide text-ink-faint uppercase">
+                          {" "}
+                          · form answer: {c.foldedAnswerLabels.join(", ")}
+                        </span>
+                      ) : null}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

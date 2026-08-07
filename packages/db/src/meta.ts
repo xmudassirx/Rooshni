@@ -370,6 +370,11 @@ export async function ingestMetaLead(
   for (const channel of [
     { channel: "phone", value: phone },
     { channel: "email", value: email },
+    // D186 (founder-ruled 7 Aug 2026): the form's privacy-policy gate is
+    // explicit consent to be contacted and a submission cannot arrive
+    // without it — so ingest creates the WHATSAPP channel beside phone and
+    // email, from the submitted phone, the same per-channel consent shape.
+    { channel: "whatsapp", value: phone },
   ]) {
     if (!channel.value) continue;
     await q(

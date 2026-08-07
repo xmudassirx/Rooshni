@@ -2080,3 +2080,20 @@ unassigned for the founder's pen.
      the s24 held-card (with its Send now) stays as the fallback for
      the race where the window becomes active between the gate and
      the inline dispatch.
+
+## Micro-fix (7 August 2026) — WhatsApp channel at ingest, recorded on
+## in-prompt authority
+
+Entry 186 is quoted verbatim from the micro-fix prompt (7 August 2026 —
+in-prompt authority, the entry-113 precedent; number taken from the file's
+tail as instructed).
+
+186. WhatsApp consent at ingest, ruled: a Meta lead-form
+     submission creates a WHATSAPP channel beside phone and email,
+     consented (transactional + marketing), consent source
+     meta_lead_form — on the founder's recorded basis that the
+     form's privacy-policy gate is explicit consent to be
+     contacted and a submission cannot arrive without it. Ingest
+     is idempotent against an existing whatsapp channel for the
+     same value. Consent remains per channel; nothing else about
+     the consent model moves.
