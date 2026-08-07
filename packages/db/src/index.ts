@@ -29,6 +29,7 @@ export * from "./ai-budget";
 export * from "./light-performance";
 export * from "./read-policy";
 export * from "./returning-leads";
+export * from "./whatsapp-backfill";
 export * from "./routes";
 export * from "./contacts";
 export * from "./memory";
