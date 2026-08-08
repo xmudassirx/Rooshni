@@ -279,4 +279,22 @@ export const MEMORY_EVENT_KINDS = {
   correctionRejected: "memory.correction_rejected",
 } as const satisfies Record<string, EventAction>;
 
+/**
+ * Session 34 — the MCP read door (D188). Same JUDGMENT as above: kinds are
+ * TS constants, the single truth every emitter imports.
+ */
+export const MCP_EVENT_KINDS = {
+  /** A founder minted the MCP credential in Settings → Integrations — the
+   * machine actor and the granted tool set in the payload; the credential
+   * itself is hashed at rest and never rides any event (D188c). */
+  credentialMinted: "mcp.credential_minted",
+  /** A founder revoked the credential — the door closes for every token
+   * bound to it, immediately. */
+  credentialRevoked: "mcp.credential_revoked",
+  /** An external AI client called an MCP tool as "Claude via MCP" — tool
+   * name and scope in the payload, SUMMARISED, never the response body
+   * (D188a: every call lands on The Record as that actor). */
+  toolCalled: "mcp.tool_called",
+} as const satisfies Record<string, EventAction>;
+
 export type OnboardingEventKind = (typeof EVENT_KINDS)[keyof typeof EVENT_KINDS];

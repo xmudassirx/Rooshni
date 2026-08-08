@@ -34,3 +34,4 @@ export * from "./routes";
 export * from "./contacts";
 export * from "./memory";
 export * from "./memory-seed";
+export * from "./mcp";
