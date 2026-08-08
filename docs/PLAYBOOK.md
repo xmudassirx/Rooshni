@@ -262,6 +262,19 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   declared. Ledger events stay app-side via the `setEngagementRoute()`
   wrapper (law 11).
 
+- The **MCP read door** (Session 34, 0045, D188): the external AI client's
+  every read is a service-only security-definer door that authenticates the
+  hashed credential, re-derives actor and business inside the database, and
+  consumes the Spec 3 grant at view — the refusal names the missing grant.
+  The credential store is one-live-per-business, minted only by a human
+  holding team rights, its actor forcibly a machine (integration), hashed
+  at rest with the hash column closed to browsers, immutable after mint;
+  revocation is permanent, human, team-rights-gated, and closes every
+  OAuth token bound to the credential. OAuth artefacts (codes, access and
+  refresh tokens) are hashed, expiring, immutable in place, one-time on
+  consumption, service-only. The tool registry carries no write path and
+  no name outside the area_noun grammar — both are harness tripwires.
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail

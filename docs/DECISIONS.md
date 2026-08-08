@@ -2152,3 +2152,58 @@ per the s31 precedent).
      light_performance, memory_entries. (g) Responses carry what
      the grants permit and nothing else — refusals name the
      missing grant, the fail-loud grammar.
+
+189. Session 34's Lane B calls, consolidated (provisional — the
+     founder's merge is the stamp, D152/D176 pattern): (a) the
+     credential crosses into SQL only as its SHA-256 digest, computed
+     at the app edge — pgcrypto is absent from the extension set (the
+     Gate 1 harness cannot load it), and the raw value never entering
+     a statement keeps it out of statement logs (D188c "never logged",
+     strengthened); (b) "Claude via MCP" is an INTEGRATION actor (the
+     machine type the Settings door already reads as a connection);
+     actors being account-scoped, per-business identity rides the
+     credential and the business-scoped grants, not the actor row;
+     (c) the OAuth surface wraps the minted credential per the
+     founder's mid-session approval: DCR-registered clients
+     (mcp_clients, platform-scoped — registration precedes tenancy
+     and the row holds redirect URIs only), one-time PKCE-S256 codes,
+     60-minute access tokens, 30-day rotating refresh tokens — every
+     artefact hashed, credential-bound, immutable in place, dying on
+     revoke (rider 1); token lifetimes are protocol security
+     parameters held as real-world constants outside timeScale() — a
+     demo-compressed token would break the connector handshake; law
+     11 governs product timers, not transport security; (d)
+     mcp_tokens carries no Spec 1 envelope (transport security
+     artefacts, the 0028 claim-table precedent) and no authenticated
+     access at all; (e) the JSON-RPC shell is hand-rolled against the
+     spec's JSON-response mode (stateless, no SSE, no sessions): the
+     official SDK's server transport wants a Node http response a
+     Next route handler does not hold; the registry in @rooshni/db
+     carries across unchanged if a future session adopts the SDK;
+     (f) the minted credential itself also authenticates as a bearer
+     beside the OAuth access tokens (the inspector/CLI path), and
+     mcp_whoami is the route's service-only auth surface (not a
+     tool) so eventing and rate-limiting name the right actor while
+     every door still re-derives identity itself; (g) response
+     shaping under D188g: the timeline carries 240-character message
+     previews under the enquiries grant with full bodies behind
+     threads_read and its channel grant; the threads tools compute
+     the permitted-channel set from the comms.* registry per call
+     and refuse only when NO channel is granted;
+     drafts_awaiting_stamp filters its arms by held grants (comms
+     per channel / content.website / enquiries) and refuses only
+     when none is held — approvals.* stays structurally unholdable
+     by the machine; (h) the mint creates a standing VIEW grant set
+     (enquiries, the six comms channels, content.website, record,
+     workflows, memory), idempotent across re-mints; revoking the
+     credential closes access at the door while the actor's grants
+     stand (grants are the actor's, revocable in Settings → Team as
+     ever); one live credential per business (partial unique index)
+     — mint again only after revoke; (i) rate limiting is an
+     in-memory sliding window per credential (the marketing
+     demo-route pattern), honest about being per-instance — sane for
+     an audience of one, no new infrastructure (D188d); (j) three
+     platform tool-registry rows (record, workflows, memory) join
+     Spec 3 §3a for the read surfaces that had no key —
+     memory.export remains the Level 3 export act beside the memory
+     read surface.
