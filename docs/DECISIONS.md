@@ -2115,3 +2115,40 @@ file's tail as instructed).
      same form whose privacy-policy gate is explicit consent.
      Contacts whose phone consent has any other source are NOT
      touched — the basis does not cover them.
+
+## Session 34 (8 August 2026) — MCP server over Barakah, read-only —
+## recorded on in-prompt authority
+
+Entry 188 is quoted verbatim from the Session 34 prompt (8 August 2026 —
+in-prompt authority, the entry-113 precedent: founder-approved
+architecture, quoted verbatim; number taken from the file's actual tail
+per the s31 precedent).
+
+188. MCP SERVER OVER BARAKAH, ruled (7 August 2026): Barakah
+     exposes a Model Context Protocol server so an external AI
+     client can read the business on the founder's behalf. Laws:
+     (a) the server acts as its OWN ACTOR ("Claude via MCP",
+     machine), grant-scoped through the Spec 3 model — never
+     service-role, never raw tables; every tool call lands on The
+     Record as that actor. (b) READ-ONLY in this era: no stamping,
+     no drafting, no stage moves, no memory writes — any write
+     capability is a separate founder ruling. (c) Tenant-scoped:
+     the credential is minted per business in Settings →
+     Integrations (the one door, D58), revocable there, hashed at
+     rest, never logged. (d) PASTE-A-LINK simplicity: the server
+     is REMOTE (streamable HTTP per the current MCP spec), hosted
+     as a route on the existing web deployment — connecting from a
+     Claude client is: add custom connector, paste the URL,
+     supply the credential. Nothing runs on the founder's machine;
+     no new infrastructure. (e) The tool list is the product's
+     public face and will grow for years: tool names follow ONE
+     grammar from day one — area_noun — and a capability added in
+     a future session joins the server's declaration so every
+     connected client discovers it at the next handshake, with no
+     reconnection and no URL change. (f) First tool set:
+     enquiries_list, enquiry_timeline, threads_list, threads_read,
+     drafts_awaiting_stamp, record_read (filtered by kind/entity/
+     time), workflow_definitions, workflow_runs,
+     light_performance, memory_entries. (g) Responses carry what
+     the grants permit and nothing else — refusals name the
+     missing grant, the fail-loud grammar.
