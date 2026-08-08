@@ -2014,6 +2014,24 @@ quoted-approval precedent).
      overclaim — sweep corrections take their red-adjacent stamp in
      the Approval Inbox.
 
+## Docs chore (8 August 2026) — bookkeeping pair, recorded on
+## in-prompt authority
+
+Entry 183 is quoted verbatim from the docs-chore prompt (8 August 2026 —
+in-prompt authority, the entry-113 precedent; founder-approved 7 August
+2026). It fills the gap the s33 append recorded as unassigned for the
+founder's pen.
+
+183. Bookkeeping pair, ruled: (a) PLAYBOOK §7's protected-structures
+     list gains the Session 32 memory enforcement — the
+     memory_entries append-only supersede chain, the human-author
+     gate on instructions, and the 800-token active-instruction
+     ceiling (0044). (b) The canonical judgment mark is the exact
+     string "JUDGMENT:" — variants (e.g. "JUDGMENT (Lane B):")
+     evade the pre-close collector and are non-marks; the collector
+     greps the canonical string only. Recorded after a session-30
+     mark was missed for this reason.
+
 ## Session 33 (7 August 2026) — quiet hours: the choice at the stamp —
 ## recorded on in-prompt authority
 
