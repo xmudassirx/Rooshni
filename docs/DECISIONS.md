@@ -2133,3 +2133,95 @@ file's tail as instructed).
      same form whose privacy-policy gate is explicit consent.
      Contacts whose phone consent has any other source are NOT
      touched — the basis does not cover them.
+
+## Session 34 (8 August 2026) — MCP server over Barakah, read-only —
+## recorded on in-prompt authority
+
+Entry 188 is quoted verbatim from the Session 34 prompt (8 August 2026 —
+in-prompt authority, the entry-113 precedent: founder-approved
+architecture, quoted verbatim; number taken from the file's actual tail
+per the s31 precedent).
+
+188. MCP SERVER OVER BARAKAH, ruled (7 August 2026): Barakah
+     exposes a Model Context Protocol server so an external AI
+     client can read the business on the founder's behalf. Laws:
+     (a) the server acts as its OWN ACTOR ("Claude via MCP",
+     machine), grant-scoped through the Spec 3 model — never
+     service-role, never raw tables; every tool call lands on The
+     Record as that actor. (b) READ-ONLY in this era: no stamping,
+     no drafting, no stage moves, no memory writes — any write
+     capability is a separate founder ruling. (c) Tenant-scoped:
+     the credential is minted per business in Settings →
+     Integrations (the one door, D58), revocable there, hashed at
+     rest, never logged. (d) PASTE-A-LINK simplicity: the server
+     is REMOTE (streamable HTTP per the current MCP spec), hosted
+     as a route on the existing web deployment — connecting from a
+     Claude client is: add custom connector, paste the URL,
+     supply the credential. Nothing runs on the founder's machine;
+     no new infrastructure. (e) The tool list is the product's
+     public face and will grow for years: tool names follow ONE
+     grammar from day one — area_noun — and a capability added in
+     a future session joins the server's declaration so every
+     connected client discovers it at the next handshake, with no
+     reconnection and no URL change. (f) First tool set:
+     enquiries_list, enquiry_timeline, threads_list, threads_read,
+     drafts_awaiting_stamp, record_read (filtered by kind/entity/
+     time), workflow_definitions, workflow_runs,
+     light_performance, memory_entries. (g) Responses carry what
+     the grants permit and nothing else — refusals name the
+     missing grant, the fail-loud grammar.
+
+189. Session 34's Lane B calls, consolidated (provisional — the
+     founder's merge is the stamp, D152/D176 pattern): (a) the
+     credential crosses into SQL only as its SHA-256 digest, computed
+     at the app edge — pgcrypto is absent from the extension set (the
+     Gate 1 harness cannot load it), and the raw value never entering
+     a statement keeps it out of statement logs (D188c "never logged",
+     strengthened); (b) "Claude via MCP" is an INTEGRATION actor (the
+     machine type the Settings door already reads as a connection);
+     actors being account-scoped, per-business identity rides the
+     credential and the business-scoped grants, not the actor row;
+     (c) the OAuth surface wraps the minted credential per the
+     founder's mid-session approval: DCR-registered clients
+     (mcp_clients, platform-scoped — registration precedes tenancy
+     and the row holds redirect URIs only), one-time PKCE-S256 codes,
+     60-minute access tokens, 30-day rotating refresh tokens — every
+     artefact hashed, credential-bound, immutable in place, dying on
+     revoke (rider 1); token lifetimes are protocol security
+     parameters held as real-world constants outside timeScale() — a
+     demo-compressed token would break the connector handshake; law
+     11 governs product timers, not transport security; (d)
+     mcp_tokens carries no Spec 1 envelope (transport security
+     artefacts, the 0028 claim-table precedent) and no authenticated
+     access at all; (e) the JSON-RPC shell is hand-rolled against the
+     spec's JSON-response mode (stateless, no SSE, no sessions): the
+     official SDK's server transport wants a Node http response a
+     Next route handler does not hold; the registry in @rooshni/db
+     carries across unchanged if a future session adopts the SDK;
+     (f) the minted credential itself also authenticates as a bearer
+     beside the OAuth access tokens (the inspector/CLI path), and
+     mcp_whoami is the route's service-only auth surface (not a
+     tool) so eventing and rate-limiting name the right actor while
+     every door still re-derives identity itself; (g) response
+     shaping under D188g: the timeline carries 240-character message
+     previews under the enquiries grant with full bodies behind
+     threads_read and its channel grant; the threads tools compute
+     the permitted-channel set from the comms.* registry per call
+     and refuse only when NO channel is granted;
+     drafts_awaiting_stamp filters its arms by held grants (comms
+     per channel / content.website / enquiries) and refuses only
+     when none is held — approvals.* stays structurally unholdable
+     by the machine; (h) the mint creates a standing VIEW grant set
+     (enquiries, the six comms channels, content.website, record,
+     workflows, memory), idempotent across re-mints; revoking the
+     credential closes access at the door while the actor's grants
+     stand (grants are the actor's, revocable in Settings → Team as
+     ever); one live credential per business (partial unique index)
+     — mint again only after revoke; (i) rate limiting is an
+     in-memory sliding window per credential (the marketing
+     demo-route pattern), honest about being per-instance — sane for
+     an audience of one, no new infrastructure (D188d); (j) three
+     platform tool-registry rows (record, workflows, memory) join
+     Spec 3 §3a for the read surfaces that had no key —
+     memory.export remains the Level 3 export act beside the memory
+     read surface.
