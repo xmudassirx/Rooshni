@@ -500,3 +500,16 @@ Add to this list during build; check items off only at go-live.
       legacy settings keys email_sign_off / booking_url /
       business_hours) is dead code in practice — a future session removes
       it so Memory is the only home in code as well as in fact.
+- [ ] **Apply 0045 to live Supabase** (introduced Session 34, D188): the
+      MCP read door — credential/token stores, the three read tool rows
+      (record, workflows, memory) and the security-definer read doors.
+      The founder applies at the session's merge per the standing
+      precedent; check-local green first, no exceptions.
+- [ ] **Mint the live MCP credential and connect the Claude client**
+      (introduced Session 34, D188c/D188d): Settings → Integrations →
+      Claude (MCP) → Mint (owner's pen, shown once, hashed at rest);
+      copy the endpoint URL; add it as a custom connector in the Claude
+      app; authorise on Barakah's consent page with the pasted
+      credential. The DoD's witnessed flow: drafts_awaiting_stamp and one
+      enquiry_timeline answered correctly, both standing on The Record as
+      "Claude via MCP".
