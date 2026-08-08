@@ -262,6 +262,16 @@ The named list behind Lane C-1. A session may **never** weaken, bypass, or speci
   declared. Ledger events stay app-side via the `setEngagementRoute()`
   wrapper (law 11).
 
+- The **memory doors** (Session 32, 0044, D181): `memory_entries` is
+  append-only — an edit supersedes, never overwrites. The guard trigger
+  refuses any change to an entry's substance, reactivation does not exist,
+  and `superseded_by_entry_id` moves null → value exactly once, only
+  alongside deactivation; no role holds DELETE. A standing instruction is
+  written by a HUMAN hand only — Light never self-writes an instruction
+  (trigger on the author's actor type). And the business's ACTIVE standing
+  instructions never exceed the 800-token ceiling — the trigger refuses
+  past the cap, naming the count (all 0044, per D181).
+
 New enforcements added by future sessions join this list at the same session's close.
 
 ## 8. The paper trail
