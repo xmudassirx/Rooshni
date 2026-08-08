@@ -14,6 +14,8 @@ import {
   FIRST_LIGHT_EVENT_KINDS,
   MEMORY_FACT_KEYS,
   SETTLE_WINDOW_MINUTES_OPTIONS,
+  mintMcpCredential,
+  revokeMcpCredential,
   storageSlug,
 } from "@rooshni/db";
 import { getAppContext } from "@/lib/server/context";
@@ -943,4 +945,76 @@ export async function archiveKnowledgeEntryAction(
   });
   revalidatePath("/settings");
   return { error: null, saved: true };
+}
+
+// ---------------------------------------------------------------------------
+// Session 34 (D188c) — the MCP credential's ONE door: mint and revoke, both
+// owner acts here (the 0045 triggers enforce human + team rights again in
+// the database regardless). The mint response carries the raw credential
+// ONCE — it is never stored, never logged, and no read path can recover it.
+// ---------------------------------------------------------------------------
+
+export interface McpMintActionState {
+  error: string | null;
+  /** The raw credential, present exactly once, on the mint that created it. */
+  secret?: string;
+}
+
+export async function mintMcpCredentialAction(
+  _prev: McpMintActionState,
+  _formData: FormData
+): Promise<McpMintActionState> {
+  const { business, actor, membershipRole } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "Minting the MCP credential is the owner's pen — ask the owner." };
+  }
+
+  try {
+    const { secret } = await mintMcpCredential(createServiceClient(), {
+      businessId: business.id,
+      mintedByActorId: actor.id,
+    });
+    revalidatePath("/settings");
+    return { error: null, secret };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Mint failed." };
+  }
+}
+
+export interface McpRevokeActionState {
+  error: string | null;
+  revoked?: boolean;
+}
+
+export async function revokeMcpCredentialAction(
+  _prev: McpRevokeActionState,
+  formData: FormData
+): Promise<McpRevokeActionState> {
+  const credentialId = String(formData.get("credential_id") ?? "");
+  if (!isUuid(credentialId)) return { error: "Malformed credential id." };
+
+  const { membershipRole, actor, business, db } = await getAppContext();
+  if (membershipRole !== "owner") {
+    return { error: "Revoking the MCP credential is the owner's pen — ask the owner." };
+  }
+
+  // Belt and braces beside RLS: the row must be this business's own.
+  const { data: row, error: readError } = await db
+    .from("mcp_credentials")
+    .select("id")
+    .eq("id", credentialId)
+    .eq("business_id", business.id)
+    .maybeSingle();
+  if (readError || !row) return { error: "Credential not found." };
+
+  try {
+    await revokeMcpCredential(createServiceClient(), {
+      credentialId,
+      revokedByActorId: actor.id,
+    });
+    revalidatePath("/settings");
+    return { error: null, revoked: true };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Revoke failed." };
+  }
 }

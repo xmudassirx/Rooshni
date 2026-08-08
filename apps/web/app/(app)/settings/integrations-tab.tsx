@@ -1,14 +1,17 @@
-import { Mail, MessageCircle, LayoutGrid, CalendarClock, PoundSterling, Radar } from "lucide-react";
+import { Mail, MessageCircle, LayoutGrid, CalendarClock, PoundSterling, Radar, Bot } from "lucide-react";
+import { headers } from "next/headers";
 
 import { HonestButton } from "@/components/ui/honest-button";
 import {
   getConversionsState,
   getIntegrationStates,
   getMailPipeState,
+  getMcpState,
   getMetaFormRoutesState,
 } from "@/lib/server/queries";
 import { ConversionsControl } from "./conversions-control";
 import { MailProviderControl } from "./mail-provider-control";
+import { McpControl } from "./mcp-control";
 import { MetaFormRoutesControl } from "./meta-form-routes-control";
 
 /*
@@ -23,7 +26,7 @@ import { MetaFormRoutesControl } from "./meta-form-routes-control";
  */
 
 const ROWS: {
-  key: "mail" | "whatsapp" | "meta" | "conversions" | "calendar" | "stripe";
+  key: "mail" | "whatsapp" | "meta" | "conversions" | "mcp" | "calendar" | "stripe";
   icon: React.ComponentType<{ className?: string }>;
   name: string;
   meta: string;
@@ -62,6 +65,13 @@ const ROWS: {
       "Session 22: the loop is built and OFF by default. The control below is the one door — toggle, dataset id and test event code; nothing fires until the owner flips it.",
   },
   {
+    key: "mcp",
+    icon: Bot,
+    name: "Claude (MCP)",
+    meta: "read-only AI client access as the actor Claude via MCP · every call on The Record",
+    notice: "",
+  },
+  {
     key: "calendar",
     icon: CalendarClock,
     name: "Calendar",
@@ -80,13 +90,20 @@ const ROWS: {
 ];
 
 export async function IntegrationsTab() {
-  const [states, mailPipe, conversions, formRoutes] = await Promise.all([
+  const [states, mailPipe, conversions, formRoutes, mcp, headerList] = await Promise.all([
     getIntegrationStates(),
     getMailPipeState(),
     getConversionsState(),
     getMetaFormRoutesState(),
+    getMcpState(),
+    headers(),
   ]);
   const stateByKey = new Map(states.map((s) => [s.key, s]));
+  // The endpoint URL for copying (D188c): derived from the request the
+  // founder is on, so preview and production each show their own truth.
+  const mcpHost = headerList.get("x-forwarded-host") ?? headerList.get("host") ?? "";
+  const mcpProto = headerList.get("x-forwarded-proto") ?? "https";
+  const mcpEndpointUrl = mcpHost ? `${mcpProto}://${mcpHost}/api/mcp` : "/api/mcp";
 
   return (
     <div className="glass rounded-xl">
@@ -117,6 +134,33 @@ export async function IntegrationsTab() {
                 </span>
               </div>
               <ConversionsControl state={conversions} />
+            </div>
+          );
+        }
+        // Session 34: the MCP row carries a REAL control (decision 116) —
+        // mint/revoke, the endpoint URL, and a connection chip EARNED by a
+        // recorded authenticated call, never assumed at mint.
+        if (row.key === "mcp") {
+          const connected = mcp.credential?.lastUsedAt != null;
+          return (
+            <div key={row.key} className="border-b border-ink/10 px-4.5 py-3.5 last:border-b-0">
+              <div className="flex items-center gap-3">
+                <row.icon className="size-[18px] shrink-0 text-ink-soft" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13.5px] font-bold">{row.name}</div>
+                  <div className="text-[11.5px] text-ink-soft">{row.meta}</div>
+                </div>
+                <span
+                  className={
+                    connected
+                      ? "rounded-md border border-ledger/40 bg-ledger/10 px-2 py-1 font-mono text-[9.5px] tracking-wide text-ledger uppercase"
+                      : "rounded-md border border-ink/15 bg-paper-deep px-2 py-1 font-mono text-[9.5px] tracking-wide text-ink-faint uppercase"
+                  }
+                >
+                  {connected ? "connected" : mcp.credential ? "minted" : "not connected"}
+                </span>
+              </div>
+              <McpControl state={mcp} endpointUrl={mcpEndpointUrl} />
             </div>
           );
         }

@@ -4513,3 +4513,46 @@ export async function getBusinessFiles(page = 1): Promise<BusinessFilesPage> {
     pageCount,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Session 34 — the MCP row's state (D188c). Honest state only: the
+// connection chip is EARNED by last_used_at (stamped by the credential door
+// on a real authenticated call), never assumed at mint. The hash column is
+// not even selectable by this client (0045 column privileges).
+// ---------------------------------------------------------------------------
+
+export interface McpRowState {
+  isOwner: boolean;
+  credential: {
+    id: string;
+    label: string;
+    createdAt: string;
+    lastUsedAt: string | null;
+    actorName: string;
+  } | null;
+}
+
+export async function getMcpState(): Promise<McpRowState> {
+  const { db, business, membershipRole } = await getAppContext();
+  const { data, error } = await db
+    .from("mcp_credentials")
+    .select("id, label, created_at, last_used_at, actors!mcp_credentials_actor_id_fkey(display_name)")
+    .eq("business_id", business.id)
+    .is("revoked_at", null)
+    .is("archived_at", null)
+    .maybeSingle();
+  if (error) throw new Error(`mcp credential query failed: ${error.message}`);
+  const actor = (data?.actors ?? null) as unknown as { display_name: string } | null;
+  return {
+    isOwner: membershipRole === "owner",
+    credential: data
+      ? {
+          id: data.id as string,
+          label: data.label as string,
+          createdAt: data.created_at as string,
+          lastUsedAt: (data.last_used_at as string | null) ?? null,
+          actorName: actor?.display_name ?? "Claude via MCP",
+        }
+      : null,
+  };
+}
