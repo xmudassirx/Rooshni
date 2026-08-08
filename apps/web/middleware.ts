@@ -39,6 +39,15 @@ import { createServerClient } from "@supabase/ssr";
 // listed here in the session that ships it — the exclusion list is part of
 // a webhook's definition of done. Current inventory: signup trio (prefix),
 // Stripe webhook, Meta leads, WhatsApp webhook, cron tick, health.
+// /api/mcp is public because an MCP client holds no browser session — it
+// FAILS CLOSED on the bearer credential (401 with the OAuth discovery
+// header when absent or wrong), and every read it can perform is a
+// grant-checked security-definer door (0045); it holds no write path at
+// all (D188b). /api/oauth and the two /.well-known metadata documents are
+// the OAuth surface for the same caller: register and token FAIL CLOSED on
+// client registration, PKCE and the credential binding; the metadata is
+// public by design (RFC 8414/9728). The AUTHORISE page is deliberately NOT
+// here — consent happens behind the session gate (founder rider 2).
 const PUBLIC_PATHS = [
   "/construction",
   "/signin",
@@ -50,6 +59,10 @@ const PUBLIC_PATHS = [
   "/api/workflows/tick",
   "/api/meta/leads",
   "/api/whatsapp/webhook",
+  "/api/mcp",
+  "/api/oauth",
+  "/.well-known/oauth-protected-resource",
+  "/.well-known/oauth-authorization-server",
 ];
 
 function isPublic(pathname: string): boolean {
