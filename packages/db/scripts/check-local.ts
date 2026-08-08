@@ -130,6 +130,8 @@ import {
   routeFromFormAnswers,
 } from "../src/returning-leads";
 import { lightMaySetRoute, routeSourceRank } from "../src/routes";
+import { callMcpTool, MCP_TOOLS, MCP_TOOL_NAME_GRAMMAR } from "../src/mcp";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { normaliseRouteClassification } from "../src/drafting";
 import { parseReturningMarker } from "../../../apps/web/lib/returning-marker";
 
@@ -8649,6 +8651,380 @@ async function main() {
     const consentCheck = r.rows[0]!.result.checks.find((c) => c.key === "consent");
     if (!consentCheck || consentCheck.pass !== true) {
       throw new Error("the backfilled row does not pass the consent pre-flight for a whatsapp send");
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Session 34 — the MCP read door (D188). The doors are grant-checked
+  // security-definer reads; the credential is hashed at rest; every call
+  // events as "Claude via MCP"; the registry carries no write path.
+  // ---------------------------------------------------------------------
+  console.log("\nMCP read door (Session 34, D188):");
+
+  const mcpSecretA = "barakah_mcp_" + "a".repeat(48);
+  const mcpSecretB = "barakah_mcp_" + "b".repeat(48);
+  const mcpUserB = "00000000-0000-4000-8000-0000000000b1";
+
+  // The machine actor for business A and its minted credential.
+  const mcpIntA = (
+    await db.query<{ id: string }>(
+      `insert into public.actors (account_id, actor_type, display_name)
+       values ($1, 'integration', 'Claude via MCP') returning id`,
+      [f.account_id]
+    )
+  ).rows[0]!.id;
+
+  await expectError(
+    "a credential's actor must be a machine, never a person",
+    /INTEGRATION actor/,
+    () =>
+      db.query(
+        `insert into public.mcp_credentials (business_id, created_by, actor_id, label, token_hash)
+         values ($1, $2, $3, 'wrong actor', $4)`,
+        [f.business_id, f.human_id, f.agent_id, sha256Hex("never-minted")]
+      )
+  );
+  // A human with no grants at all (h2.human2 earned settings.team back in
+  // the Session 2 smokes, so it cannot play the refused minter here).
+  const ungrantedHuman = (
+    await db.query<{ id: string }>(
+      `insert into public.actors (account_id, actor_type, display_name)
+       values ($1, 'human', 'Ungranted Human') returning id`,
+      [f.account_id]
+    )
+  ).rows[0]!.id;
+  await expectError(
+    "a human without team rights cannot mint",
+    /settings\.team \(execute\)/,
+    () =>
+      db.query(
+        `insert into public.mcp_credentials (business_id, created_by, actor_id, label, token_hash)
+         values ($1, $2, $3, 'unauthorised mint', $4)`,
+        [f.business_id, ungrantedHuman, mcpIntA, sha256Hex("never-minted-2")]
+      )
+  );
+
+  const mcpCredA = (
+    await db.query<{ id: string }>(
+      `insert into public.mcp_credentials (business_id, created_by, actor_id, label, token_hash)
+       values ($1, $2, $3, 'Claude via MCP (Test Business)', $4) returning id`,
+      [f.business_id, f.human_id, mcpIntA, sha256Hex(mcpSecretA)]
+    )
+  ).rows[0]!.id;
+
+  await expectError(
+    "one live credential per business (mint again only after revoke)",
+    /duplicate key|one_live_uniq/,
+    () =>
+      db.query(
+        `insert into public.mcp_credentials (business_id, created_by, actor_id, label, token_hash)
+         values ($1, $2, $3, 'second live', $4)`,
+        [f.business_id, f.human_id, mcpIntA, sha256Hex("never-minted-3")]
+      )
+  );
+  await expectError("credential terms are immutable after mint", /immutable/, () =>
+    db.query(`update public.mcp_credentials set label = 'renamed' where id = $1`, [mcpCredA])
+  );
+
+  // The read grants for actor A: the view set the ruled tools consume.
+  for (const tool of ["enquiries", "comms.email", "record", "workflows", "memory"]) {
+    await db.query(grantSql, [f.business_id, f.human_id, mcpIntA, tool, "view", bizScope, "standing", null, f.human_id, "dashboard"]);
+  }
+
+  // Business B — the other side of the tenancy wall, with its own actor,
+  // credential and enquiry.
+  const mcpB = (
+    await db.query<{ business_id: string; human_id: string; int_id: string }>(
+      `
+      with u as (
+        insert into auth.users (id, email) values ($1, 'mcp-owner-b@example.test') returning id
+      ), acc as (
+        insert into public.accounts (name, owner_user_id) select 'MCP Account B', id from u returning id
+      ), biz as (
+        insert into public.businesses (account_id, name) select id, 'MCP Business B' from acc returning id, account_id
+      ), mem as (
+        insert into public.memberships (user_id, business_id, role) select $1, id, 'owner' from biz returning id
+      ), human as (
+        insert into public.actors (account_id, actor_type, display_name, user_id)
+        select account_id, 'human', 'MCP Owner B', $1 from biz returning id
+      ), intg as (
+        insert into public.actors (account_id, actor_type, display_name)
+        select account_id, 'integration', 'Claude via MCP' from biz returning id
+      )
+      select
+        (select id from biz) as business_id,
+        (select id from human) as human_id,
+        (select id from intg) as int_id
+      `,
+      [mcpUserB]
+    )
+  ).rows[0]!;
+  const mcpEngB = (
+    await db.query<{ id: string }>(
+      `insert into public.engagements (business_id, created_by, template_type_id, title, stage_id, owner_actor_id)
+       values ($1, $2, $3, 'MCP Enquiry B', $4, $2) returning id`,
+      [mcpB.business_id, mcpB.human_id, f.type_id, f.stage_id]
+    )
+  ).rows[0]!.id;
+  const mcpCredB = (
+    await db.query<{ id: string }>(
+      `insert into public.mcp_credentials (business_id, created_by, actor_id, label, token_hash)
+       values ($1, $2, $3, 'Claude via MCP (B)', $4) returning id`,
+      [mcpB.business_id, mcpB.human_id, mcpB.int_id, sha256Hex(mcpSecretB)]
+    )
+  ).rows[0]!.id;
+
+  // --- RLS + privileges on the new tables --------------------------------
+  await db.exec(`set role authenticated`);
+  await db.exec(`set request.jwt.claim.sub = '${ids.user}'`);
+  await expectError("the credential hash never reaches a browser (column closed)", /permission denied/, () =>
+    db.query(`select token_hash from public.mcp_credentials limit 1`)
+  );
+  await expectOk("a member sees only their business's credential state", async () => {
+    const r = await db.query<{ business_id: string }>(
+      `select business_id from public.mcp_credentials`
+    );
+    if (r.rows.length !== 1 || r.rows[0]!.business_id !== f.business_id) {
+      throw new Error(`expected exactly business A's credential, got ${r.rows.length} rows`);
+    }
+  });
+  await expectError("no signed-in DELETE on credentials", /permission denied/, () =>
+    db.query(`delete from public.mcp_credentials where id = $1`, [mcpCredA])
+  );
+  await expectError("no signed-in writes on credentials (mint is the door)", /permission denied|row-level security/, () =>
+    db.query(`update public.mcp_credentials set last_used_at = now() where id = $1`, [mcpCredA])
+  );
+  await expectError("OAuth tokens are service-only (no signed-in read)", /permission denied/, () =>
+    db.query(`select * from public.mcp_tokens limit 1`)
+  );
+  await expectError("the doors are closed to signed-in sessions", /permission denied/, () =>
+    db.query(`select public.mcp_whoami($1)`, [sha256Hex(mcpSecretA)])
+  );
+  await db.exec(`set request.jwt.claim.sub = ''`);
+  await db.exec(`reset role`);
+
+  // --- Door behaviour (as the route: service_role) ------------------------
+  await db.exec(`set role service_role`);
+
+  await expectError(
+    "an ungranted tool call refuses NAMING the missing grant (D188g)",
+    /does not hold enquiries \(view\)/,
+    () => db.query(`select public.mcp_enquiries_list($1)`, [sha256Hex(mcpSecretB)])
+  );
+  await expectError(
+    "an unknown credential refuses without leaking anything",
+    /not recognised, expired, or revoked/,
+    () => db.query(`select public.mcp_enquiries_list($1)`, [sha256Hex("not-a-credential")])
+  );
+
+  await db.exec(`reset role`);
+  await db.query(grantSql, [mcpB.business_id, mcpB.human_id, mcpB.int_id, "enquiries", "view", JSON.stringify({ level: "business", ref: mcpB.business_id }), "standing", null, mcpB.human_id, "dashboard"]);
+  await db.exec(`set role service_role`);
+
+  await expectOk("a granted call returns only the business's rows (both directions)", async () => {
+    const a = await db.query<{ result: { items: Array<{ title: string }> } }>(
+      `select public.mcp_enquiries_list($1, 100) as result`,
+      [sha256Hex(mcpSecretA)]
+    );
+    const b = await db.query<{ result: { items: Array<{ title: string }> } }>(
+      `select public.mcp_enquiries_list($1, 100) as result`,
+      [sha256Hex(mcpSecretB)]
+    );
+    const aTitles = a.rows[0]!.result.items.map((i) => i.title);
+    const bTitles = b.rows[0]!.result.items.map((i) => i.title);
+    if (aTitles.length === 0) throw new Error("business A returned no rows at all");
+    if (aTitles.includes("MCP Enquiry B")) throw new Error("business A can see business B's enquiry");
+    if (bTitles.length !== 1 || bTitles[0] !== "MCP Enquiry B") {
+      throw new Error(`business B should see exactly its own enquiry, got: ${bTitles.join(", ")}`);
+    }
+  });
+
+  await expectOk("a live access token resolves to its credential's business", async () => {
+    await db.exec(`reset role`);
+    await db.query(
+      `insert into public.mcp_tokens (credential_id, business_id, kind, token_hash, expires_at)
+       values ($1, $2, 'access_token', $3, now() + interval '1 hour')`,
+      [mcpCredA, f.business_id, sha256Hex("live-access-token")]
+    );
+    await db.exec(`set role service_role`);
+    const r = await db.query<{ result: { business_id: string } }>(
+      `select public.mcp_whoami($1) as result`,
+      [sha256Hex("live-access-token")]
+    );
+    if (r.rows[0]!.result.business_id !== f.business_id) throw new Error("wrong business resolved");
+  });
+  await expectError("an expired access token refuses (founder rider 1)", /not recognised, expired, or revoked/, async () => {
+    await db.exec(`reset role`);
+    await db.query(
+      `insert into public.mcp_tokens (credential_id, business_id, kind, token_hash, expires_at)
+       values ($1, $2, 'access_token', $3, now() - interval '1 minute')`,
+      [mcpCredA, f.business_id, sha256Hex("expired-access-token")]
+    );
+    await db.exec(`set role service_role`);
+    await db.query(`select public.mcp_whoami($1)`, [sha256Hex("expired-access-token")]);
+  });
+
+  await db.exec(`reset role`);
+  await expectError("token rows are immutable", /immutable/, () =>
+    db.query(`update public.mcp_tokens set token_hash = $1 where token_hash = $2`, [
+      sha256Hex("tampered"),
+      sha256Hex("live-access-token"),
+    ])
+  );
+  await expectOk("token consumption is one-time and permanent", async () => {
+    await db.query(`update public.mcp_tokens set consumed_at = now() where token_hash = $1`, [
+      sha256Hex("live-access-token"),
+    ]);
+    try {
+      await db.query(`update public.mcp_tokens set consumed_at = now() where token_hash = $1`, [
+        sha256Hex("live-access-token"),
+      ]);
+      throw new Error("a consumed token accepted a second consumption");
+    } catch (err) {
+      if (!/one-time and permanent/.test(err instanceof Error ? err.message : String(err))) throw err;
+    }
+  });
+  await expectError("a consumed access token refuses", /not recognised, expired, or revoked/, async () => {
+    await db.exec(`set role service_role`);
+    await db.query(`select public.mcp_whoami($1)`, [sha256Hex("live-access-token")]);
+  });
+  await db.exec(`reset role`);
+
+  // --- Revocation ---------------------------------------------------------
+  await expectOk("revocation closes the door at once", async () => {
+    await db.query(
+      `update public.mcp_credentials set revoked_at = now(), revoked_by_actor_id = $1 where id = $2`,
+      [mcpB.human_id, mcpCredB]
+    );
+    await db.exec(`set role service_role`);
+    try {
+      await db.query(`select public.mcp_enquiries_list($1)`, [sha256Hex(mcpSecretB)]);
+      throw new Error("a revoked credential was accepted");
+    } catch (err) {
+      if (!/not recognised, expired, or revoked/.test(err instanceof Error ? err.message : String(err))) {
+        throw err;
+      }
+    } finally {
+      await db.exec(`reset role`);
+    }
+  });
+  await expectError("revocation is permanent (no un-revoke)", /permanent/, () =>
+    db.query(`update public.mcp_credentials set revoked_at = null where id = $1`, [mcpCredB])
+  );
+
+  // --- The real TS path: callMcpTool events as the MCP actor --------------
+  // A minimal Supabase-shaped shim over PGlite: rpc() and the events insert
+  // are the only surfaces callMcpTool touches — the smoke runs the SAME
+  // code the route runs.
+  const shim = {
+    rpc: async (fn: string, params: Record<string, unknown>) => {
+      const keys = Object.keys(params);
+      const args = keys.map((k, i) => `${k} => $${i + 1}`).join(", ");
+      try {
+        const r = await db.query<{ result: unknown }>(
+          `select public.${fn}(${args}) as result`,
+          keys.map((k) => params[k])
+        );
+        return { data: r.rows[0]?.result ?? null, error: null };
+      } catch (err) {
+        return { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+      }
+    },
+    from: (table: string) => ({
+      insert: (row: Record<string, unknown>) => ({
+        select: () => ({
+          single: async () => {
+            const keys = Object.keys(row);
+            const cols = keys.join(", ");
+            const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
+            const values = keys.map((k) => {
+              const v = row[k];
+              return v !== null && typeof v === "object" ? JSON.stringify(v) : v;
+            });
+            try {
+              const r = await db.query(
+                `insert into public.${table} (${cols}) values (${placeholders}) returning *`,
+                values
+              );
+              return { data: r.rows[0], error: null };
+            } catch (err) {
+              return { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+            }
+          },
+        }),
+      }),
+    }),
+  } as unknown as SupabaseClient;
+
+  await expectOk("every tool call lands on The Record as 'Claude via MCP', tool named, payload summarised", async () => {
+    const { identity, result } = await callMcpTool(shim, sha256Hex(mcpSecretA), "enquiries_list", { limit: 5 });
+    if (identity.actor_id !== mcpIntA) throw new Error("wrong acting actor");
+    const items = (result as { items: unknown[] }).items;
+    if (!Array.isArray(items)) throw new Error("no items returned");
+    const ev = await db.query<{ actor_id: string; payload: Record<string, unknown> }>(
+      `select actor_id, payload from public.events
+       where business_id = $1 and action = 'mcp.tool_called'
+       order by occurred_at desc limit 1`,
+      [f.business_id]
+    );
+    if (ev.rows.length !== 1) throw new Error("no mcp.tool_called event landed");
+    if (ev.rows[0]!.actor_id !== mcpIntA) throw new Error("the event's actor is not the MCP actor");
+    const payload = ev.rows[0]!.payload;
+    if (payload.tool !== "enquiries_list") throw new Error("the tool name is not on the event");
+    const allowedKeys = new Set(["tool", "scope", "item_count"]);
+    for (const key of Object.keys(payload)) {
+      if (!allowedKeys.has(key)) throw new Error(`payload carries more than the summary: ${key}`);
+    }
+  });
+
+  await expectOk("the TS path refuses across the tenancy wall, the door's message verbatim", async () => {
+    try {
+      await callMcpTool(shim, sha256Hex(mcpSecretA), "enquiry_timeline", { enquiry_id: mcpEngB });
+      throw new Error("business A's credential read business B's enquiry timeline");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/not found in this business/.test(message)) throw err;
+    }
+  });
+
+  await expectOk("light_performance flows through the shared pure function", async () => {
+    const { result } = await callMcpTool(shim, sha256Hex(mcpSecretA), "light_performance", {});
+    const r = result as Record<string, unknown>;
+    if (typeof r.drafts_generated !== "number") throw new Error("drafts_generated missing");
+    if (!("approval_rate_pct" in r)) throw new Error("approval_rate_pct missing (the computed shape)");
+    if (!("spend_gbp" in r)) throw new Error("spend_gbp missing (the computed shape)");
+  });
+
+  // --- Tripwires (D188b, D188e) -------------------------------------------
+  await expectOk("TRIPWIRE: the tool registry contains no write path", async () => {
+    if (MCP_TOOLS.length !== 10) throw new Error(`the ruled set is ten tools, registry has ${MCP_TOOLS.length}`);
+    const ruled = [
+      "enquiries_list", "enquiry_timeline", "threads_list", "threads_read",
+      "drafts_awaiting_stamp", "record_read", "workflow_definitions",
+      "workflow_runs", "light_performance", "memory_entries",
+    ];
+    for (const name of ruled) {
+      if (!MCP_TOOLS.some((t) => t.name === name)) throw new Error(`ruled tool missing: ${name}`);
+    }
+    for (const tool of MCP_TOOLS) {
+      if (tool.readOnly !== true) throw new Error(`tool ${tool.name} is not declared readOnly`);
+      const src = await db.query<{ prosrc: string }>(
+        `select prosrc from pg_proc where proname = $1`,
+        [tool.door]
+      );
+      if (src.rows.length === 0) throw new Error(`door ${tool.door} does not exist in the database`);
+      for (const row of src.rows) {
+        if (/\b(insert\s+into|update\s+public\.|delete\s+from)\b/i.test(row.prosrc)) {
+          throw new Error(`door ${tool.door} contains a write — the read-only law (D188b) is broken`);
+        }
+      }
+    }
+  });
+  await expectOk("TRIPWIRE: tool names all match the area_noun grammar", async () => {
+    for (const tool of MCP_TOOLS) {
+      if (!MCP_TOOL_NAME_GRAMMAR.test(tool.name)) {
+        throw new Error(`tool name "${tool.name}" breaks the area_noun grammar (D188e)`);
+      }
     }
   });
 
